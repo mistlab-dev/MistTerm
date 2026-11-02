@@ -133,7 +133,16 @@ impl SshConfigImportDialog {
                                 ui.horizontal(|ui| {
                                     let mut sel = self.selected.get(i).copied().unwrap_or(false);
                                     if !can {
-                                        ui.add_enabled(false, egui::Checkbox::without_text(&mut false));
+                                        ui.add_enabled_ui(false, |ui| {
+                                            let mut dummy = false;
+                                            let _ = chrome::form_checkbox_with_id(
+                                                ui,
+                                                theme,
+                                                ("ssh_import_locked", i),
+                                                &mut dummy,
+                                                "",
+                                            );
+                                        });
                                     } else if chrome::form_checkbox_with_id(
                                         ui,
                                         theme,

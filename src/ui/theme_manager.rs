@@ -145,7 +145,8 @@ impl ThemeManager {
         style.visuals.window_stroke = egui::Stroke::new(1.0, theme.color_modal_stroke());
         style.visuals.widgets.noninteractive.weak_bg_fill = theme.surface_body();
 
-        // 按钮 / ComboBox：暗夜浅灰实底；其它主题透明底 + 悬停 accent 弱底(裸 checkbox 请用 form_checkbox)
+        // 按钮 / ComboBox：暗夜浅灰实底；modern 透明底 + 悬停 accent 弱底。
+        // 复选框勿裸用：走 chrome::form_checkbox*（#290），否则 inactive 透明时未悬停几乎看不见。
         style.visuals.widgets.noninteractive.bg_fill = theme.color_subtle_inset_fill();
         style.visuals.widgets.noninteractive.bg_stroke = theme.divider_stroke();
         if theme.uses_modern_palette() {

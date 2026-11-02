@@ -3589,7 +3589,9 @@ impl SftpPanel {
                         ui.available_width().max(120.0),
                         false,
                     );
-                    ui.checkbox(
+                    crate::ui::chrome::form_checkbox(
+                        ui,
+                        theme,
                         &mut self.chmod_recursive,
                         crate::i18n::tr(ctx, "Include subfolders", "包含子目录"),
                     );

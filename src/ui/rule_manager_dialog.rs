@@ -331,7 +331,9 @@ impl RuleManagerDialog {
                 );
                 ui.add_space(theme.spacing_xs());
                 ui.horizontal(|ui| {
-                    ui.checkbox(
+                    crate::ui::chrome::form_checkbox(
+                        ui,
+                        theme,
                         &mut self.intro_dont_show_again,
                         crate::i18n::tr(ctx, "Don't show again", "不再显示"),
                     );
@@ -500,14 +502,19 @@ impl RuleManagerDialog {
                     for rule in &rules {
                         ui.horizontal(|ui| {
                             let mut on = rule.enabled;
-                            if ui
-                                .checkbox(&mut on, "")
-                                .on_hover_text(crate::i18n::tr(
-                                    ctx,
-                                    "Enable or disable this rule",
-                                    "启用或停用这条规则",
-                                ))
-                                .changed()
+                            if crate::ui::chrome::form_checkbox_with_id(
+                                ui,
+                                theme,
+                                ("rule_list_enabled", rule.id.as_str()),
+                                &mut on,
+                                "",
+                            )
+                            .on_hover_text(crate::i18n::tr(
+                                ctx,
+                                "Enable or disable this rule",
+                                "启用或停用这条规则",
+                            ))
+                            .changed()
                             {
                                 toggles.push((rule.id.clone(), on));
                             }
@@ -575,9 +582,13 @@ impl RuleManagerDialog {
             // #283：规则 ID 收进详情，默认不占版面。
             ui.add_space(theme.spacing_xs());
             let mut enabled = self.enabled;
-            if ui
-                .checkbox(&mut enabled, crate::i18n::tr(ctx, "Enabled", "启用"))
-                .changed()
+            if crate::ui::chrome::form_checkbox(
+                ui,
+                theme,
+                &mut enabled,
+                crate::i18n::tr(ctx, "Enabled", "启用"),
+            )
+            .changed()
             {
                 self.enabled = enabled;
                 self.confirm_reset = false;
@@ -1147,16 +1158,17 @@ impl RuleManagerDialog {
             let inner_w = crate::ui::layout_util::finite_content_width(ui);
             ui.set_min_width(inner_w);
             let mut on = self.cmd_personal_enabled;
-            if ui
-                .checkbox(
-                    &mut on,
-                    crate::i18n::tr(
-                        ctx,
-                        "Use my personal command checks on this machine",
-                        "在本机启用我的个人命令检查",
-                    ),
-                )
-                .changed()
+            if crate::ui::chrome::form_checkbox(
+                ui,
+                theme,
+                &mut on,
+                crate::i18n::tr(
+                    ctx,
+                    "Use my personal command checks on this machine",
+                    "在本机启用我的个人命令检查",
+                ),
+            )
+            .changed()
             {
                 self.cmd_personal_enabled = on;
                 personal.set_personal_enabled(on, engine);
@@ -1351,7 +1363,15 @@ impl RuleManagerDialog {
                     for rule in &rules {
                         ui.horizontal(|ui| {
                             let mut on = rule.enabled;
-                            if ui.checkbox(&mut on, "").changed() {
+                            if crate::ui::chrome::form_checkbox_with_id(
+                                ui,
+                                theme,
+                                ("cmd_rule_list_enabled", rule.id.as_str()),
+                                &mut on,
+                                "",
+                            )
+                            .changed()
+                            {
                                 toggles.push((rule.id.clone(), on));
                             }
                             let selected = self.cmd_selected_id.as_deref()
@@ -1523,9 +1543,13 @@ impl RuleManagerDialog {
                 ui.vertical(|ui| {
                     let mut enabled = self.cmd_enabled;
                     crate::ui::chrome::form_field_label(ui, theme, "");
-                    if ui
-                        .checkbox(&mut enabled, crate::i18n::tr(ctx, "Enabled", "启用"))
-                        .changed()
+                    if crate::ui::chrome::form_checkbox(
+                        ui,
+                        theme,
+                        &mut enabled,
+                        crate::i18n::tr(ctx, "Enabled", "启用"),
+                    )
+                    .changed()
                     {
                         self.cmd_enabled = enabled;
                         self.confirm_reset = false;
@@ -1615,14 +1639,19 @@ impl RuleManagerDialog {
                     ui.horizontal(|ui| {
                         // #187 复审：勾选=启用（悬停文案同口径），避免极性反直觉。
                         let mut on = !disabled;
-                        if ui
-                            .checkbox(&mut on, "")
-                            .on_hover_text(crate::i18n::tr(
-                                ctx,
-                                "Uncheck to disable this built-in rule locally",
-                                "取消勾选可在本机停用这条内置规则",
-                            ))
-                            .changed()
+                        if crate::ui::chrome::form_checkbox_with_id(
+                            ui,
+                            theme,
+                            ("cmd_builtin_enabled", b.id.as_str()),
+                            &mut on,
+                            "",
+                        )
+                        .on_hover_text(crate::i18n::tr(
+                            ctx,
+                            "Uncheck to disable this built-in rule locally",
+                            "取消勾选可在本机停用这条内置规则",
+                        ))
+                        .changed()
                         {
                             personal.set_builtin_disabled(&b.id, !on, engine);
                             self.set_status(crate::i18n::tr(
@@ -2109,14 +2138,19 @@ impl RuleManagerDialog {
                     for rule in &rules {
                         ui.horizontal(|ui| {
                             let mut on = rule.enabled;
-                            if ui
-                                .checkbox(&mut on, "")
-                                .on_hover_text(crate::i18n::tr(
-                                    ctx,
-                                    "Enable or disable this rule",
-                                    "启用或停用这条规则",
-                                ))
-                                .changed()
+                            if crate::ui::chrome::form_checkbox_with_id(
+                                ui,
+                                theme,
+                                ("link_rule_list_enabled", rule.id.as_str()),
+                                &mut on,
+                                "",
+                            )
+                            .on_hover_text(crate::i18n::tr(
+                                ctx,
+                                "Enable or disable this rule",
+                                "启用或停用这条规则",
+                            ))
+                            .changed()
                             {
                                 toggles.push((rule.id.clone(), on));
                             }
@@ -2185,9 +2219,13 @@ impl RuleManagerDialog {
             // #283：规则 ID 收进详情，默认不占版面。
             ui.add_space(theme.spacing_xs());
             let mut enabled = self.link_enabled;
-            if ui
-                .checkbox(&mut enabled, crate::i18n::tr(ctx, "Enabled", "启用"))
-                .changed()
+            if crate::ui::chrome::form_checkbox(
+                ui,
+                theme,
+                &mut enabled,
+                crate::i18n::tr(ctx, "Enabled", "启用"),
+            )
+            .changed()
             {
                 self.link_enabled = enabled;
                 self.confirm_reset = false;

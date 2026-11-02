@@ -2205,6 +2205,8 @@ pub fn form_inline_checkbox(
 
 /// 统一复选框：未选中时浅底 + 描边始终可见；勾选为 accent 底 + 浅色勾。
 /// 全局 `inactive.bg_fill = TRANSPARENT` 下裸 `ui.checkbox` 往往只有悬停才看得出方框。
+/// 产品 UI（偏好 / 规则 / 导入 / 面板表单等）禁止裸 `ui.checkbox` / `Checkbox::new`，请走本 helper；
+/// 禁用占位也用 `ui.add_enabled_ui(false, … form_checkbox*)`，保持同一套 off 态描边。
 pub fn form_checkbox(ui: &mut Ui, theme: &Theme, value: &mut bool, text: &str) -> Response {
     form_checkbox_with_id(ui, theme, text, value, text)
 }
