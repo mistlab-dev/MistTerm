@@ -2874,7 +2874,7 @@ impl SftpPanel {
             return crate::i18n::tr(
                 ctx,
                 "SFTP channel busy (shell is using the connection). Wait a moment and tap Refresh.",
-                "SFTP 通道繁忙(终端正在占用连接)，请稍候再点「刷新」重试。",
+                "SFTP 通道繁忙（终端正在占用连接），请稍候再点「刷新」重试。",
             )
             .to_string();
         }

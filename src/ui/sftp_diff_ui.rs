@@ -124,7 +124,7 @@ pub(super) fn format_skip_note(lang: UiLanguage, rels: &[String]) -> String {
             "Skipped {} conflict(s); not overwritten: {shown}{tail}",
             rels.len()
         ),
-        UiLanguage::Zh => format!("已跳过 {} 个冲突, 未覆盖: {shown}{tail}", rels.len()),
+        UiLanguage::Zh => format!("已跳过 {} 个冲突，未覆盖: {shown}{tail}", rels.len()),
     }
 }
 
@@ -142,7 +142,7 @@ pub(super) fn format_existing_note(lang: UiLanguage, rels: &[String]) -> String 
             rels.len()
         ),
         UiLanguage::Zh => format!(
-            "已跳过 {} 个已存在的路径, 未覆盖: {shown}{tail}",
+            "已跳过 {} 个已存在的路径，未覆盖: {shown}{tail}",
             rels.len()
         ),
     }

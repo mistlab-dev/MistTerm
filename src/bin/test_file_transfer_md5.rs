@@ -24,7 +24,7 @@ fn main() {
     let test_dir = "/tmp/md5_test_local";
     let remote_dir = format!("/tmp/md5_test_remote_{}", std::process::id());
     
-    println!("📝 准备测试环境...");
+    println!("📝 准备测试环境…");
     let _ = fs::create_dir_all(test_dir);
     execute_command(&session, &format!("mkdir -p {}", remote_dir)).ok();
     
@@ -125,7 +125,7 @@ fn main() {
     }
     
     // 清理
-    println!("\n🧹 清理测试文件...");
+    println!("\n🧹 清理测试文件…");
     execute_command(&session, &format!("rm -rf {}", remote_dir)).ok();
     let _ = fs::remove_dir_all(test_dir);
     println!("✅ 清理完成\n");

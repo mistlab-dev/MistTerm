@@ -821,8 +821,8 @@ impl MistTermApp {
                     self.default_keepalive_enabled = ka;
                 }
                 // 窄弹窗里两个步进器挤在一行会折标签；间隔与连续无应答各占一行（#130）。
-                let every = crate::i18n::tr(ctx, "Ping every (s)", "每隔(秒)");
-                let give_up = crate::i18n::tr(ctx, "Give up after (times)", "连续无应答(次)");
+                let every = crate::i18n::tr(ctx, "Ping every (s)", "每隔（秒）");
+                let give_up = crate::i18n::tr(ctx, "Give up after (times)", "连续无应答（次）");
                 let label_w = crate::ui::chrome::form_label_advance(ui, theme, every)
                     .max(crate::ui::chrome::form_label_advance(ui, theme, give_up));
                 crate::ui::chrome::form_labeled_control_row(ui, theme, every, label_w, |ui| {
@@ -1071,7 +1071,7 @@ impl MistTermApp {
                             "Vault settings from team «{name}» (read-only until you change them)"
                         ),
                         crate::i18n::UiLanguage::Zh => {
-                            format!("Vault 由团队「{name}」自动配置(修改任意项后将不再自动覆盖)")
+                            format!("Vault 由团队「{name}」自动配置（修改任意项后将不再自动覆盖）")
                         }
                     };
                     ui.label(

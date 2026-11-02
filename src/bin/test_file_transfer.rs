@@ -42,7 +42,7 @@ fn main() {
     let test_dir = "/tmp/ft_test_local";
     let remote_dir = format!("/tmp/ft_test_remote_{}", std::process::id());
     
-    println!("📝 准备测试环境...");
+    println!("📝 准备测试环境…");
     let _ = fs::create_dir_all(test_dir);
     execute_command(&session, &format!("mkdir -p {}", remote_dir)).ok();
     
@@ -111,7 +111,7 @@ fn main() {
     }
     
     // 清理
-    println!("\n🧹 清理测试文件...");
+    println!("\n🧹 清理测试文件…");
     execute_command(&session, &format!("rm -rf {}", remote_dir)).ok();
     let _ = fs::remove_dir_all(test_dir);
     println!("✅ 清理完成\n");
@@ -174,7 +174,7 @@ fn upload_file(session: &Session, local_path: &str, remote_path: &str) -> Result
         let _ = std::io::stdout().flush();
     }
     
-    println!("\n   发送 EOF...");
+    println!("\n   发送 EOF…");
     channel.send_eof().map_err(|e| format!("发送 EOF 失败：{}", e))?;
     
     // 读取可能的错误输出

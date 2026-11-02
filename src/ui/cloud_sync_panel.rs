@@ -707,7 +707,7 @@ impl CloudSyncPanel {
             let preview = if wrote.is_empty() {
                 loc.tr(
                     "(Nothing selected to export or sources missing)",
-                    "(未勾选可导出项或源文件缺失)",
+                    "（未勾选可导出项或源文件缺失）",
                 )
                 .to_string()
             } else {
@@ -918,7 +918,7 @@ impl CloudSyncPanel {
                     parts.push(
                         loc.tr(
                             "Settings: restored from pack (restart may be needed for some options)",
-                            "偏好设置：已从包还原(部分选项可能需重启生效)",
+                            "偏好设置：已从包还原（部分选项可能需重启生效）",
                         )
                         .to_string(),
                     );
@@ -941,7 +941,7 @@ impl CloudSyncPanel {
                         svc.state = TeamState::load();
                     }
                     parts.push(
-                        loc.tr("Team state: restored (tokens not in pack)", "团队状态：已还原(包内不含令牌)")
+                        loc.tr("Team state: restored (tokens not in pack)", "团队状态：已还原（包内不含令牌）")
                             .to_string(),
                     );
                 }
@@ -1000,7 +1000,7 @@ impl CloudSyncPanel {
             return loc
                 .tr(
                     "Nothing importable here (enable items and ensure files exist)",
-                    "所选目录无可导入项(请勾选同步项且包内需含对应文件)",
+                    "所选目录无可导入项（请勾选同步项且包内需含对应文件）",
                 )
                 .to_string();
         }
@@ -1262,7 +1262,7 @@ impl CloudSyncPanel {
                                     &mut cols[1],
                                     theme,
                                     &mut self.settings.sync_team_config,
-                                    loc.tr("Team config (no tokens)", "团队配置(不含令牌)"),
+                                    loc.tr("Team config (no tokens)", "团队配置（不含令牌）"),
                                 );
                             });
                             chrome::settings_row_divider(ui, theme);
@@ -1293,7 +1293,7 @@ impl CloudSyncPanel {
                                 chrome::form_inline_label(
                                     ui,
                                     theme,
-                                    loc.tr("Every (min)", "每隔(分钟)"),
+                                    loc.tr("Every (min)", "每隔（分钟）"),
                                 );
                                 chrome::form_u32_stepper(
                                     ui,
@@ -1436,7 +1436,7 @@ impl CloudSyncPanel {
                         if self.settings.sync_credentials && dir.join("credentials.json").exists() {
                             ui.label(loc.tr(
                                 "• Will overwrite local encrypted credentials (same device key required).",
-                                "• 将用包内凭证库覆盖本机加密文件(需同源设备密钥才解密)。",
+                                "• 将用包内凭证库覆盖本机加密文件（需同源设备密钥才解密）。",
                             ));
                         }
                         ui.horizontal(|ui| {

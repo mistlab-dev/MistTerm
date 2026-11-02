@@ -108,7 +108,7 @@ pub fn propose_step_with_context(
         {
             return StepProposal {
                 command: "du -sh /var/log/* 2>/dev/null | sort -rh | head -n 10".into(),
-                rationale: "检查各主机占用空间最大的日志文件以准备清理(只读排查)".into(),
+                rationale: "检查各主机占用空间最大的日志文件以准备清理（只读排查）".into(),
                 target_filter: extract_target_filter(user_text),
                 stop: false,
             };
@@ -141,7 +141,7 @@ pub fn propose_step_with_context(
     if contains_any(&lower, stripped, &["磁盘", "disk", "空间", "filesystem", "df"]) {
         return StepProposal {
             command: "df -h".into(),
-            rationale: "查各主机磁盘用量(可改命令)".into(),
+            rationale: "查各主机磁盘用量（可改命令）".into(),
             target_filter: filter,
             stop: false,
         };
@@ -149,7 +149,7 @@ pub fn propose_step_with_context(
     if contains_any(&lower, stripped, &["内存", "memory", "mem ", "free"]) {
         return StepProposal {
             command: "free -h".into(),
-            rationale: "查各主机内存(可改命令)".into(),
+            rationale: "查各主机内存（可改命令）".into(),
             target_filter: filter,
             stop: false,
         };
@@ -157,7 +157,7 @@ pub fn propose_step_with_context(
     if contains_any(&lower, stripped, &["cpu", "负载", "load", "uptime"]) {
         return StepProposal {
             command: "uptime".into(),
-            rationale: "查各主机负载与运行时间(可改命令)".into(),
+            rationale: "查各主机负载与运行时间（可改命令）".into(),
             target_filter: filter,
             stop: false,
         };
@@ -184,7 +184,7 @@ pub fn propose_step_with_context(
         return StepProposal {
             // pid= 无表头，输出即为进程数
             command: "ps -eo pid= | wc -l".into(),
-            rationale: "统计各主机进程数量(可改命令)".into(),
+            rationale: "统计各主机进程数量（可改命令）".into(),
             target_filter: filter,
             stop: false,
         };
@@ -192,7 +192,7 @@ pub fn propose_step_with_context(
     if contains_any(&lower, stripped, &["进程", "process", "processes", "ps "]) {
         return StepProposal {
             command: "ps aux --sort=-%cpu | head -n 15".into(),
-            rationale: "列出各主机占用 CPU 较高的进程(可改命令)".into(),
+            rationale: "列出各主机占用 CPU 较高的进程（可改命令）".into(),
             target_filter: filter,
             stop: false,
         };
@@ -200,7 +200,7 @@ pub fn propose_step_with_context(
     if contains_any(&lower, stripped, &["谁在听", "端口", "listening", "ss -", "netstat"]) {
         return StepProposal {
             command: "ss -lntp".into(),
-            rationale: "查监听端口(可改命令)".into(),
+            rationale: "查监听端口（可改命令）".into(),
             target_filter: filter,
             stop: false,
         };

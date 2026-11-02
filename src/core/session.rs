@@ -727,7 +727,7 @@ impl SessionManager {
 
         let Some(inner) = Self::unwrap_sessions_json_text(&content) else {
             self.load_diagnostics
-                .push("会话文件解密失败(设备密钥可能已变更)".to_string());
+                .push("会话文件解密失败（设备密钥可能已变更）".to_string());
             return;
         };
 

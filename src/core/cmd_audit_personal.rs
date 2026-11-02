@@ -38,17 +38,17 @@ pub enum PersonalRuleError {
 impl PersonalRuleError {
     pub fn explain(&self, _zh: bool) -> String {
         match self {
-            Self::EmptyPattern => "请填写匹配模式. 没有保存.".into(),
-            Self::PatternTooLong => "这条匹配模式太长. 没有保存.".into(),
-            Self::InvalidRegex(msg) => format!("正则表达式无效, 没有保存: {msg}"),
-            Self::BadAction => "无法识别的动作. 请用 block, confirm, alert 或 allow.".into(),
-            Self::BadMatchType => "无法识别的匹配方式. 请用 regex, prefix, contains 或 exact.".into(),
-            Self::EmptyId => "规则 ID 为空.".into(),
-            Self::IdTooLong => "规则 ID 太长.".into(),
-            Self::NotFound => "这条规则已经不在了.".into(),
+            Self::EmptyPattern => "请填写匹配模式。没有保存。".into(),
+            Self::PatternTooLong => "这条匹配模式太长。没有保存。".into(),
+            Self::InvalidRegex(msg) => format!("正则表达式无效，没有保存: {msg}"),
+            Self::BadAction => "无法识别的动作。请用 block, confirm, alert 或 allow.".into(),
+            Self::BadMatchType => "无法识别的匹配方式。请用 regex, prefix, contains 或 exact.".into(),
+            Self::EmptyId => "规则 ID 为空。".into(),
+            Self::IdTooLong => "规则 ID 太长。".into(),
+            Self::NotFound => "这条规则已经不在了。".into(),
             Self::TooMany => "规则已满 (最多 64 条).".into(),
-            Self::EmptyFile => "文件里没有规则. 当前规则没有改动.".into(),
-            Self::InvalidFile(msg) => format!("无法导入这个文件, 当前规则没有改动: {msg}"),
+            Self::EmptyFile => "文件里没有规则。当前规则没有改动。".into(),
+            Self::InvalidFile(msg) => format!("无法导入这个文件，当前规则没有改动: {msg}"),
         }
     }
 }

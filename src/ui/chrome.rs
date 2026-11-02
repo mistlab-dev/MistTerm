@@ -482,7 +482,7 @@ pub fn sidebar_list_sort_button(
         "{}{}{}",
         crate::i18n::tr(ctx, "Sort: ", "排序："),
         row_lbl,
-        crate::i18n::tr(ctx, " (click to pick)", " (点击选择)"),
+        crate::i18n::tr(ctx, " (click to pick)", "（点击选择）"),
     );
     let short = crate::i18n::session_sort_chip_short(ctx, *sort_by);
     let response = panel_sort_chip(ui, theme, icon, short, &hover);

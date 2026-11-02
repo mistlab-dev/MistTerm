@@ -698,7 +698,7 @@ impl MistTermApp {
                 title,
                 text,
                 ToastAction::AskAiFallback,
-                crate::i18n::tr(ctx, "Ask AI (not team knowledge)", "问 AI (非团队知识)"),
+                crate::i18n::tr(ctx, "Ask AI (not team knowledge)", "问 AI（非团队知识）"),
                 secondary,
                 secondary_label,
             );
@@ -992,7 +992,7 @@ impl MistTermApp {
                 crate::i18n::tr(
                     ctx,
                     "No team hit — asking AI (not team knowledge)",
-                    "暂无团队知识，已改问 AI (非团队知识)",
+                    "暂无团队知识，已改问 AI（非团队知识）",
                 )
                 .to_string(),
             );
@@ -2341,7 +2341,7 @@ impl MistTermApp {
                 crate::i18n::tr(
                     ctx,
                     "Connect a session first, then send the sequence to that pane",
-                    "请先连接会话, 再把发送序列发到这个窗格",
+                    "请先连接会话，再把发送序列发到这个窗格",
                 )
                 .to_string(),
             );
@@ -4594,7 +4594,7 @@ impl MistTermApp {
             self.notify_auto(crate::i18n::tr(
                 ctx,
                 "Connect to a terminal first, then the command can be filled in",
-                "请先连接终端, 再把历史命令填进去",
+                "请先连接终端，再把历史命令填进去",
             ));
             return;
         }
@@ -9407,7 +9407,7 @@ impl MistTermApp {
             crate::i18n::tr(
                 ctx,
                 "Credential prefilled into new session — review before connecting.",
-                "已从凭证填入新建会话(请检查后连接)",
+                "已从凭证填入新建会话（请检查后连接）",
             )
             .to_string(),
         );
@@ -10193,7 +10193,7 @@ impl eframe::App for MistTermApp {
                             "Select a connection on the left first ({accel} edits the profile)."
                         ),
                         crate::i18n::UiLanguage::Zh => {
-                            format!("请先在左侧选择一个连接({} 编辑会话配置)", accel,)
+                            format!("请先在左侧选择一个连接（{} 编辑会话配置）", accel,)
                         }
                     });
                 }
@@ -10639,7 +10639,7 @@ fn terminal_command_status_message(ctx: &egui::Context, cmd: &str) -> String {
         }
         UiLanguage::En => format!("Sent to terminal: {preview}"),
         UiLanguage::Zh if lines.len() > 1 => {
-            format!("已发送到终端({} 行)：{preview}", lines.len())
+            format!("已发送到终端（{} 行）：{preview}", lines.len())
         }
         UiLanguage::Zh => format!("已发送到终端：{preview}"),
     }

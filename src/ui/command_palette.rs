@@ -12,7 +12,7 @@ use eframe::egui::{self, Key, Modifiers};
 pub const PALETTE_SHORTCUT_HELP_EN: &str = "Command palette when the terminal is not focused (macOS ⌘K, Windows/Linux Ctrl+K). Unfocused Ctrl+K does not conflict with the OS, so Ctrl+Shift+K is not used. Focused Ctrl+K goes to the shell and deletes to the end of the line";
 
 /// 关于页 / 手册共用的中文说明。
-pub const PALETTE_SHORTCUT_HELP_ZH: &str = "终端失焦时打开命令面板 (macOS 为 ⌘K, Windows/Linux 为 Ctrl+K). 失焦 Ctrl+K 与系统快捷键不冲突, 因此不用 Ctrl+Shift+K. 聚焦时 Ctrl+K 发给 shell, 删到行尾";
+pub const PALETTE_SHORTCUT_HELP_ZH: &str = "终端失焦时打开命令面板 (macOS 为 ⌘K, Windows/Linux 为 Ctrl+K). 失焦 Ctrl+K 与系统快捷键不冲突，因此不用 Ctrl+Shift+K. 聚焦时 Ctrl+K 发给 shell, 删到行尾";
 
 const EMPTY_CAP_ACTION: usize = 24;
 const EMPTY_CAP_OTHER: usize = 8;
@@ -163,7 +163,7 @@ impl CommandPalette {
                         crate::i18n::tr(
                             ctx,
                             "Sessions, snippets, send sequences, history, actions…",
-                            "搜索会话, 片段, 发送序列, 历史, 动作…",
+                            "搜索会话，片段，发送序列，历史，动作…",
                         ),
                         content_w,
                     );
@@ -249,7 +249,7 @@ impl CommandPalette {
                             "{chord} opens this panel when the terminal is not focused. Focused Ctrl+K deletes to the end of the line."
                         ),
                         crate::i18n::UiLanguage::Zh => format!(
-                            "{chord} 在终端失焦时打开本面板. 聚焦时 Ctrl+K 删到行尾."
+                            "{chord} 在终端失焦时打开本面板。聚焦时 Ctrl+K 删到行尾。"
                         ),
                     };
                     ui.label(

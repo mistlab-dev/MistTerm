@@ -638,7 +638,7 @@ impl MonitorPanel {
                         theme,
                         &mut self.refresh_interval_secs,
                         1.0..=30.0,
-                        crate::i18n::tr(ui.ctx(), "Interval (s)", "间隔 (秒)"),
+                        crate::i18n::tr(ui.ctx(), "Interval (s)", "间隔（秒）"),
                         "",
                     );
                 }
@@ -1356,7 +1356,7 @@ impl MonitorPanel {
                 egui::RichText::new(i18n::tr(
                     ui.ctx(),
                     "No valid sampling interval yet…",
-                    "暂无有效采样间隔...",
+                    "暂无有效采样间隔…",
                 ))
                     .size(theme.font_size_small())
                     .color(theme.text_tertiary()),

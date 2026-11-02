@@ -84,7 +84,7 @@ impl SendSequenceDialog {
                         egui::RichText::new(crate::i18n::tr(
                             ctx,
                             "Sends each line, in order, into the current connected pane. This is not a command snippet: snippets are searchable commands with placeholders.",
-                            "按顺序把每一行发进当前已连接的窗格. 这不是命令片段: 片段是带占位符、可以检索的命令.",
+                            "按顺序把每一行发进当前已连接的窗格。这不是命令片段: 片段是带占位符、可以检索的命令。",
                         ))
                         .size(theme.font_size_caption())
                         .color(theme.text_tertiary()),
@@ -118,7 +118,7 @@ impl SendSequenceDialog {
                     egui::CollapsingHeader::new(crate::i18n::tr(
                         ctx,
                         "Snippets, mist exec, AI batch, or this",
-                        "片段, mist exec, AI 批量, 还是发送序列",
+                        "片段, mist exec, AI 批量，还是发送序列",
                     ))
                     .id_salt("send_sequence_compare")
                     .default_open(false)
@@ -217,7 +217,7 @@ impl SendSequenceDialog {
                 crate::ui::chrome::form_inline_label(
                     ui,
                     theme,
-                    crate::i18n::tr(ctx, "Delay between lines (ms)", "行间间隔 (毫秒)"),
+                    crate::i18n::tr(ctx, "Delay between lines (ms)", "行间间隔（毫秒）"),
                 );
                 crate::ui::chrome::form_u32_stepper(
                     ui,
@@ -232,7 +232,7 @@ impl SendSequenceDialog {
                 egui::RichText::new(crate::i18n::tr(
                     ctx,
                     "Fixed wait only. Does not wait for a remote prompt. 0 sends the next line immediately.",
-                    "只做固定等待, 不会等远端提示符. 0 表示上一行发出后马上发下一行.",
+                    "只做固定等待，不会等远端提示符. 0 表示上一行发出后马上发下一行。",
                 ))
                 .size(theme.font_size_caption())
                 .color(theme.text_tertiary()),
@@ -251,7 +251,7 @@ impl SendSequenceDialog {
                 crate::i18n::tr(
                     ctx,
                     "One line per send. A blank line presses Enter.",
-                    "一行发一次. 空行就是按一次回车.",
+                    "一行发一次。空行就是按一次回车。",
                 ),
                 width,
                 8,
@@ -262,7 +262,7 @@ impl SendSequenceDialog {
                 egui::RichText::new(crate::i18n::tr(
                     ctx,
                     "Sends only to the current pane, even if broadcast input is on.",
-                    "只发到当前这一个窗格. 即使开了广播输入, 也不会发到其它窗格.",
+                    "只发到当前这一个窗格。即使开了广播输入，也不会发到其它窗格。",
                 ))
                 .size(theme.font_size_caption())
                 .color(theme.text_tertiary()),
@@ -424,25 +424,25 @@ fn paint_difference(ui: &mut egui::Ui, theme: &Theme, ctx: &egui::Context) {
             "Command snippets",
             "命令片段",
             "One searchable command, often with <placeholders>. Fill them in, then send to the current terminal.",
-            "一条可检索的命令, 常带 <占位符>. 填完再发到当前终端.",
+            "一条可检索的命令，常带 <占位符>. 填完再发到当前终端。",
         ),
         (
             "mist exec",
             "mist exec",
             "CLI: run on one or many hosts over a separate SSH connection and collect output. Does not type into an open terminal.",
-            "命令行对一台或多台主机另开连接执行, 并收回输出. 不往已打开的终端里敲.",
+            "命令行对一台或多台主机另开连接执行，并收回输出。不往已打开的终端里敲。",
         ),
         (
             "AI batch",
             "AI 批量",
             "Describe a task in words. After you confirm, it runs on the hosts in the plan. Not a fixed key sequence.",
-            "用自然语言描述任务, 确认后按计划在多台主机执行. 不是写死的按键顺序.",
+            "用自然语言描述任务，确认后按计划在多台主机执行。不是写死的按键顺序。",
         ),
         (
             "Send sequences",
             "发送序列",
             "After you are connected, send these lines in order to this one pane. Optional fixed delay. Does not wait for a prompt and does not broadcast.",
-            "连上之后, 按顺序把这几行发进当前这一个窗格. 可选固定间隔. 不等提示符, 也不广播.",
+            "连上之后，按顺序把这几行发进当前这一个窗格。可选固定间隔。不等提示符，也不广播。",
         ),
     ];
     for (en_title, zh_title, en_body, zh_body) in rows {
