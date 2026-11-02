@@ -14,7 +14,7 @@ use crate::core::{
     expand_command_template, expand_fragment_command_stages, expand_rhai_blocks, gate_decision,
     is_already_imported, list_placeholder_keys, merge_rhai_context, parse_dynamic_forwards_text,
     parse_local_forwards_text, parse_remote_forwards_text, parse_ssh_config_file,
-    parse_vault_credential_path, pending_imports, spawn_cleanup_old_logs, status_bar_summary,
+    parse_vault_credential_path, pending_imports, spawn_cleanup_old_logs,
     AppSettings, AuditCategory, AuditEvent, AuditLogger, AuditOutcome, AiContext, CmdAuditAction,
     CmdAuditAlertRequest, CmdAuditCacheStore, CmdAuditEngine, CmdAuditResult, CmdAuditSource,
     AuditTimeline, TimelineEntry, TimelineOutcome,
@@ -71,7 +71,7 @@ use std::time::{Duration, Instant};
 #[path = "app_notifications.rs"]
 mod notifications;
 pub(crate) use notifications::{ToastAction, ToastKind};
-use notifications::{status_message_body, status_message_text_color, ActiveToast};
+use notifications::{status_message_body, ActiveToast};
 
 #[path = "app_responsive.rs"]
 mod responsive;
@@ -145,16 +145,6 @@ fn default_keepalive_count_max_persist() -> u8 {
 }
 fn default_terminal_font_size_persist() -> f32 {
     crate::platform::DEFAULT_TERMINAL_FONT_SIZE
-}
-
-fn truncate_status(s: &str, max_chars: usize) -> String {
-    let mut it = s.chars();
-    let head: String = it.by_ref().take(max_chars).collect();
-    if it.next().is_some() {
-        format!("{}…", head)
-    } else {
-        head
-    }
 }
 
 
@@ -3374,28 +3364,22 @@ impl MistTermApp {
     /// 累加缓冲放在 pending 元组里：Empty 时连同已收正文一起放回，跨帧不丢 Delta。
     fn poll_postmortem_generation(&mut self, ctx: &egui::Context) {
         use crate::core::ai_client::ChatEvent;
-        let Some((mut rx, cancel, host, date, references, mut acc)) =
+        let Some((rx, cancel, host, date, references, mut acc)) =
             self.pending_postmortem_rx.take()
         else {
             return;
         };
         let mut failed: Option<String> = None;
-        let mut done = false;
         loop {
             match rx.try_recv() {
                 Ok(ChatEvent::Delta(chunk)) => acc.push_str(&chunk),
-                Ok(ChatEvent::Finished) => {
-                    done = true;
-                    break;
-                }
+                Ok(ChatEvent::Finished) => break,
                 Ok(ChatEvent::Failed(e)) => {
                     failed = Some(e);
-                    done = true;
                     break;
                 }
                 Ok(ChatEvent::Cancelled) => {
                     failed = Some("cancelled".into());
-                    done = true;
                     break;
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => {
@@ -3406,12 +3390,10 @@ impl MistTermApp {
                 }
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                     failed = failed.or_else(|| Some("generation worker lost".into()));
-                    done = true;
                     break;
                 }
             }
         }
-        let _ = done;
         self.postmortem_dialog.set_generating(false);
         if self.ensure_right_dock_allowed_or_warn(ctx) {
             self.open_right_dock_panel(ActiveRightDock::Postmortem);
@@ -3820,13 +3802,6 @@ impl MistTermApp {
             .unwrap_or(self.auto_reconnect_enabled)
     }
 
-    fn active_tab_auto_reconnect_enabled(&self) -> bool {
-        self.active_tab
-            .and_then(|i| self.tabs.get(i))
-            .map(|t| self.tab_auto_reconnect_enabled(&t.primary_session_id()))
-            .unwrap_or(false)
-    }
-
     /// #201：对单个标签做前台激活重连判定（方案 §3）。
     /// 命中则复用现有重连管线（不清屏、不丢缓冲）；静默，不弹 Toast。
     fn try_foreground_reconnect_tab(&mut self, ctx: &egui::Context, idx: usize) {
@@ -3999,23 +3974,12 @@ impl MistTermApp {
         }
     }
 
-    fn active_tab_log_status(&self, ctx: &egui::Context) -> Option<String> {
-        let idx = self.active_tab?;
-        let tab = self.tabs.get(idx)?;
-        tab.active_pane()?.log_writer.as_ref().and_then(|w| {
-            if w.status_label_key() == "log_off" {
-                return None;
-            }
-            Some(crate::i18n::session_log_status(ctx, w.status_label_key()).to_string())
-        })
-    }
-
     fn id_sidebar_connection_search() -> egui::Id {
-        egui::Id::new("mistterm_sidebar_connection_search")
+        egui::Id::unique("mistterm_sidebar_connection_search")
     }
 
     fn id_fragment_panel_search() -> egui::Id {
-        egui::Id::new("mistterm_fragment_panel_search")
+        egui::Id::unique("mistterm_fragment_panel_search")
     }
 
     /// 存在模态/表单/查找条等需使用标准编辑快捷键(⌘C/V/A)的 UI
@@ -4081,14 +4045,14 @@ impl MistTermApp {
         // AI 草稿在 Foreground(Central 之后)：用 memory 实时查焦点，避免晚一帧。
         let ai_draft_focused = self.show_ai_panel
             && (self.ai_panel.is_draft_input_focused()
-                || ctx.memory(|m| m.has_focus(egui::Id::new("mistterm_ai_draft"))));
+                || ctx.memory(|m| m.has_focus(egui::Id::unique("mistterm_ai_draft"))));
         if ai_draft_focused {
             return false;
         }
         // 任何 UI TextEdit/IME 优先于「终端仍想要键盘」。
         // 半角 `,` 是广播式 Event::Text；全角 `，` 走 IME Composition，只进当前 IME 目标。
         // 若仍按 terminal_wants 抢键，全角标点会进终端 ime_capture 并被清空。
-        if ctx.wants_keyboard_input() && !self.active_terminal_has_keyboard_focus() {
+        if ctx.egui_wants_keyboard_input() && !self.active_terminal_has_keyboard_focus() {
             return false;
         }
         let terminal_focused = self
@@ -4110,9 +4074,9 @@ impl MistTermApp {
     fn release_terminal_keyboard_if_ui_typing(&mut self, ctx: &egui::Context) {
         let ai_draft_focused = self.show_ai_panel
             && (self.ai_panel.is_draft_input_focused()
-                || ctx.memory(|m| m.has_focus(egui::Id::new("mistterm_ai_draft"))));
+                || ctx.memory(|m| m.has_focus(egui::Id::unique("mistterm_ai_draft"))));
         let ui_typing =
-            ai_draft_focused || (ctx.wants_keyboard_input() && !self.active_terminal_has_keyboard_focus());
+            ai_draft_focused || (ctx.egui_wants_keyboard_input() && !self.active_terminal_has_keyboard_focus());
         if !ui_typing {
             return;
         }
@@ -4154,7 +4118,7 @@ impl MistTermApp {
         {
             return false;
         }
-        if ctx.wants_keyboard_input() {
+        if ctx.egui_wants_keyboard_input() {
             return false;
         }
         self.active_tab
@@ -4171,11 +4135,11 @@ impl MistTermApp {
         }
         let ai_draft_focused = self.show_ai_panel
             && (self.ai_panel.is_draft_input_focused()
-                || ctx.memory(|m| m.has_focus(egui::Id::new("mistterm_ai_draft"))));
+                || ctx.memory(|m| m.has_focus(egui::Id::unique("mistterm_ai_draft"))));
         if ai_draft_focused {
             return false;
         }
-        if ctx.wants_keyboard_input() && !self.active_terminal_has_keyboard_focus() {
+        if ctx.egui_wants_keyboard_input() && !self.active_terminal_has_keyboard_focus() {
             return false;
         }
         let terminal_focused = self
@@ -6133,7 +6097,7 @@ impl MistTermApp {
 
         let mut close = false;
         let inner = rect.shrink2(egui::vec2(theme.spacing_region_pad_x(), 0.0));
-        ui.allocate_ui_at_rect(inner, |ui| {
+        ui.scope_builder(egui::UiBuilder::new().max_rect(inner), |ui| {
             ui.set_height(bar_h);
             if ui.input(|i| i.key_pressed(Key::Escape)) {
                 close = true;
@@ -6150,7 +6114,7 @@ impl MistTermApp {
                         .size(theme.font_size_panel_title())
                         .color(theme.text_secondary()),
                 );
-                let search_id = egui::Id::new("mistterm_terminal_search_input");
+                let search_id = egui::Id::unique("mistterm_terminal_search_input");
                 let input_w = (ui.available_width() * 0.22).clamp(96.0, 200.0);
                 let resp = crate::ui::chrome::form_singleline_field(
                     ui,
@@ -6286,7 +6250,7 @@ impl MistTermApp {
     /// Win/Linux 沉浸式关掉系统标题栏，退出时恢复；macOS 保持系统边框。
     pub(crate) fn sync_window_decorations_for_immersive(
         &mut self,
-        frame: &mut eframe::Frame,
+        ctx: &egui::Context,
         immersive: bool,
     ) {
         if cfg!(target_os = "macos") {
@@ -6296,7 +6260,7 @@ impl MistTermApp {
         if self.window_decorated_applied == Some(want_decorated) {
             return;
         }
-        frame.set_decorations(want_decorated);
+        ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(want_decorated));
         self.window_decorated_applied = Some(want_decorated);
     }
 
@@ -7366,7 +7330,7 @@ impl MistTermApp {
         let Some(text) = self.pending_terminal_copy.take() else {
             return;
         };
-        if ctx.output(|o| o.copied_text != text) {
+        if ctx.output(|o| o.commands.iter().any(|c| matches!(c, egui::OutputCommand::CopyText(t) if *t == text))) {
             log::warn!("terminal copy: clipboard text was overwritten in the same frame; re-applying");
             ctx.copy_text(text);
         }
@@ -8047,39 +8011,40 @@ impl MistTermApp {
     fn show_fragment_panel(
         &mut self,
         ctx: &egui::Context,
+        ui: &mut egui::Ui,
         theme: &crate::ui::theme::Theme,
         dock_col_w: f32,
     ) {
         let (def_w, min_w, max_w) = layout_util::right_dock_resize_bounds(dock_col_w);
-        let fragment_panel = egui::SidePanel::right(layout_util::FRAGMENT_PANEL_ID)
-            .default_width(def_w)
-            .min_width(min_w)
-            .max_width(max_w)
-            .resizable(true)
-            .show_separator_line(false)
-            // 仅占布局宽；勿在此绘制内容(CentralPanel 后绘会盖住)。内容在 Foreground Area 重绘。
-            .frame(crate::ui::chrome::right_dock_placeholder_frame(theme))
-            .show(ctx, |ui| {
-                let h = ui.available_height().max(1.0);
-                let w = ui.available_width().max(1.0);
-                ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::hover());
-            });
+        {
+            egui::Panel::right(layout_util::FRAGMENT_PANEL_ID)
+                .default_size(def_w)
+                .min_size(min_w)
+                .max_size(max_w)
+                .resizable(true)
+                .show_separator_line(false)
+                // 仅占布局宽；勿在此绘制内容(CentralPanel 后绘会盖住)。内容在 Foreground Area 重绘。
+                .frame(crate::ui::chrome::right_dock_placeholder_frame(theme))
+                .show(ui, |ui| {
+                    let h = ui.available_height().max(1.0);
+                    let w = ui.available_width().max(1.0);
+                    ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::hover());
+                });
+        }
         let dock_inset = theme.spacing_right_dock_screen_inset();
-        let slot = layout_util::side_panel_place_slot(
-            ctx,
-            &fragment_panel.response,
-            dock_col_w,
-            dock_inset,
-        );
-        crate::ui::chrome::paint_right_dock_slot_gap(ctx, theme, slot);
-        self.fragment_panel_slot_rect = Some(slot);
-        if let Some(slot) = self.fragment_panel_slot_rect {
+        // #206 S1：Panel::show 不再返回 response；槽位改由 PanelState 落盘矩形推得。
+        let slot = layout_util::side_panel_state_rect(ctx, layout_util::FRAGMENT_PANEL_ID)
+            .map(|r| {
+                let screen = ctx.content_rect();
+                let mut s = r;
+                s.min.x = screen.max.x - s.width();
+                s.max.x = screen.max.x - dock_inset;
+                s
+            });
+        if let Some(slot) = slot {
+            crate::ui::chrome::paint_right_dock_slot_gap(ctx, theme, slot);
+            self.fragment_panel_slot_rect = Some(slot);
             layout_util::record_right_dock_panel_rect(&slot, &mut self.right_dock_outer_left_x);
-        } else {
-            layout_util::record_right_dock_panel(
-                &fragment_panel.response,
-                &mut self.right_dock_outer_left_x,
-            );
         }
         let _ = theme;
     }
@@ -8093,7 +8058,7 @@ impl MistTermApp {
         if !self.show_fragment_panel {
             return;
         }
-        let screen = ctx.screen_rect();
+        let screen = ctx.content_rect();
         let dock_inset = theme.spacing_right_dock_screen_inset();
         let Some(slot) = layout_util::right_dock_foreground_slot(
             self.fragment_panel_slot_rect,
@@ -8691,7 +8656,7 @@ impl MistTermApp {
         let prev_extreme = ui.visuals().extreme_bg_color;
         ui.visuals_mut().extreme_bg_color = theme.color_scroll_extreme_bg();
         egui::ScrollArea::vertical()
-            .id_source("mistterm_fragment_list_scroll")
+            .id_salt("mistterm_fragment_list_scroll")
             .auto_shrink([false, false])
             .max_height(scroll_h)
             .scroll_bar_visibility(egui::containers::scroll_area::ScrollBarVisibility::AlwaysHidden)
@@ -8753,6 +8718,7 @@ impl MistTermApp {
                             row_resp.row.rect,
                             theme.radius_card(),
                             egui::Stroke::new(1.5, theme.accent_color()),
+                            egui::StrokeKind::Inside,
                         );
                     }
                     if row_resp.title.clicked() {
@@ -8778,7 +8744,6 @@ impl MistTermApp {
                                 if let Some(item) = self.market_item_for_stats(&frag_clone) {
                                     self.install_market_fragment(ui.ctx(), &item);
                                 }
-                                ui.close_menu();
                             }
                         });
                     }
@@ -9030,271 +8995,15 @@ impl MistTermApp {
         self.insert_fragment_at_tab_index(ctx, idx, Some(id), expanded);
     }
 
-    /// 底栏左侧：连接 / 侧栏会话 / 日志等状态信息成组排列(不拉满整行)。
-    fn status_bar_info_cluster(&mut self, ui: &mut egui::Ui, theme: &crate::ui::theme::Theme) {
-        let bar_ctx = ui.ctx().clone();
-        ui.spacing_mut().item_spacing = egui::vec2(theme.spacing_sm(), 0.0);
-
-        if let Some(idx) = self.active_tab {
-            if let Some(tab) = self.tabs.get(idx) {
-                if let Some(conn) = tab
-                    .active_terminal()
-                    .filter(|t| t.is_connected())
-                    .and_then(|t| t.connection_status_for_bar(theme))
-                {
-                    Self::status_connection_chip(ui, &conn, theme);
-                }
-                if let Some(ssh_id) = tab
-                    .active_terminal()
-                    .filter(|t| t.is_connected())
-                    .and_then(|t| t.ssh_session_id())
-                {
-                    let n = self.port_forward_panel.active_count_for(ssh_id);
-                    let en = crate::i18n::language(&bar_ctx) == crate::i18n::UiLanguage::En;
-                    if let Some(label) = status_bar_summary(n, en) {
-                        crate::ui::chrome::status_text_chip(
-                            ui,
-                            theme,
-                            &label,
-                            theme.accent_color(),
-                        );
-                    }
-                }
-            }
-        }
-
-        if let Some(sid) = &self.selected_session_id {
-            let active_sid = self
-                .active_tab
-                .and_then(|i| self.tabs.get(i).map(|t| t.primary_session_id()));
-            if active_sid.as_ref() != Some(sid) {
-                let label = self
-                    .session_manager
-                    .get_session(sid)
-                    .map(|s| {
-                        format!(
-                            "{} {}",
-                            crate::i18n::tr(&bar_ctx, "Sidebar:", "侧栏："),
-                            s.name
-                        )
-                    })
-                    .unwrap_or_else(|| {
-                        crate::i18n::tr(&bar_ctx, "Sidebar: unnamed", "侧栏：未命名").to_string()
-                    });
-                crate::ui::chrome::status_text_chip(ui, theme, &label, theme.text_primary());
-            }
-        }
-
-        if self.session_log_enabled {
-            if let Some(log_label) = self.active_tab_log_status(&bar_ctx) {
-                let chip = theme
-                    .frame_status_chip()
-                    .show(ui, |ui| {
-                        ui.add(
-                            egui::Label::new(
-                                egui::RichText::new(log_label)
-                                    .size(theme.font_size_status_bar())
-                                    .color(theme.text_primary()),
-                            )
-                            .sense(egui::Sense::click()),
-                        )
-                    })
-                    .inner
-                    .on_hover_text(crate::i18n::tr(
-                        &bar_ctx,
-                        "Browse local recording of this session's terminal output",
-                        "查看本会话的终端输出录制(本地日志文件)",
-                    ));
-                if chip.clicked() {
-                    if let Some(idx) = self.active_tab {
-                        let sid = self.tabs.get(idx).map(|t| t.primary_session_id());
-                        let name = sid.as_deref().and_then(|id| {
-                            self.session_manager.get_session(id).map(|s| s.name.clone())
-                        });
-                        if let (Some(id), Some(n)) = (sid, name) {
-                            self.flush_session_log_buffers_for_session(&id);
-                            self.session_log_dialog.open_for(
-                                &bar_ctx,
-                                &id,
-                                &n,
-                                &self.session_log_settings,
-                            );
-                        }
-                    }
-                }
-            }
-        }
-
-        if let Some(metrics) = self
-            .monitor_panel
-            .status_bar_metrics_line(&bar_ctx, self.show_monitor_panel)
-        {
-            crate::ui::chrome::status_text_chip(ui, theme, &metrics, theme.text_primary());
-        }
-
-        self.paint_team_account_status_chip(ui, theme, &bar_ctx);
-
-        if self.active_tab_auto_reconnect_enabled() {
-            crate::ui::chrome::status_icon_chip(
-                ui,
-                theme,
-                crate::ui::icons::IconId::Refresh,
-                crate::i18n::tr(&bar_ctx, "Auto-reconnect", "自动重连"),
-            );
-        }
-
-        if self.sidebar_collapsed
-            && crate::ui::chrome::status_restore_chip(
-                ui,
-                theme,
-                crate::i18n::tr(&bar_ctx, "Connections", "连接"),
-                self.tabs.len(),
-            )
-            .on_hover_text(crate::i18n::tr(
-                &bar_ctx,
-                "Expand connection sidebar",
-                "展开左侧连接栏",
-            ))
-            .clicked()
-        {
-            self.sidebar_collapsed = false;
-            self.sidebar_user_dismissed_responsive = false;
-        }
-
-        if !self.status_message.is_empty() {
-            crate::ui::chrome::status_text_chip(
-                ui,
-                theme,
-                &truncate_status(status_message_body(&self.status_message), 36),
-                status_message_text_color(&self.status_message, theme),
-            );
-        }
-    }
-
-    /// 底栏团队账户：已登录时显示用户与当前团队，点击打开偏好设置。
-    fn paint_team_account_status_chip(
-        &mut self,
-        ui: &mut egui::Ui,
-        theme: &crate::ui::theme::Theme,
-        bar_ctx: &egui::Context,
-    ) {
-        if !self.team_service.is_configured() || !self.team_service.is_logged_in() {
-            return;
-        }
-        let team_name = self.team_service.current_team_name();
-        let (display, email) = self
-            .team_service
-            .state
-            .user
-            .as_ref()
-            .map(|u| {
-                let name = if !u.display_name.is_empty() {
-                    u.display_name.as_str()
-                } else if !u.username.is_empty() {
-                    u.username.as_str()
-                } else {
-                    u.email.as_str()
-                };
-                (name.to_string(), u.email.clone())
-            })
-            .unwrap_or_else(|| {
-                (
-                    crate::i18n::tr(bar_ctx, "Signed in", "已登录").to_string(),
-                    String::new(),
-                )
-            });
-
-        let chip_text = format!(
-            "{} · {} @ {}",
-            crate::i18n::tr(bar_ctx, "Team", "团队"),
-            truncate_status(&display, 14),
-            truncate_status(&team_name, 12),
-        );
-        let hover = if email.is_empty() {
-            format!(
-                "{}\n{}",
-                team_name,
-                crate::i18n::tr(
-                    bar_ctx,
-                    "Click to open team account settings",
-                    "点击打开团队账户设置",
-                ),
-            )
-        } else {
-            format!(
-                "{}\n{}\n{}",
-                email,
-                team_name,
-                crate::i18n::tr(
-                    bar_ctx,
-                    "Click to open team account settings",
-                    "点击打开团队账户设置",
-                ),
-            )
-        };
-
-        let resp = theme.frame_status_chip().show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 4.0;
-                let px = theme.font_size_status_bar();
-                let (r, _) = ui.allocate_exact_size(egui::vec2(px, px), egui::Sense::hover());
-                crate::ui::icons::paint_icon(
-                    ui,
-                    r,
-                    crate::ui::icons::IconId::Cloud,
-                    theme.green_color(),
-                    px,
-                );
-                ui.label(
-                    egui::RichText::new(chip_text)
-                        .size(theme.font_size_status_bar())
-                        .color(theme.green_color()),
-                );
-            });
-        });
-        if resp.response.on_hover_text(hover).clicked() {
-            self.open_preferences_dialog();
-        }
-    }
-
-    /// 当前标签 SSH 连接状态(主机 + 状态字色)，不占用终端 scrollback。
-    fn status_connection_chip(
-        ui: &mut egui::Ui,
-        status: &crate::ui::terminal::ConnectionBarStatus,
-        theme: &crate::ui::theme::Theme,
-    ) {
-        let host = truncate_status(&status.host_line, 40);
-        theme.frame_status_chip().show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = theme.spacing_sm();
-                let sz = theme.font_size_status_bar();
-                ui.label(
-                    egui::RichText::new(host)
-                        .size(sz)
-                        .color(theme.text_primary()),
-                );
-                ui.label(
-                    egui::RichText::new("·")
-                        .size(sz)
-                        .color(theme.text_tertiary()),
-                );
-                ui.label(
-                    egui::RichText::new(&status.state_line)
-                        .size(sz)
-                        .color(status.state_color),
-                );
-            });
-        });
-    }
-
     /// 左侧 Activity Rail(全平台统一导航)。隐藏时改画左缘窄恢复条。
     pub(crate) fn show_activity_rail(
         &mut self,
         ctx: &egui::Context,
+        ui: &mut egui::Ui,
         theme: &crate::ui::theme::Theme,
     ) {
         if self.activity_rail_collapsed {
-            self.show_activity_rail_reveal_strip(ctx, theme);
+            self.show_activity_rail_reveal_strip(ctx, ui, theme);
             return;
         }
         let rail_w = theme.activity_rail_width();
@@ -9305,15 +9014,15 @@ impl MistTermApp {
                 None => label.to_string(),
             }
         };
-        egui::SidePanel::left("activity_rail")
-            .exact_width(rail_w)
+        egui::Panel::left("activity_rail")
+            .exact_size(rail_w)
             .resizable(false)
             .frame(
-                egui::Frame::none()
+                egui::Frame::NONE
                     .fill(theme.chrome_bar_fill())
                     .stroke(egui::Stroke::NONE),
             )
-            .show(ctx, |ui| {
+            .show(ui, |ui| {
                 let full = ui.max_rect();
                 ui.painter().rect_filled(full, 0.0, theme.chrome_bar_fill());
                 ui.painter().vline(
@@ -9437,6 +9146,7 @@ impl MistTermApp {
     pub(crate) fn show_activity_rail_reveal_strip(
         &mut self,
         ctx: &egui::Context,
+        ui: &mut egui::Ui,
         theme: &crate::ui::theme::Theme,
     ) {
         let strip_w = theme.activity_rail_collapsed_strip_width();
@@ -9445,250 +9155,18 @@ impl MistTermApp {
             crate::i18n::menu::labels(crate::i18n::language(ctx)).show_activity_rail,
             crate::platform::accel("B"),
         );
-        egui::SidePanel::left("activity_rail_reveal")
-            .exact_width(strip_w)
+        egui::Panel::left("activity_rail_reveal")
+            .exact_size(strip_w)
             .resizable(false)
             .frame(
-                egui::Frame::none()
+                egui::Frame::NONE
                     .fill(theme.chrome_bar_fill())
                     .stroke(egui::Stroke::NONE),
             )
-            .show(ctx, |ui| {
+            .show(ui, |ui| {
                 if crate::ui::chrome::activity_rail_reveal_strip(ui, theme, &tip).clicked() {
                     self.activity_rail_collapsed = false;
                 }
-            });
-    }
-
-    /// 遗留底栏(已由 Activity Rail + Toast 替代；保留实现供对照，默认不调用)。
-    #[allow(dead_code)]
-    fn show_bottom_chrome(&mut self, ctx: &egui::Context) {
-        let theme = self.theme_manager.current_theme().clone();
-        let status_h = theme.status_bar_height();
-        let fragment_count = self.fragment_manager.get_all().len();
-        let total_runs: u32 = self
-            .fragment_manager
-            .get_all()
-            .iter()
-            .map(|f| f.usage_count)
-            .sum();
-
-        egui::TopBottomPanel::bottom("bottom_chrome")
-            .exact_height(status_h)
-            .frame(theme.frame_chrome_bar())
-            .show(ctx, |ui| {
-                let screen = ui.ctx().screen_rect();
-                let inner = ui.max_rect();
-                let m = theme.margin_chrome_bar();
-                let panel_top = inner.min.y - m.top;
-                let panel_rect = egui::Rect::from_min_max(
-                    egui::pos2(screen.min.x, panel_top),
-                    egui::pos2(screen.max.x, inner.max.y + m.bottom),
-                );
-                ui.painter()
-                    .rect_filled(panel_rect, 0.0, theme.chrome_bar_fill());
-                let content_clip = egui::Rect::from_min_max(
-                    egui::pos2(screen.min.x, panel_top + 2.0),
-                    egui::pos2(screen.max.x, inner.max.y),
-                );
-                ui.set_clip_rect(content_clip);
-                let content_h = theme.chrome_bar_content_height(status_h);
-
-                let status_ctx = ui.interact(
-                    inner,
-                    egui::Id::new("status_bar_context"),
-                    egui::Sense::click(),
-                );
-                status_ctx.context_menu(|ui| {
-                    crate::ui::chrome::apply_context_menu_style(ui, &theme);
-                    let import_label = format!(
-                        "{}…",
-                        crate::i18n::menu::labels(crate::i18n::language(ui.ctx())).import_ssh
-                    );
-                    // session-import 模块 gating（#122 review 问题 2）：状态栏右键与应用菜单同口径。
-                    let session_import_enabled = crate::modules::session_import::SessionImportModule::import_enabled(&self.module_registry);
-                    if crate::ui::chrome::popup_menu_button_enabled(
-                        ui,
-                        &theme,
-                        &import_label,
-                        session_import_enabled && self.ssh_config_path.exists(),
-                    )
-                    .clicked()
-                    {
-                        self.open_ssh_import_dialog(ui.ctx());
-                    }
-                    let foreign_label = format!(
-                        "{}…",
-                        crate::i18n::menu::labels(crate::i18n::language(ui.ctx())).import_foreign
-                    );
-                    if crate::ui::chrome::popup_menu_button_enabled(
-                        ui,
-                        &theme,
-                        &foreign_label,
-                        session_import_enabled,
-                    )
-                    .clicked()
-                    {
-                        self.open_foreign_import_dialog();
-                    }
-                });
-
-                let row_w = ui.available_width();
-                ui.allocate_ui_with_layout(
-                    egui::vec2(row_w, content_h),
-                    egui::Layout::left_to_right(egui::Align::Center),
-                    |ui| {
-                        ui.set_min_height(content_h);
-                        ui.set_max_height(content_h);
-                        ui.spacing_mut().item_spacing =
-                            egui::vec2(theme.spacing_status_left_gap(), 0.0);
-
-                        self.status_bar_info_cluster(ui, &theme);
-
-                        let remaining_w = ui.available_width().max(0.0);
-                        ui.allocate_ui_with_layout(
-                            egui::vec2(remaining_w, content_h),
-                            egui::Layout::right_to_left(egui::Align::Center),
-                            |ui| {
-                                ui.set_min_height(content_h);
-                                ui.set_max_height(content_h);
-                                ui.spacing_mut().item_spacing =
-                                    egui::vec2(theme.spacing_tool_btn_gap(), 0.0);
-
-                                let fragment_chip = match crate::i18n::language(ctx) {
-                                    crate::i18n::UiLanguage::En => {
-                                        format!("{fragment_count} snippets · {total_runs} runs")
-                                    }
-                                    crate::i18n::UiLanguage::Zh => {
-                                        format!("{fragment_count} 片段 · {total_runs} 次")
-                                    }
-                                };
-                                crate::ui::chrome::status_text_chip(
-                                    ui,
-                                    &theme,
-                                    &fragment_chip,
-                                    theme.text_primary(),
-                                );
-                                ui.label(
-                                    egui::RichText::new("|")
-                                        .size(theme.font_size_status_bar())
-                                        .color(theme.color_caption_text()),
-                                );
-                                ui.add_space(theme.spacing_status_right_gap());
-
-                                let menu = crate::i18n::menu::labels(crate::i18n::language(ctx));
-                                if crate::ui::chrome::status_tool_button(
-                                    ui,
-                                    &theme,
-                                    crate::ui::icons::IconId::Fragment,
-                                    crate::i18n::tr(ctx, "Snippets", "片段"),
-                                    &format!(
-                                        "{} · {}",
-                                        menu.fragment_panel,
-                                        crate::platform::accel("K")
-                                    ),
-                                )
-                                .clicked()
-                                {
-                                    if self.show_fragment_panel {
-                                        self.show_fragment_panel = false;
-                                    } else if self.ensure_right_dock_allowed_or_warn(ctx) {
-                                        self.open_right_dock_panel(ActiveRightDock::Fragment);
-                                    }
-                                }
-                                if crate::ui::chrome::status_tool_button(
-                                    ui,
-                                    &theme,
-                                    crate::ui::icons::IconId::Folder,
-                                    crate::i18n::tr(ctx, "Files", "文件"),
-                                    crate::i18n::tr(
-                                        ctx,
-                                        "SFTP files · browse / upload / download",
-                                        "SFTP 文件 · 浏览/上传/下载",
-                                    ),
-                                )
-                                .clicked()
-                                {
-                                    if self.show_sftp_panel {
-                                        self.show_sftp_panel = false;
-                                    } else if self.ensure_right_dock_allowed_or_warn(ctx) {
-                                        self.toggle_sftp_panel(ctx);
-                                    }
-                                }
-                                let fwd_count = self
-                                    .active_tab
-                                    .and_then(|idx| self.tabs.get(idx))
-                                    .and_then(|tab| tab.active_terminal())
-                                    .filter(|t| t.is_connected())
-                                    .and_then(|t| t.ssh_session_id())
-                                    .map(|id| self.port_forward_panel.active_count_for(id))
-                                    .unwrap_or(0);
-                                let fwd_tip = if fwd_count > 0 {
-                                    format!(
-                                        "{} · {}",
-                                        crate::i18n::tr(
-                                            ctx,
-                                            "Port forwarding · active",
-                                            "端口转发 · 运行中",
-                                        ),
-                                        fwd_count
-                                    )
-                                } else {
-                                    crate::i18n::tr(
-                                        ctx,
-                                        "Port forwarding · -L / -R / SOCKS",
-                                        "端口转发 · 本地/远程/SOCKS",
-                                    )
-                                    .to_string()
-                                };
-                                if crate::ui::chrome::status_tool_button(
-                                    ui,
-                                    &theme,
-                                    crate::ui::icons::IconId::Network,
-                                    crate::i18n::tr(ctx, "Forward", "转发"),
-                                    &fwd_tip,
-                                )
-                                .clicked()
-                                {
-                                    if self.show_port_forward_panel {
-                                        self.show_port_forward_panel = false;
-                                        self.port_forward_last_tab = None;
-                                    } else if self.ensure_right_dock_allowed_or_warn(ctx) {
-                                        self.toggle_port_forward_panel(ctx);
-                                    }
-                                }
-                                if crate::ui::chrome::status_tool_button(
-                                    ui,
-                                    &theme,
-                                    crate::ui::icons::IconId::Monitor,
-                                    crate::i18n::tr(ctx, "Monitor", "监控"),
-                                    menu.monitor_panel,
-                                )
-                                .clicked()
-                                {
-                                    if self.show_monitor_panel {
-                                        self.show_monitor_panel = false;
-                                        self.monitor_last_tab = None;
-                                        self.sync_monitor_panel_to_active_tab();
-                                    } else if self.ensure_right_dock_allowed_or_warn(ctx) {
-                                        self.open_right_dock_panel(ActiveRightDock::Monitor);
-                                    }
-                                }
-                                if crate::ui::chrome::status_tool_button(
-                                    ui,
-                                    &theme,
-                                    crate::ui::icons::IconId::Api,
-                                    "AI",
-                                    menu.ai_panel,
-                                )
-                                .clicked()
-                                {
-                                    self.toggle_ai_panel(ctx);
-                                }
-                            },
-                        );
-                    },
-                );
             });
     }
 
@@ -9723,7 +9201,7 @@ impl MistTermApp {
                 crate::modules::session_import::SessionImportModule::import_enabled(&self.module_registry),
                 self.sidebar_collapsed,
                 self.activity_rail_collapsed,
-                frame.info().window_info.maximized,
+                ctx.input(|i| i.viewport().maximized.unwrap_or(false)),
                 self.show_sftp_panel,
                 self.show_fragment_panel,
                 self.show_monitor_panel,
@@ -9768,7 +9246,7 @@ impl MistTermApp {
             MacMenuAction::CloseTab => self.request_close_active_tab(),
             MacMenuAction::DisconnectSsh => self.disconnect_ssh_keep_buffer_active(ctx),
             MacMenuAction::ReconnectTab => self.reconnect_active_tab(ctx),
-            MacMenuAction::Quit => frame.close(),
+            MacMenuAction::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
             MacMenuAction::CopyTerminal => self.menu_copy_for_context(ctx),
             MacMenuAction::PasteToTerminal => self.menu_paste_for_context(ctx),
             MacMenuAction::SelectAllTerminal => self.menu_select_all_for_context(ctx),
@@ -9782,7 +9260,7 @@ impl MistTermApp {
             }
             MacMenuAction::ToggleActivityRail => self.toggle_activity_rail(),
             MacMenuAction::ToggleMaximize => {
-                frame.set_maximized(!frame.info().window_info.maximized);
+                ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!ctx.input(|i| i.viewport().maximized.unwrap_or(false))));
             }
             MacMenuAction::TerminalSearch => self.toggle_terminal_search(),
             MacMenuAction::ToggleSftp => self.toggle_sftp_panel(ctx),
@@ -9953,7 +9431,14 @@ impl eframe::App for MistTermApp {
         crate::platform::arm_quit_watchdog();
     }
 
-    fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+    // #206 S1：eframe 0.34+ 把 App::update 拆成 logic（纯状态，无 UI）+ ui（绘制）。
+    // S1 策略：原 update 全身放进 ui（等价旧行为）；logic 空实现。
+    // S2（#207）按梳理 §10「先 logic 调原 update 全身、ui 空」反查脏帧/repaint 行为后再细化拆分。
+    fn logic(&mut self, _ctx: &egui::Context, _frame: &mut eframe::Frame) {}
+
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        let ctx = ui.ctx().clone();
+        let ctx = &ctx;
         if let Some(url) = self.pending_ssh_url.take() {
             self.open_ssh_url(ctx, url);
         }
@@ -10035,7 +9520,7 @@ impl eframe::App for MistTermApp {
         self.poll_market_catalog_refresh(ctx);
         self.poll_market_catalog_debounce();
         self.update_tick(ctx);
-        self.update_handle_close(frame);
+        self.update_handle_close(ctx);
 
         #[cfg(target_os = "macos")]
         self.poll_native_menu_bar(ctx, frame);
@@ -10804,7 +10289,7 @@ impl eframe::App for MistTermApp {
             }
         }
 
-        self.render_workspace_shell(ctx, frame, &theme);
+        self.render_workspace_shell(ctx, ui, frame, &theme);
         let output_trigger_enabled = self
             .module_registry
             .is_enabled(crate::modules::output_trigger::MODULE_ID);
@@ -10981,7 +10466,7 @@ impl MistTermApp {
         );
         let rect = egui::Rect::from_min_size(origin, egui::vec2(card_w, card_h));
         ui.allocate_rect(rect, egui::Sense::hover());
-        let mut card = ui.child_ui(rect, egui::Layout::top_down(egui::Align::Center));
+        let mut card = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(egui::Layout::top_down(egui::Align::Center)));
         card.add_space(8.0);
         card.label(
             egui::RichText::new("MistTerm")

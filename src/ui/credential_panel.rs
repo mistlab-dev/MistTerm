@@ -221,7 +221,7 @@ impl CredentialPanel {
         let prev_extreme = ui.visuals().extreme_bg_color;
         ui.visuals_mut().extreme_bg_color = theme.color_scroll_extreme_bg();
         egui::ScrollArea::vertical()
-            .id_source("credential_panel_list")
+            .id_salt("credential_panel_list")
             .max_height(list_h)
             .auto_shrink([false; 2])
             .show(ui, |ui| {
@@ -290,7 +290,7 @@ impl CredentialPanel {
         chrome::form_singleline_field_boxed(
             ui,
             theme,
-            egui::Id::new("cred_form_name"),
+            egui::Id::unique("cred_form_name"),
             &mut panel.form_name,
             "",
             field_w,
@@ -350,7 +350,7 @@ impl CredentialPanel {
         chrome::form_singleline_field_boxed(
             ui,
             theme,
-            egui::Id::new("cred_form_host"),
+            egui::Id::unique("cred_form_host"),
             &mut panel.form_host,
             "example.com",
             field_w,
@@ -361,7 +361,7 @@ impl CredentialPanel {
             chrome::form_u16_stepper(
                 ui,
                 theme,
-                egui::Id::new("cred_form_port"),
+                egui::Id::unique("cred_form_port"),
                 &mut panel.form_port,
                 1..=65535,
                 1,
@@ -375,7 +375,7 @@ impl CredentialPanel {
         chrome::form_singleline_field_boxed(
             ui,
             theme,
-            egui::Id::new("cred_form_username"),
+            egui::Id::unique("cred_form_username"),
             &mut panel.form_username,
             i18n::tr(ui.ctx(), "e.g. root", "如 root"),
             field_w,
@@ -458,7 +458,7 @@ impl CredentialPanel {
             chrome::form_multiline_field(
                 ui,
                 theme,
-                egui::Id::new("cred_form_secret"),
+                egui::Id::unique("cred_form_secret"),
                 &mut panel.form_secret,
                 field_w,
                 3,
@@ -473,7 +473,7 @@ impl CredentialPanel {
         chrome::form_singleline_field_boxed(
             ui,
             theme,
-            egui::Id::new("cred_form_tags"),
+            egui::Id::unique("cred_form_tags"),
             &mut panel.form_tags,
             "prod, web",
             field_w,
@@ -483,7 +483,7 @@ impl CredentialPanel {
         chrome::form_multiline_field(
             ui,
             theme,
-            egui::Id::new("cred_form_notes"),
+            egui::Id::unique("cred_form_notes"),
             &mut panel.form_notes,
             field_w,
             2,
@@ -500,7 +500,7 @@ impl CredentialPanel {
             ),
             theme.color_section_title(),
         ))
-        .id_source(format!(
+        .id_salt(format!(
             "credential_form_advanced_{}",
             panel.selected_id.as_deref().unwrap_or("new")
         ))
@@ -526,7 +526,7 @@ impl CredentialPanel {
             chrome::form_singleline_field_boxed(
                 ui,
                 theme,
-                egui::Id::new("cred_vault_mount"),
+                egui::Id::unique("cred_vault_mount"),
                 &mut panel.form_vault_mount,
                 "secret",
                 field_w,
@@ -540,7 +540,7 @@ impl CredentialPanel {
             chrome::form_singleline_field_boxed(
                 ui,
                 theme,
-                egui::Id::new("cred_vault_path"),
+                egui::Id::unique("cred_vault_path"),
                 &mut panel.form_vault_path,
                 "ssh/prod",
                 field_w,
@@ -554,7 +554,7 @@ impl CredentialPanel {
             chrome::form_singleline_field_boxed(
                 ui,
                 theme,
-                egui::Id::new("cred_vault_field"),
+                egui::Id::unique("cred_vault_field"),
                 &mut panel.form_vault_field,
                 "password",
                 field_w,
@@ -821,7 +821,7 @@ impl CredentialPanel {
                     let field_w = (ui.available_width() - 4.0).max(160.0);
                     let body_h = (ui.available_height() - footer_h).max(80.0);
                     egui::ScrollArea::vertical()
-                        .id_source("credential_form_scroll")
+                        .id_salt("credential_form_scroll")
                         .max_height(body_h)
                         .auto_shrink([false; 2])
                         .show(ui, |ui| {
@@ -931,6 +931,7 @@ impl CredentialPanel {
     pub fn show_side_panel(
         &mut self,
         ctx: &egui::Context,
+        ui: &mut egui::Ui,
         theme: &Theme,
         right_dock_outer_left: &mut Option<f32>,
         dock_col_w: f32,
@@ -942,25 +943,34 @@ impl CredentialPanel {
 
         let (def_w, min_w, max_w) =
             crate::ui::layout_util::right_dock_resize_bounds(dock_col_w);
-        let panel = egui::SidePanel::right("credential_panel")
-            .default_width(def_w)
-            .min_width(min_w)
-            .max_width(max_w)
-            .resizable(true)
-            .frame(crate::ui::chrome::right_dock_placeholder_frame(theme))
-            .show(ctx, |ui| {
-                let h = ui.available_height().max(1.0);
-                let w = ui.available_width().max(1.0);
-                ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::hover());
-            });
+        {
+            egui::Panel::right("credential_panel")
+                .default_size(def_w)
+                .min_size(min_w)
+                .max_size(max_w)
+                .resizable(true)
+                .frame(crate::ui::chrome::right_dock_placeholder_frame(theme))
+                .show(ui, |ui| {
+                    let h = ui.available_height().max(1.0);
+                    let w = ui.available_width().max(1.0);
+                    ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::hover());
+                });
+        }
         let dock_inset = theme.spacing_right_dock_screen_inset();
-        let slot = layout_util::side_panel_place_slot(ctx, &panel.response, dock_col_w, dock_inset);
+        // #206 S1：Panel::show 不再返回 response；槽位改由 PanelState 落盘矩形推得。
+        let slot = layout_util::side_panel_state_rect(ctx, "credential_panel")
+            .map(|r| {
+                let screen = ctx.content_rect();
+                let mut s = r;
+                s.min.x = screen.max.x - s.width();
+                s.max.x = screen.max.x - dock_inset;
+                s
+            })
+            .unwrap_or(egui::Rect::NOTHING);
         crate::ui::chrome::paint_right_dock_slot_gap(ctx, theme, slot);
         self.last_panel_slot_rect = Some(slot);
         if let Some(slot) = self.last_panel_slot_rect {
             layout_util::record_right_dock_panel_rect(&slot, right_dock_outer_left);
-        } else {
-            layout_util::record_right_dock_panel(&panel.response, right_dock_outer_left);
         }
         let _ = theme;
     }
@@ -979,7 +989,7 @@ impl CredentialPanel {
             return;
         }
 
-        let screen = ctx.screen_rect();
+        let screen = ctx.content_rect();
         let dock_inset = theme.spacing_right_dock_screen_inset();
         let Some(slot) = layout_util::right_dock_foreground_slot(
             self.last_panel_slot_rect,
@@ -1052,7 +1062,7 @@ impl CredentialPanel {
                 chrome::search_field(
                     ui,
                     theme,
-                    egui::Id::new("credential_panel_search"),
+                    egui::Id::unique("credential_panel_search"),
                     &mut self.search,
                     i18n::tr(ui.ctx(), "Search credentials…", "搜索凭证…"),
                     row_w,
@@ -1116,7 +1126,7 @@ impl CredentialPanel {
                         i18n::tr(ui.ctx(), "Browse Vault (advanced)", "浏览 Vault（高级）"),
                         theme.color_section_title(),
                     ))
-                    .id_source("credential_vault_browse_section")
+                    .id_salt("credential_vault_browse_section")
                     .default_open(false)
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
@@ -1129,7 +1139,7 @@ impl CredentialPanel {
                             chrome::form_singleline_field_boxed(
                                 ui,
                                 theme,
-                                egui::Id::new("cred_vault_prefix"),
+                                egui::Id::unique("cred_vault_prefix"),
                                 &mut self.vault_list_prefix,
                                 "secret/",
                                 prefix_w,
@@ -1160,7 +1170,7 @@ impl CredentialPanel {
                             let browse_h =
                                 layout_util::clamp_f32(ui.available_height() * 0.2, 48.0, 140.0);
                             egui::ScrollArea::vertical()
-                                .id_source("credential_vault_browse")
+                                .id_salt("credential_vault_browse")
                                 .max_height(browse_h)
                                 .show(ui, |ui| {
                                     for e in &self.vault_list_entries {

@@ -309,7 +309,7 @@ pub fn show_fragment_shares_modal(
                             chrome::form_inline_singleline(
                                 ui,
                                 theme,
-                                egui::Id::new("team_frag_share_expires_hours"),
+                                egui::Id::unique("team_frag_share_expires_hours"),
                                 &mut state.expires_hours_str,
                                 "",
                                 60.0,
@@ -745,7 +745,7 @@ pub fn show_team_settings_modal(
                             chrome::form_inline_singleline(
                                 ui,
                                 theme,
-                                egui::Id::new("team_settings_audit_retention_days"),
+                                egui::Id::unique("team_settings_audit_retention_days"),
                                 &mut state.audit_retention_days_str,
                                 "",
                                 80.0,

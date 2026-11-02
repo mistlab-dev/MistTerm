@@ -306,6 +306,7 @@ impl XferQueue {
 }
 
 /// 根据源/目标大小决定默认写模式（策略非 Ask 时）。
+#[cfg(test)]
 pub(super) fn resolve_write_mode(
     policy: OverwritePolicy,
     dest_exists: bool,
@@ -647,7 +648,7 @@ fn paint_flux_xfer_strip(
         fill.set_width((track.width() * p).max(0.0));
         ui.painter().rect_filled(fill, 1.0, theme.accent_color());
     }
-    let bar_resp = ui.interact(bar_hit, ui.id().with("flux_xfer_bar"), egui::Sense::hover());
+    let bar_resp = ui.interact(bar_hit, ui.scope_id().with("flux_xfer_bar"), egui::Sense::hover());
     bar_resp.on_hover_ui(|ui| {
         ui.set_min_width(220.0);
         ui.label(
@@ -736,11 +737,11 @@ fn paint_flux_xfer_strip(
             let popup_id = ui.make_persistent_id("sftp_flux_policy");
             let just_toggled = gear.clicked();
             if just_toggled {
-                ui.memory_mut(|m| m.toggle_popup(popup_id));
+                egui::Popup::toggle_id(ui.ctx(), popup_id);
             }
-            if ui.memory(|m| m.is_popup_open(popup_id)) {
+            if egui::Popup::is_id_open(ui.ctx(), popup_id) {
                 let popup_w = 196.0;
-                let screen = ui.ctx().screen_rect();
+                let screen = ui.ctx().content_rect();
                 let mut pos = egui::pos2(
                     gear.rect.right() - popup_w,
                     gear.rect.top() - 176.0,
@@ -792,13 +793,13 @@ fn paint_flux_xfer_strip(
                                 .clicked()
                                 {
                                     queue.policy = policy;
-                                    ui.memory_mut(|m| m.close_popup());
+                                    egui::Popup::close_id(ui.ctx(), popup_id);
                                 }
                             }
                         });
                     });
                 if !just_toggled && area.response.clicked_elsewhere() {
-                    ui.memory_mut(|m| m.close_popup());
+                    egui::Popup::close_id(ui.ctx(), popup_id);
                 }
             }
         });

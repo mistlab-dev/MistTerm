@@ -15,6 +15,7 @@ use mistterm::ui::terminal_keys::{
 fn key_press(key: Key, modifiers: Modifiers) -> Event {
     Event::Key {
         key,
+        physical_key: None,
         pressed: true,
         repeat: false,
         modifiers,

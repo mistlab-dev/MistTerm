@@ -746,6 +746,8 @@ pub(crate) fn team_docs_search_path(team_id: &str, query: &str, limit: u32) -> S
     )
 }
 
+#[cfg(test)]
+#[cfg(test)]
 /// Simple string-level URL combiner (matches `TeamClient::url` exactly).
 pub(crate) fn build_api_url(base: &str, path: &str) -> String {
     format!("{base}{path}")

@@ -120,7 +120,7 @@ impl SendSequenceDialog {
                         "Snippets, mist exec, AI batch, or this",
                         "片段, mist exec, AI 批量, 还是发送序列",
                     ))
-                    .id_source("send_sequence_compare")
+                    .id_salt("send_sequence_compare")
                     .default_open(false)
                     .show(ui, |ui| {
                         paint_difference(ui, theme, ctx);
@@ -155,7 +155,7 @@ impl SendSequenceDialog {
             }
             ui.add_space(theme.spacing_xs());
             egui::ScrollArea::vertical()
-                .id_source("send_sequence_list")
+                .id_salt("send_sequence_list")
                 .max_height(360.0)
                 .auto_shrink([false; 2])
                 .show(ui, |ui| {
@@ -206,7 +206,7 @@ impl SendSequenceDialog {
             crate::ui::chrome::form_singleline_field(
                 ui,
                 theme,
-                egui::Id::new("send_sequence_name"),
+                egui::Id::unique("send_sequence_name"),
                 &mut self.name,
                 crate::i18n::tr(ctx, "After login", "登录后"),
                 width,
@@ -222,7 +222,7 @@ impl SendSequenceDialog {
                 crate::ui::chrome::form_u32_stepper(
                     ui,
                     theme,
-                    egui::Id::new("send_sequence_delay"),
+                    egui::Id::unique("send_sequence_delay"),
                     &mut self.delay_ms,
                     0..=MAX_DELAY_MS,
                     50,
@@ -246,7 +246,7 @@ impl SendSequenceDialog {
             crate::ui::chrome::form_multiline_field_with_hint(
                 ui,
                 theme,
-                egui::Id::new("send_sequence_body"),
+                egui::Id::unique("send_sequence_body"),
                 &mut self.body,
                 crate::i18n::tr(
                     ctx,

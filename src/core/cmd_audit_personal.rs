@@ -16,7 +16,6 @@ use crate::core::cmd_audit::CmdAuditRule;
 
 pub const MAX_PERSONAL_RULES: usize = 64;
 pub const MAX_PATTERN_BYTES: usize = 1024;
-const MAX_ID_CHARS: usize = 64;
 
 const PERSONAL_ACTIONS: [&str; 4] = ["block", "confirm", "alert", "allow"];
 const MATCH_TYPES: [&str; 4] = ["regex", "prefix", "contains", "exact"];
@@ -37,7 +36,7 @@ pub enum PersonalRuleError {
 }
 
 impl PersonalRuleError {
-    pub fn explain(&self, zh: bool) -> String {
+    pub fn explain(&self, _zh: bool) -> String {
         match self {
             Self::EmptyPattern => "请填写匹配模式. 没有保存.".into(),
             Self::PatternTooLong => "这条匹配模式太长. 没有保存.".into(),

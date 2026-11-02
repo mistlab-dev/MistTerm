@@ -66,7 +66,7 @@ impl From<UiLanguage> for Locale {
 
 fn locale_id() -> egui::Id {
     // `Id::NULL` is reserved; use a stable app-specific id.
-    egui::Id::new("mistterm_ui_language")
+    egui::Id::unique("mistterm_ui_language")
 }
 
 /// 进程级语言镜像(0=En, 1=Zh)。供无 `egui::Context` 的后台线程/写日志等场景读取。

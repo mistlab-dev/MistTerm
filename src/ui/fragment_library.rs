@@ -141,7 +141,7 @@ impl FragmentLibraryState {
         let mut close_via_header = false;
         let lib_sz = egui::vec2(lib_def[0], lib_def[1]);
         crate::ui::chrome::modal_window("fragment_library_modal", theme, ctx)
-            .id(egui::Id::new("mistterm_fragment_library_window"))
+            .id(egui::Id::unique("mistterm_fragment_library_window"))
             .open(&mut win_open)
             .default_pos(modal_center_pos(ctx, lib_sz))
             .resizable(false)
@@ -157,7 +157,7 @@ impl FragmentLibraryState {
                 ) {
                     close_via_header = true;
                 }
-                let sw = ctx.screen_rect().width().max(360.0);
+                let sw = ctx.content_rect().width().max(360.0);
                 let fill_w = finite_content_width_inset(
                     ui,
                     16.0,
@@ -188,7 +188,7 @@ impl FragmentLibraryState {
                     crate::ui::chrome::search_field(
                         ui,
                         theme,
-                        egui::Id::new("fragment_lib_search"),
+                        egui::Id::unique("fragment_lib_search"),
                         &mut self.search_query,
                         i18n::tr(ctx, "Title / command / tags", "标题 / 命令 / 标签"),
                         search_w,
@@ -354,7 +354,7 @@ impl FragmentLibraryState {
                         };
 
                         egui::ScrollArea::vertical()
-                            .id_source("mistterm_fragment_lib_list_scroll")
+                            .id_salt("mistterm_fragment_lib_list_scroll")
                             .max_height(list_scroll_h)
                             .show(ui, |ui| {
                                 if results.is_empty() {
@@ -403,10 +403,10 @@ impl FragmentLibraryState {
                         ui.set_min_width((row_w - left_col - 12.0).max(200.0));
                         ui.label(egui::RichText::new(i18n::tr(ui.ctx(), "Edit", "编辑")).strong());
                         if self.editing_id.is_none() {
-                            egui::Frame::none()
+                            egui::Frame::NONE
                                 .fill(theme.color_fragment_tag_fill())
-                                .inner_margin(egui::Margin::same(theme.spacing_card_x()))
-                                .rounding(theme.radius_list_item())
+                                .inner_margin(egui::Margin::same((theme.spacing_card_x()) as i8))
+                                .corner_radius(theme.radius_list_item())
                                 .show(ui, |ui| {
                                     ui.label(
                                         egui::RichText::new(i18n::tr(
@@ -424,7 +424,7 @@ impl FragmentLibraryState {
                         // 表单在列内纵向滚动；高度用布局分配后的剩余空间(优于固定像素)。
                         let scroll_h = ui.available_height().max(120.0);
                         egui::ScrollArea::vertical()
-                            .id_source("mistterm_fragment_lib_form_scroll")
+                            .id_salt("mistterm_fragment_lib_form_scroll")
                             .max_height(scroll_h)
                             .auto_shrink([false, false])
                             .show(ui, |ui| {
@@ -438,7 +438,7 @@ impl FragmentLibraryState {
                                 let title_resp = crate::ui::chrome::form_singleline_field(
                                     ui,
                                     theme,
-                                    egui::Id::new("fragment_library_form_title"),
+                                    egui::Id::unique("fragment_library_form_title"),
                                     &mut self.form_title,
                                     i18n::tr(ui.ctx(), "e.g. disk usage", "例如：查看磁盘占用"),
                                     edit_w,
@@ -456,7 +456,7 @@ impl FragmentLibraryState {
                                 crate::ui::chrome::form_singleline_field(
                                     ui,
                                     theme,
-                                    egui::Id::new("fragment_library_form_category"),
+                                    egui::Id::unique("fragment_library_form_category"),
                                     &mut self.form_category,
                                     i18n::tr(ui.ctx(), "e.g. ops · host", "例如：运维 · 主机"),
                                     edit_w,
@@ -470,7 +470,7 @@ impl FragmentLibraryState {
                                 crate::ui::chrome::form_singleline_field(
                                     ui,
                                     theme,
-                                    egui::Id::new("fragment_library_form_tags"),
+                                    egui::Id::unique("fragment_library_form_tags"),
                                     &mut self.form_tags,
                                     i18n::tr(ui.ctx(), "e.g. prod, nginx", "例如：prod, nginx"),
                                     edit_w,
@@ -492,7 +492,7 @@ impl FragmentLibraryState {
                                 crate::ui::chrome::form_multiline_field(
                                     ui,
                                     theme,
-                                    egui::Id::new("fragment_library_form_command"),
+                                    egui::Id::unique("fragment_library_form_command"),
                                     &mut self.form_command,
                                     edit_w,
                                     5,
@@ -609,7 +609,7 @@ impl FragmentLibraryState {
                                         crate::ui::chrome::form_singleline_field(
                                             ui,
                                             theme,
-                                            egui::Id::new(("frag_var_name", idx)),
+                                            egui::Id::unique(("frag_var_name", idx)),
                                             name,
                                             "",
                                             edit_w,
@@ -623,7 +623,7 @@ impl FragmentLibraryState {
                                         crate::ui::chrome::form_singleline_field(
                                             ui,
                                             theme,
-                                            egui::Id::new(("frag_var_desc", idx)),
+                                            egui::Id::unique(("frag_var_desc", idx)),
                                             desc,
                                             "",
                                             edit_w,
@@ -634,7 +634,7 @@ impl FragmentLibraryState {
                                             crate::ui::chrome::form_singleline_field(
                                                 ui,
                                                 theme,
-                                                egui::Id::new(("frag_var_default", idx)),
+                                                egui::Id::unique(("frag_var_default", idx)),
                                                 default,
                                                 "",
                                                 (edit_w - 56.0).max(72.0),
@@ -705,7 +705,7 @@ impl FragmentLibraryState {
                                     "Preview resolved (session context)",
                                     "预览替换后(当前会话上下文)",
                                 ))
-                                    .id_source("mistterm_fragment_lib_preview_expand")
+                                    .id_salt("mistterm_fragment_lib_preview_expand")
                                     .show(ui, |ui| {
                                     ui.add(
                                         egui::Label::new(
@@ -713,7 +713,7 @@ impl FragmentLibraryState {
                                                 .monospace()
                                                 .color(theme.green_color()),
                                         )
-                                        .wrap(true),
+                                        .wrap(),
                                     );
                                 });
 

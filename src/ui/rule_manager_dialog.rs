@@ -14,7 +14,7 @@ use crate::modules::display_link::{
 };
 use crate::modules::output_trigger::{
     check_pattern, ImportReport, OutputTriggerRule, OutputTriggerStore, RuleDraft, RuleError,
-    TriggerAction, TriggerSeverity, MAX_RULES as OT_MAX_RULES,
+    TriggerAction, TriggerSeverity,
 };
 use crate::ui::theme::Theme;
 
@@ -314,14 +314,11 @@ impl RuleManagerDialog {
         ctx: &egui::Context,
         app_settings: &mut crate::core::app_settings::AppSettings,
     ) {
-        egui::Frame::none()
+        egui::Frame::NONE
             .fill(theme.surface_elevated())
             .stroke(egui::Stroke::new(1.0, theme.color_form_input_stroke()))
-            .rounding(theme.radius_search_input())
-            .inner_margin(egui::Margin::symmetric(
-                theme.spacing_xs(),
-                theme.spacing_xs(),
-            ))
+            .corner_radius(theme.radius_search_input())
+            .inner_margin(egui::Margin::symmetric(theme.spacing_xs() as i8, theme.spacing_xs() as i8))
             .show(ui, |ui| {
                 ui.set_min_width(crate::ui::layout_util::finite_content_width(ui));
                 ui.label(
@@ -473,7 +470,7 @@ impl RuleManagerDialog {
             let mut toggles: Vec<(String, bool)> = Vec::new();
             let mut pick: Option<String> = None;
             egui::ScrollArea::vertical()
-                .id_source("output_trigger_rule_list")
+                .id_salt("output_trigger_rule_list")
                 .max_height(340.0)
                 .auto_shrink([false; 2])
                 .show(ui, |ui| {
@@ -608,7 +605,7 @@ impl RuleManagerDialog {
                 crate::ui::chrome::form_multiline_field_with_hint(
                     ui,
                     theme,
-                    egui::Id::new("output_trigger_keywords"),
+                    egui::Id::unique("output_trigger_keywords"),
                     &mut self.ot_keywords,
                     crate::i18n::tr(ctx, "ERROR, failed, timeout", "ERROR, 失败, 超时"),
                     width,
@@ -633,7 +630,7 @@ impl RuleManagerDialog {
                 crate::ui::chrome::form_multiline_field_with_hint(
                     ui,
                     theme,
-                    egui::Id::new("output_trigger_pattern"),
+                    egui::Id::unique("output_trigger_pattern"),
                     &mut self.pattern,
                     crate::i18n::tr(ctx, "HELLO_MIST", "HELLO_MIST"),
                     width,
@@ -717,7 +714,7 @@ impl RuleManagerDialog {
                 crate::ui::chrome::form_u32_stepper(
                     ui,
                     theme,
-                    egui::Id::new("output_trigger_priority"),
+                    egui::Id::unique("output_trigger_priority"),
                     &mut self.priority,
                     0..=255,
                     1,
@@ -815,7 +812,7 @@ impl RuleManagerDialog {
             "How a toast shows up",
             "怎样看到 Toast",
         ))
-        .id_source("output_trigger_toast_help")
+        .id_salt("output_trigger_toast_help")
         .default_open(true)
         .show(ui, |ui| {
             ui.label(
@@ -833,7 +830,7 @@ impl RuleManagerDialog {
             "Advanced: import / export JSON",
             "高级: 导入 / 导出 JSON",
         ))
-        .id_source("output_trigger_import_export")
+        .id_salt("output_trigger_import_export")
         .default_open(false)
         .show(ui, |ui| {
             ui.label(
@@ -1334,7 +1331,7 @@ impl RuleManagerDialog {
             let mut toggles: Vec<(String, bool)> = Vec::new();
             let mut pick: Option<String> = None;
             egui::ScrollArea::vertical()
-                .id_source("cmd_personal_rule_list")
+                .id_salt("cmd_personal_rule_list")
                 .max_height(300.0)
                 .auto_shrink([false; 2])
                 .show(ui, |ui| {
@@ -1425,7 +1422,7 @@ impl RuleManagerDialog {
             crate::ui::chrome::form_singleline_field(
                 ui,
                 theme,
-                egui::Id::new("cmd_rule_name"),
+                egui::Id::unique("cmd_rule_name"),
                 &mut self.cmd_name,
                 crate::i18n::tr(ctx, "e.g. Protect production DB", "例如：保护生产库"),
                 width,
@@ -1449,7 +1446,7 @@ impl RuleManagerDialog {
             crate::ui::chrome::form_multiline_field_with_hint(
                 ui,
                 theme,
-                egui::Id::new("cmd_rule_pattern"),
+                egui::Id::unique("cmd_rule_pattern"),
                 &mut self.cmd_pattern,
                 "rm\\s+-rf\\s+/",
                 width,
@@ -1550,7 +1547,7 @@ impl RuleManagerDialog {
                 crate::ui::chrome::form_u32_stepper(
                     ui,
                     theme,
-                    egui::Id::new("cmd_rule_priority"),
+                    egui::Id::unique("cmd_rule_priority"),
                     &mut prio,
                     0..=255,
                     1,
@@ -1607,7 +1604,7 @@ impl RuleManagerDialog {
         );
         ui.add_space(theme.spacing_xs());
         egui::ScrollArea::vertical()
-            .id_source("cmd_builtin_list")
+            .id_salt("cmd_builtin_list")
             .max_height(220.0)
             .auto_shrink([false; 2])
             .show(ui, |ui| {
@@ -1657,7 +1654,7 @@ impl RuleManagerDialog {
                                 "Pattern",
                                 "正则",
                             ))
-                            .id_source(("cmd_builtin_pat", b.id.as_str()))
+                            .id_salt(("cmd_builtin_pat", b.id.as_str()))
                             .default_open(true)
                             .show(ui, |ui| {
                                 ui.label(
@@ -1723,7 +1720,7 @@ impl RuleManagerDialog {
             "Advanced: import / export JSON",
             "高级: 导入 / 导出 JSON",
         ))
-        .id_source("cmd_personal_import_export")
+        .id_salt("cmd_personal_import_export")
         .default_open(false)
         .show(ui, |ui| {
             ui.label(
@@ -2082,7 +2079,7 @@ impl RuleManagerDialog {
             let mut toggles: Vec<(String, bool)> = Vec::new();
             let mut pick: Option<String> = None;
             egui::ScrollArea::vertical()
-                .id_source("display_link_rule_list")
+                .id_salt("display_link_rule_list")
                 .max_height(340.0)
                 .auto_shrink([false; 2])
                 .show(ui, |ui| {
@@ -2218,7 +2215,7 @@ impl RuleManagerDialog {
                 crate::ui::chrome::form_multiline_field_with_hint(
                     ui,
                     theme,
-                    egui::Id::new("display_link_keywords"),
+                    egui::Id::unique("display_link_keywords"),
                     &mut self.link_keywords,
                     crate::i18n::tr(ctx, "/var/log, 10.0.0, https://", "/var/log, 10.0.0, https://"),
                     width,
@@ -2243,7 +2240,7 @@ impl RuleManagerDialog {
                 crate::ui::chrome::form_multiline_field_with_hint(
                     ui,
                     theme,
-                    egui::Id::new("display_link_pattern"),
+                    egui::Id::unique("display_link_pattern"),
                     &mut self.link_pattern,
                     "https?://\\S+",
                     width,
@@ -2324,7 +2321,7 @@ impl RuleManagerDialog {
                 crate::ui::chrome::form_u32_stepper(
                     ui,
                     theme,
-                    egui::Id::new("display_link_priority"),
+                    egui::Id::unique("display_link_priority"),
                     &mut self.link_priority,
                     0..=255,
                     1,
@@ -2422,7 +2419,7 @@ impl RuleManagerDialog {
             "How a link shows up",
             "怎样看到链接",
         ))
-        .id_source("display_link_help")
+        .id_salt("display_link_help")
         .default_open(true)
         .show(ui, |ui| {
             ui.label(
@@ -2440,7 +2437,7 @@ impl RuleManagerDialog {
             "Advanced: import / export JSON",
             "高级: 导入 / 导出 JSON",
         ))
-        .id_source("display_link_import_export")
+        .id_salt("display_link_import_export")
         .default_open(false)
         .show(ui, |ui| {
             ui.label(
@@ -2839,13 +2836,10 @@ fn rule_count_label(ctx: &egui::Context, used: usize, max: usize) -> String {
 
 /// #283：规则分区背景块，用于区分个人 / 内置 / 团队。
 fn rule_section_frame(theme: &Theme, fill: egui::Color32) -> egui::Frame {
-    egui::Frame::none()
+    egui::Frame::NONE
         .fill(fill)
-        .rounding(theme.radius_search_input())
-        .inner_margin(egui::Margin::symmetric(
-            theme.spacing_sm(),
-            theme.spacing_sm(),
-        ))
+        .corner_radius(theme.radius_search_input())
+        .inner_margin(egui::Margin::symmetric(theme.spacing_sm() as i8, theme.spacing_sm() as i8))
 }
 
 /// #283：简单 / 高级模式切换。简单模式用关键词列表，高级模式直接写正则。

@@ -182,6 +182,8 @@ pub fn verify_or_record_host_key(session: &Session, host: &str, port: u16) -> Re
     append_entry(host, port, &fp)
 }
 
+#[cfg(test)]
+#[cfg(test)]
 /// Parse a `known_hosts` file *content* string into `(host, port, fingerprint)` tuples.
 /// Mirrors the real `read_entries` parser so tests can exercise it without touching the disk.
 fn parse_known_hosts_content(text: &str) -> Vec<(String, u16, String)> {

@@ -153,7 +153,7 @@ impl SessionLogDialog {
         } else {
             display
         };
-        let r = ctx.screen_rect();
+        let r = ctx.content_rect();
         let sw = r.width().max(360.0);
         let sh = r.height().max(280.0);
         // 高度按内容行数自适应：内容少时不留大段空白，内容多时仍保证可读区域。
@@ -174,7 +174,7 @@ impl SessionLogDialog {
             self.session_name
         );
         chrome::modal_window("session_log_viewer", theme, ctx)
-            .id(egui::Id::new("session_log_viewer_window"))
+            .id(egui::Id::unique("session_log_viewer_window"))
             .open(&mut self.open)
             .default_pos(default_pos)
             .movable(true)
@@ -191,7 +191,7 @@ impl SessionLogDialog {
                     crate::ui::chrome::search_field(
                         ui,
                         theme,
-                        egui::Id::new("session_log_search"),
+                        egui::Id::unique("session_log_search"),
                         &mut self.search_query,
                         crate::i18n::tr(ctx, "Filter log…", "过滤日志内容…"),
                         search_w,
@@ -244,11 +244,12 @@ impl SessionLogDialog {
                         });
                     }
                     ui.add_space(theme.spacing_sm());
+                    let log_h = 280.0_f32;
                     // 与右 dock 卡片统一：内嵌区底色/圆角/内边距走主题 token。
                     theme.frame_inset_section().show(ui, |ui| {
                         ui.set_width(content_w);
                         egui::ScrollArea::vertical()
-                            .id_source("session_log_body_scroll")
+                            .id_salt("session_log_body_scroll")
                             .max_height(log_h)
                             .stick_to_bottom(false)
                             .auto_shrink([true, false])
@@ -285,7 +286,7 @@ impl SessionLogDialog {
                                         .size(theme.font_size_panel_title())
                                         .color(theme.text_secondary()),
                                     )
-                                    .wrap(true),
+                                    .wrap(),
                                 );
                             },
                         );

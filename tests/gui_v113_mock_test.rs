@@ -130,6 +130,7 @@ fn gui_mock_ask_knowledge_search_action() {
         ctx.input_mut(|i| {
             i.events.push(egui::Event::Key {
                 key: Key::Enter,
+                physical_key: None,
                 pressed: true,
                 repeat: false,
                 modifiers: egui::Modifiers::NONE,
@@ -245,6 +246,7 @@ fn gui_mock_audit_timeline_escape_closes() {
         ctx.input_mut(|i| {
             i.events.push(egui::Event::Key {
                 key: Key::Escape,
+                physical_key: None,
                 pressed: true,
                 repeat: false,
                 modifiers: egui::Modifiers::NONE,
@@ -286,6 +288,7 @@ fn gui_mock_agent_install_open_copy_escape() {
         ctx.input_mut(|i| {
             i.events.push(egui::Event::Key {
                 key: Key::Escape,
+                physical_key: None,
                 pressed: true,
                 repeat: false,
                 modifiers: egui::Modifiers::NONE,

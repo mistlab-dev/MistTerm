@@ -143,6 +143,8 @@ pub(crate) fn decode_market_text<T: DeserializeOwned>(
     Err(decode_market_error(status_u16, text))
 }
 
+#[cfg(test)]
+#[cfg(test)]
 /// Catalog query → list of (key, value) pairs that will be passed to
 /// `reqwest::RequestBuilder::query`. Returned as a plain `Vec<String>`
 /// (serialized key=value) so tests can verify order & content.
@@ -163,6 +165,8 @@ pub(crate) fn catalog_query_pairs(q: &MarketCatalogQuery) -> Vec<(&'static str, 
     out
 }
 
+#[cfg(test)]
+#[cfg(test)]
 pub(crate) fn build_market_path(path: &str) -> String {
     // Market API lives under /v1/market/...
     format!("/v1/market/{path}")

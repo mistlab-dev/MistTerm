@@ -270,15 +270,16 @@ impl Sidebar {
                     );
                     ui.painter().rect_filled(
                         accent_bar,
-                        egui::Rounding::ZERO,
+                        egui::CornerRadius::ZERO,
                         accent.gamma_multiply(0.9),
                     );
-                    let mut row_ui = ui.child_ui(
-                        row_rect.shrink2(egui::vec2(
-                            theme.spacing_list_item_x(),
-                            theme.spacing_list_item_y(),
-                        )),
-                        egui::Layout::left_to_right(egui::Align::Center),
+                    let mut row_ui = ui.new_child(
+                        egui::UiBuilder::new()
+                            .max_rect(row_rect.shrink2(egui::vec2(
+                                theme.spacing_list_item_x(),
+                                theme.spacing_list_item_y(),
+                            )))
+                            .layout(egui::Layout::left_to_right(egui::Align::Center)),
                     );
                     let icon_px = theme.font_size_connection_name() + 2.0;
                     let (icon_rect, _) = row_ui.allocate_exact_size(
@@ -298,7 +299,7 @@ impl Sidebar {
                     let (text_rect, _) =
                         row_ui.allocate_exact_size(egui::vec2(text_w, text_h), egui::Sense::hover());
                     let mut text_ui =
-                        row_ui.child_ui(text_rect, egui::Layout::top_down(egui::Align::Min));
+                        row_ui.new_child(egui::UiBuilder::new().max_rect(text_rect).layout(egui::Layout::top_down(egui::Align::Min)));
                     text_ui.set_clip_rect(text_rect);
                     text_ui.spacing_mut().item_spacing.y = 0.0;
                     text_ui.add(
@@ -307,8 +308,8 @@ impl Sidebar {
                                 .size(theme.font_size_connection_name())
                                 .color(theme.text_secondary()),
                         )
-                        .truncate(true)
-                        .wrap(false),
+                        .truncate()
+                        .wrap(),
                     );
                     let sub = format!(
                         "{} · {}",
@@ -321,8 +322,8 @@ impl Sidebar {
                                 .size(theme.font_size_caption())
                                 .color(theme.color_caption_text()),
                         )
-                        .truncate(true)
-                        .wrap(false),
+                        .truncate()
+                        .wrap(),
                     );
                     let tip = format!(
                         "{} · {}",
@@ -364,17 +365,18 @@ impl Sidebar {
                             egui::Color32::TRANSPARENT
                         };
                         ui.painter().rect_filled(row_rect, theme.radius_list_item(), bg);
-                        let mut row_ui = ui.child_ui(
-                            row_rect.shrink2(egui::vec2(
-                                theme.spacing_list_item_x(),
-                                theme.spacing_list_item_y(),
-                            )),
-                            egui::Layout::left_to_right(egui::Align::Center),
+                        let mut row_ui = ui.new_child(
+                            egui::UiBuilder::new()
+                                .max_rect(row_rect.shrink2(egui::vec2(
+                                    theme.spacing_list_item_x(),
+                                    theme.spacing_list_item_y(),
+                                )))
+                                .layout(egui::Layout::left_to_right(egui::Align::Center)),
                         );
                         let endpoint =
                             format!("{}@{}:{}", server.username, server.host, server.port);
                         let meta_px = theme.font_size_connection_meta();
-                        let measured_endpoint_w = row_ui.fonts(|f| {
+                        let measured_endpoint_w = row_ui.ctx().fonts_mut(|f| {
                             f.layout_no_wrap(
                                 endpoint.clone(),
                                 egui::FontId::proportional(meta_px),
@@ -393,9 +395,8 @@ impl Sidebar {
                             egui::vec2(name_w, row_h),
                             egui::Sense::hover(),
                         );
-                        let mut name_ui = row_ui.child_ui(
-                            name_rect,
-                            egui::Layout::left_to_right(egui::Align::Center),
+                        let mut name_ui = row_ui.new_child(egui::UiBuilder::new().max_rect(
+                            name_rect).layout(egui::Layout::left_to_right(egui::Align::Center)),
                         );
                         name_ui.set_clip_rect(name_rect);
                         name_ui.add(
@@ -404,17 +405,16 @@ impl Sidebar {
                                     .size(theme.font_size_connection_name())
                                     .color(theme.text_secondary()),
                             )
-                            .truncate(true)
-                            .wrap(false),
+                            .truncate()
+                            .wrap(),
                         );
                         row_ui.add_space(gap);
                         let (end_rect, _) = row_ui.allocate_exact_size(
                             egui::vec2(endpoint_w, row_h),
                             egui::Sense::hover(),
                         );
-                        let mut end_ui = row_ui.child_ui(
-                            end_rect,
-                            egui::Layout::right_to_left(egui::Align::Center),
+                        let mut end_ui = row_ui.new_child(egui::UiBuilder::new().max_rect(
+                            end_rect).layout(egui::Layout::right_to_left(egui::Align::Center)),
                         );
                         end_ui.set_clip_rect(end_rect);
                         end_ui.add(
@@ -423,8 +423,8 @@ impl Sidebar {
                                     .size(meta_px)
                                     .color(theme.text_tertiary()),
                             )
-                            .truncate(true)
-                            .wrap(false),
+                            .truncate()
+                            .wrap(),
                         );
                         if response.clicked() {
                             connect_team_server_key = Some(server.list_key());
@@ -437,7 +437,7 @@ impl Sidebar {
                 // 会话列表(占满标题/搜索/筛选下方的剩余高度)
                 let list_h = ui.available_height().max(80.0);
                 egui::ScrollArea::vertical()
-                    .id_source("mistterm_sidebar_sessions")
+                    .id_salt("mistterm_sidebar_sessions")
                     .max_height(list_h)
                     .auto_shrink([false; 2])
                     .show(ui, |ui| {
@@ -578,12 +578,13 @@ impl Sidebar {
                                 session.last_connected_at,
                                 now_unix,
                             );
-                            let mut row_ui = ui.child_ui(
-                                row_rect.shrink2(egui::vec2(
-                                    theme.spacing_list_item_x(),
-                                    theme.spacing_list_item_y(),
-                                )),
-                                egui::Layout::left_to_right(egui::Align::Center),
+                            let mut row_ui = ui.new_child(
+                                egui::UiBuilder::new()
+                                    .max_rect(row_rect.shrink2(egui::vec2(
+                                        theme.spacing_list_item_x(),
+                                        theme.spacing_list_item_y(),
+                                    )))
+                                    .layout(egui::Layout::left_to_right(egui::Align::Center)),
                             );
                             let connecting = connecting_sessions.contains(&session.id);
                             let accent = theme.session_tab_accent_color(session);
@@ -594,7 +595,7 @@ impl Sidebar {
                             );
                             ui.painter().rect_filled(
                                 accent_bar,
-                                egui::Rounding::ZERO,
+                                egui::CornerRadius::ZERO,
                                 accent.gamma_multiply(0.9),
                             );
                             let status_color = if online {
@@ -619,7 +620,7 @@ impl Sidebar {
                                 theme.color_status_offline_muted()
                             };
                             let status_px = theme.font_size_connection_meta();
-                            let measured_status_w = row_ui.fonts(|f| {
+                            let measured_status_w = row_ui.ctx().fonts_mut(|f| {
                                 f.layout_no_wrap(
                                     status_text.clone(),
                                     egui::FontId::proportional(status_px),
@@ -639,7 +640,7 @@ impl Sidebar {
                                 egui::Sense::hover(),
                             );
                             let mut text_ui =
-                                row_ui.child_ui(text_rect, egui::Layout::top_down(egui::Align::Min));
+                                row_ui.new_child(egui::UiBuilder::new().max_rect(text_rect).layout(egui::Layout::top_down(egui::Align::Min)));
                             text_ui.set_clip_rect(text_rect);
                             text_ui.spacing_mut().item_spacing.y = 0.0;
                             text_ui.set_width(text_w);
@@ -654,8 +655,8 @@ impl Sidebar {
                                         .size(theme.font_size_connection_name())
                                         .color(name_color),
                                 )
-                                .truncate(true)
-                                .wrap(false),
+                                .truncate()
+                                .wrap(),
                             );
                             let host_line = if session.port != 22 {
                                 format!("{}:{}", session.host, session.port)
@@ -668,17 +669,16 @@ impl Sidebar {
                                         .size(theme.font_size_caption())
                                         .color(theme.color_caption_text()),
                                 )
-                                .truncate(true)
-                                .wrap(false),
+                                .truncate()
+                                .wrap(),
                             );
                             row_ui.add_space(gap);
                             let (status_rect, _) = row_ui.allocate_exact_size(
                                 egui::vec2(status_w, text_h),
                                 egui::Sense::hover(),
                             );
-                            let mut status_ui = row_ui.child_ui(
-                                status_rect,
-                                egui::Layout::right_to_left(egui::Align::Center),
+                            let mut status_ui = row_ui.new_child(egui::UiBuilder::new().max_rect(
+                                status_rect).layout(egui::Layout::right_to_left(egui::Align::Center)),
                             );
                             status_ui.set_clip_rect(status_rect);
                             status_ui.add(
@@ -687,8 +687,8 @@ impl Sidebar {
                                         .size(status_px)
                                         .color(status_text_color),
                                 )
-                                .truncate(true)
-                                .wrap(false),
+                                .truncate()
+                                .wrap(),
                             );
                             
                             if response.clicked() {
@@ -712,7 +712,6 @@ impl Sidebar {
                                 .clicked()
                                 {
                                     open_new_tab_session_id = Some(session.id.clone());
-                                    ui.close_menu();
                                 }
                                 if crate::ui::chrome::popup_menu_button(
                                     ui,
@@ -722,7 +721,6 @@ impl Sidebar {
                                 .clicked()
                                 {
                                     edit_session_id = Some(session.id.clone());
-                                    ui.close_menu();
                                 }
                                 if crate::ui::chrome::popup_menu_button(
                                     ui,
@@ -732,7 +730,6 @@ impl Sidebar {
                                 .clicked()
                                 {
                                     delete_session_id = Some(session.id.clone());
-                                    ui.close_menu();
                                 }
                                 if crate::ui::chrome::popup_menu_button(
                                     ui,
@@ -742,7 +739,6 @@ impl Sidebar {
                                     .clicked()
                                 {
                                     view_log_session_id = Some(session.id.clone());
-                                    ui.close_menu();
                                 }
                             });
                             ui.add_space(theme.spacing_list_item_gap());

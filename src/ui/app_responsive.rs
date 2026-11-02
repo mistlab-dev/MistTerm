@@ -12,7 +12,7 @@ pub(super) enum ResponsiveLayoutBand {
 impl MistTermApp {
     #[inline]
     pub(super) fn layout_window_width(ctx: &egui::Context) -> f32 {
-        ctx.screen_rect().width()
+        ctx.content_rect().width()
     }
 
     #[inline]
@@ -111,26 +111,6 @@ impl MistTermApp {
             ),
             UiLanguage::Zh => format!(
                 "窗口较窄(约 {:.0}px)，拉宽到 {:.0}px 以上可打开面板",
-                window_width,
-                Self::RESP_LAYOUT_NARROW_LT_PX,
-            ),
-        }
-    }
-
-    pub(super) fn narrow_window_fragment_panel_hint(
-        ctx: &egui::Context,
-        window_width: f32,
-    ) -> String {
-        use crate::i18n::{language, UiLanguage};
-        let k = crate::platform::accel("K");
-        match language(ctx) {
-            UiLanguage::En => format!(
-                "Window is narrow (~{:.0}px). Widen to {:.0}px+, then {k} for snippets",
-                window_width,
-                Self::RESP_LAYOUT_NARROW_LT_PX,
-            ),
-            UiLanguage::Zh => format!(
-                "窗口较窄(约 {:.0}px)，拉宽到 {:.0}px 以上后再用 {k} 打开片段",
                 window_width,
                 Self::RESP_LAYOUT_NARROW_LT_PX,
             ),

@@ -1194,7 +1194,7 @@ impl SftpPanel {
             theme.text_secondary()
         };
         let star_font = egui::FontId::proportional(theme.font_size_caption());
-        let star_galley = ui.fonts(|f| f.layout_no_wrap(star_label.to_string(), star_font, star_color));
+        let star_galley = ui.ctx().fonts_mut(|f| f.layout_no_wrap(star_label.to_string(), star_font, star_color));
         let star_w = hit + 2.0 + star_galley.size().x + 4.0;
         let (star_rect, star_resp) =
             ui.allocate_exact_size(egui::vec2(star_w, hit), egui::Sense::click());
@@ -1218,6 +1218,7 @@ impl SftpPanel {
                 star_rect.center().y - star_galley.size().y * 0.5,
             ),
             star_galley,
+            star_color,
         );
         if star_resp.on_hover_text(tip).clicked() {
             if side_local {
@@ -1244,7 +1245,7 @@ impl SftpPanel {
             "打开收藏或最近去过的目录",
         );
         let path_font = egui::FontId::proportional(theme.font_size_caption());
-        let path_galley = ui.fonts(|f| {
+        let path_galley = ui.ctx().fonts_mut(|f| {
             f.layout_no_wrap(jump_lbl.to_string(), path_font, theme.text_secondary())
         });
         let chevron = 8.0;
@@ -1262,6 +1263,7 @@ impl SftpPanel {
         ui.painter().galley(
             egui::pos2(text_x, path_rect.center().y - path_galley.size().y * 0.5),
             path_galley.clone(),
+            theme.text_primary(),
         );
         let tip = egui::pos2(text_x + path_galley.size().x + 6.0 + chevron * 0.5, path_rect.center().y + 1.0);
         let stroke = egui::Stroke::new(1.4, theme.text_secondary());
@@ -1280,9 +1282,9 @@ impl SftpPanel {
         });
         let just_toggled = path_resp.on_hover_text(jump_tip).clicked();
         if just_toggled {
-            ui.memory_mut(|m| m.toggle_popup(popup_id));
+            egui::Popup::toggle_id(ui.ctx(), popup_id);
         }
-        if ui.memory(|m| m.is_popup_open(popup_id)) {
+        if egui::Popup::is_id_open(ui.ctx(), popup_id) {
             let tidy = |items: Vec<String>| -> Vec<String> {
                 let mut out = Vec::new();
                 let mut seen = std::collections::HashSet::new();
@@ -1333,8 +1335,8 @@ impl SftpPanel {
                     format!("{head}…{tail}")
                 }
             };
-            let widest = ui.fonts(|f| {
-                let measure = |text: &str, size: f32| {
+            let widest = ui.ctx().fonts_mut(|mut f| {
+                let measure = |f: &mut egui::epaint::text::FontsView<'_>, text: &str, size: f32| {
                     f.layout_no_wrap(
                         text.to_string(),
                         egui::FontId::proportional(size),
@@ -1344,23 +1346,23 @@ impl SftpPanel {
                     .x
                 };
                 let mut w = if bookmarks.is_empty() && recent.is_empty() {
-                    measure(&empty_hint, theme.font_size_caption())
+                    measure(&mut f, &empty_hint, theme.font_size_caption())
                 } else {
                     0.0
                 };
                 if !bookmarks.is_empty() {
-                    w = w.max(measure(&fav, theme.font_size_small()));
+                    w = w.max(measure(&mut f, &fav, theme.font_size_small()));
                 }
                 if !recent.is_empty() {
-                    w = w.max(measure(&recent_title, theme.font_size_small()));
+                    w = w.max(measure(&mut f, &recent_title, theme.font_size_small()));
                 }
                 for p in bookmarks.iter().chain(recent.iter()) {
-                    w = w.max(measure(&row_label(p), theme.font_size_body()));
+                    w = w.max(measure(&mut f, &row_label(p), theme.font_size_body()));
                 }
                 w
             });
             let popup_w = (widest + 36.0).clamp(path_rect.width(), 320.0);
-            let screen = ui.ctx().screen_rect();
+            let screen = ui.ctx().content_rect();
             let mut pos = egui::pos2(path_rect.left(), path_rect.bottom() + 2.0);
             if pos.x + popup_w > screen.right() - 8.0 {
                 pos.x = (screen.right() - 8.0 - popup_w).max(screen.left() + 8.0);
@@ -1374,7 +1376,7 @@ impl SftpPanel {
                     egui::Frame::popup(ui.style()).show(ui, |ui| {
                         crate::ui::chrome::apply_context_menu_style(ui, theme);
                         ui.set_max_width(popup_w - 16.0);
-                        ui.style_mut().wrap = Some(false);
+                        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
                         if bookmarks.is_empty() && recent.is_empty() {
                             ui.label(
                                 egui::RichText::new(&empty_hint)
@@ -1395,7 +1397,7 @@ impl SftpPanel {
                                 let shown = row_label(p);
                                 if ui.selectable_label(false, shown).on_hover_text(p).clicked() {
                                     *navigate = Some(PathBuf::from(p));
-                                    ui.memory_mut(|m| m.close_popup());
+                                    egui::Popup::close_id(ui.ctx(), popup_id);
                                 }
                             }
                         };
@@ -1407,7 +1409,7 @@ impl SftpPanel {
                     });
                 });
             if !just_toggled && area.response.clicked_elsewhere() {
-                ui.memory_mut(|m| m.close_popup());
+                egui::Popup::close_id(ui.ctx(), popup_id);
             }
         }
     }
@@ -1827,7 +1829,6 @@ impl SftpPanel {
                         .to_string(),
                     );
                 }
-                ui.close_menu();
             }
         } else {
             let lbl = crate::i18n::tr(ctx, "Open", "打开");
@@ -1836,7 +1837,6 @@ impl SftpPanel {
                     let lang = crate::i18n::language(ctx);
                     self.pending_status_err = Some(crate::i18n::localize_backend_error(lang, &e));
                 }
-                ui.close_menu();
             }
         }
         self.xfer_context_menu(ui, theme, ctx, handle);
@@ -1858,7 +1858,6 @@ impl SftpPanel {
             let lbl = crate::i18n::tr(ctx, "Open in this terminal", "在当前终端打开");
             if crate::ui::chrome::popup_menu_button(ui, theme, lbl).clicked() {
                 self.queue_terminal_cd(&entry.path);
-                ui.close_menu();
                 return;
             }
         }
@@ -1889,23 +1888,19 @@ impl SftpPanel {
         if !self.local_selected.is_empty() {
             if crate::ui::chrome::popup_menu_button(ui, theme, upload_lbl).clicked() {
                 self.upload_selected_local(handle, ctx);
-                ui.close_menu();
             }
         } else if let Some((remote, local)) = upload {
             if crate::ui::chrome::popup_menu_button(ui, theme, upload_lbl).clicked() {
                 self.request_upload(handle, remote, local, ctx);
-                ui.close_menu();
             }
         }
         if !self.remote_selected.is_empty() {
             if crate::ui::chrome::popup_menu_button(ui, theme, download_lbl).clicked() {
                 self.download_selected_remote(handle, ctx);
-                ui.close_menu();
             }
         } else if let Some((remote, local)) = download {
             if crate::ui::chrome::popup_menu_button(ui, theme, download_lbl).clicked() {
                 self.request_download(handle, remote, local, ctx);
-                ui.close_menu();
             }
         }
         if let Some(entry) = open_entry {
@@ -1916,7 +1911,6 @@ impl SftpPanel {
             };
             if crate::ui::chrome::popup_menu_button(ui, theme, edit_lbl).clicked() {
                 self.request_open_remote_file(handle, &entry, ctx);
-                ui.close_menu();
             }
         }
         let rename_lbl = crate::i18n::tr(ctx, "Rename", "重命名");
@@ -1924,7 +1918,6 @@ impl SftpPanel {
             && crate::ui::chrome::popup_menu_button(ui, theme, rename_lbl).clicked()
         {
             self.begin_rename_selected();
-            ui.close_menu();
         }
         let chmod_lbl = crate::i18n::tr(ctx, "Permissions…", "权限…");
         if !delete_paths.is_empty()
@@ -1939,7 +1932,6 @@ impl SftpPanel {
             self.chmod_recursive = false;
             self.pending_chmod_recursive_confirm = false;
             self.show_chmod_dialog = true;
-            ui.close_menu();
         }
         if !delete_paths.is_empty() {
             if crate::ui::chrome::popup_menu_button(ui, theme, delete_lbl).clicked() {
@@ -1948,7 +1940,6 @@ impl SftpPanel {
                 } else {
                     Some(PendingDeletePrompt::Many(delete_paths))
                 };
-                ui.close_menu();
             }
         }
     }
@@ -2019,7 +2010,7 @@ impl SftpPanel {
             theme.text_tertiary()
         };
         let font = egui::FontId::proportional(theme.font_size_caption());
-        let galley = ui.fonts(|f| f.layout_no_wrap(label.to_string(), font, color));
+        let galley = ui.ctx().fonts_mut(|f| f.layout_no_wrap(label.to_string(), font, color));
         let gap = 2.0;
         let w = hit + gap + galley.size().x + 4.0;
         let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, hit), egui::Sense::click());
@@ -2044,6 +2035,7 @@ impl SftpPanel {
                 rect.center().y - galley.size().y * 0.5,
             ),
             galley,
+            color,
         );
         enabled && resp.on_hover_text(tip).clicked()
     }
@@ -3345,7 +3337,7 @@ impl SftpPanel {
         let mut open = true;
         let mut should_close = false;
         let mut do_create = false;
-        let mkdir_id = egui::Id::new("sftp_mkdir_modal_name");
+        let mkdir_id = egui::Id::unique("sftp_mkdir_modal_name");
         let mkdir_hint = crate::i18n::tr(ctx, "New folder name", "新建目录名");
         let can_create = !self.busy && !self.mkdir_name.trim().is_empty();
         let modal_sz = layout_util::modal_confirm_size(ctx);
@@ -3441,7 +3433,7 @@ impl SftpPanel {
         let mut open = true;
         let mut should_close = false;
         let mut do_rename = false;
-        let rename_id = egui::Id::new("sftp_rename_modal_name");
+        let rename_id = egui::Id::unique("sftp_rename_modal_name");
         let rename_hint = crate::i18n::tr(ctx, "New name", "新名称");
         let can_rename = !self.busy && !self.rename_name.trim().is_empty();
         let modal_sz = layout_util::modal_confirm_size(ctx);
@@ -3557,7 +3549,7 @@ impl SftpPanel {
         let mut open = true;
         let mut should_close = false;
         let mut do_apply = false;
-        let oct_id = egui::Id::new("sftp_chmod_octal");
+        let oct_id = egui::Id::unique("sftp_chmod_octal");
         let modal_sz = layout_util::modal_confirm_size(ctx);
         let resp = crate::ui::chrome::modal_window("sftp_chmod_modal", theme, ctx)
             .open(&mut open)
@@ -3784,30 +3776,40 @@ impl SftpPanel {
     pub fn show_side_panel(
         &mut self,
         ctx: &egui::Context,
+        ui: &mut egui::Ui,
         theme: &Theme,
         right_dock_outer_left: &mut Option<f32>,
         dock_col_w: f32,
     ) {
         let (def_w, min_w, max_w) = layout_util::right_dock_resize_bounds(dock_col_w);
-        let panel = egui::SidePanel::right("sftp_browser_panel")
-            .default_width(def_w)
-            .min_width(min_w)
-            .max_width(max_w)
-            .resizable(true)
-            .frame(crate::ui::chrome::right_dock_placeholder_frame(theme))
-            .show(ctx, |ui| {
-                let h = ui.available_height().max(1.0);
-                let w = ui.available_width().max(1.0);
-                ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::hover());
-            });
+        {
+            egui::Panel::right("sftp_browser_panel")
+                .default_size(def_w)
+                .min_size(min_w)
+                .max_size(max_w)
+                .resizable(true)
+                .frame(crate::ui::chrome::right_dock_placeholder_frame(theme))
+                .show(ui, |ui| {
+                    let h = ui.available_height().max(1.0);
+                    let w = ui.available_width().max(1.0);
+                    ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::hover());
+                });
+        }
         let dock_inset = theme.spacing_right_dock_screen_inset();
-        let slot = layout_util::side_panel_place_slot(ctx, &panel.response, dock_col_w, dock_inset);
+        // #206 S1：Panel::show 不再返回 response；槽位改由 PanelState 落盘矩形推得。
+        let slot = layout_util::side_panel_state_rect(ctx, "sftp_browser_panel")
+            .map(|r| {
+                let screen = ctx.content_rect();
+                let mut s = r;
+                s.min.x = screen.max.x - s.width();
+                s.max.x = screen.max.x - dock_inset;
+                s
+            })
+            .unwrap_or(egui::Rect::NOTHING);
         crate::ui::chrome::paint_right_dock_slot_gap(ctx, theme, slot);
         self.last_panel_slot_rect = Some(slot);
         if let Some(slot) = self.last_panel_slot_rect {
             layout_util::record_right_dock_panel_rect(&slot, right_dock_outer_left);
-        } else {
-            layout_util::record_right_dock_panel(&panel.response, right_dock_outer_left);
         }
         let _ = theme;
     }
@@ -3821,7 +3823,7 @@ impl SftpPanel {
         audit: &AuditLogger,
         close_panel: &mut bool,
     ) {
-        let screen = ctx.screen_rect();
+        let screen = ctx.content_rect();
         let dock_inset = theme.spacing_right_dock_screen_inset();
         let Some(slot) = layout_util::right_dock_foreground_slot(
             self.last_panel_slot_rect,
@@ -3943,14 +3945,11 @@ impl SftpPanel {
         if !theme.uses_modern_palette() {
         if let Some(err) = &self.list_err {
             let msg = Self::localize_list_error(ctx, err);
-            egui::Frame::none()
+            egui::Frame::NONE
                 .fill(theme.color_subtle_inset_fill())
                 .stroke(egui::Stroke::new(1.0, theme.red_a128()))
-                .rounding(theme.radius_list_item())
-                .inner_margin(egui::Margin::symmetric(
-                    theme.spacing_search_input_x(),
-                    theme.spacing_search_input_y(),
-                ))
+                .corner_radius(theme.radius_list_item())
+                .inner_margin(egui::Margin::symmetric(theme.spacing_search_input_x() as i8, theme.spacing_search_input_y() as i8))
                 .show(ui, |ui| {
                     ui.label(egui::RichText::new(msg).color(theme.red_color()));
                     ui.horizontal(|ui| {
@@ -3996,7 +3995,7 @@ impl SftpPanel {
                 ui.add_space(theme.spacing_sm());
                 Self::paint_selection_chip(ui, theme, ctx, self.local_selected.len());
             });
-            let local_path_id = egui::Id::new("sftp_local_path");
+            let local_path_id = egui::Id::unique("sftp_local_path");
             let home_hint = crate::platform::home_dir_display_hint();
             let go_lbl = crate::i18n::tr(ui.ctx(), "Go", "前往");
             let up_lbl = crate::i18n::tr(ui.ctx(), "Up", "上级");
@@ -4123,7 +4122,7 @@ impl SftpPanel {
                     crate::ui::chrome::search_field(
                         ui,
                         theme,
-                        egui::Id::new("sftp_local_filter_toolbar"),
+                        egui::Id::unique("sftp_local_filter_toolbar"),
                         &mut self.local_filter,
                         crate::i18n::tr(ctx, "Filter by name", "按名字找"),
                         ui.available_width().max(48.0),
@@ -4231,7 +4230,7 @@ impl SftpPanel {
                     crate::ui::chrome::search_field(
                         ui,
                         theme,
-                        egui::Id::new("sftp_local_filter_below"),
+                        egui::Id::unique("sftp_local_filter_below"),
                         &mut self.local_filter,
                         crate::i18n::tr(ctx, "Name…", "文件名…"),
                         ui.available_width().max(80.0),
@@ -4286,7 +4285,7 @@ impl SftpPanel {
                     self.apply_local_sort();
                 }
                 egui::ScrollArea::vertical()
-                    .id_source("sftp_local_list")
+                    .id_salt("sftp_local_list")
                     .auto_shrink([false, false])
                     .max_height(local_list_h)
                     .show(ui, |ui| {
@@ -4428,7 +4427,7 @@ impl SftpPanel {
                 ui.add_space(theme.spacing_sm());
                 Self::paint_selection_chip(ui, theme, ctx, self.remote_selected.len());
             });
-            let remote_path_id = egui::Id::new("sftp_path_edit");
+            let remote_path_id = egui::Id::unique("sftp_path_edit");
             let remote_path_hint = crate::i18n::tr(ui.ctx(), "/home/user", "/home/user");
             let go_lbl = crate::i18n::tr(ui.ctx(), "Go", "前往");
             let up_lbl = crate::i18n::tr(ui.ctx(), "Up", "上级");
@@ -4602,7 +4601,7 @@ impl SftpPanel {
                     crate::ui::chrome::search_field(
                         ui,
                         theme,
-                        egui::Id::new("sftp_remote_filter_toolbar"),
+                        egui::Id::unique("sftp_remote_filter_toolbar"),
                         &mut self.remote_filter,
                         crate::i18n::tr(ctx, "Filter by name", "按名字找"),
                         ui.available_width().max(48.0),
@@ -4723,7 +4722,7 @@ impl SftpPanel {
                     crate::ui::chrome::search_field(
                         ui,
                         theme,
-                        egui::Id::new("sftp_remote_filter_below"),
+                        egui::Id::unique("sftp_remote_filter_below"),
                         &mut self.remote_filter,
                         crate::i18n::tr(ctx, "Name…", "文件名…"),
                         ui.available_width().max(80.0),
@@ -4960,7 +4959,7 @@ impl SftpPanel {
                     self.apply_remote_sort();
                 }
                 egui::ScrollArea::vertical()
-                    .id_source("sftp_remote_list")
+                    .id_salt("sftp_remote_list")
                     .auto_shrink([false, false])
                     .max_height(remote_list_h)
                     .show(ui, |ui| {
@@ -4978,7 +4977,7 @@ impl SftpPanel {
                                 i.raw
                                     .dropped_files
                                     .iter()
-                                    .filter_map(|f| f.path.clone())
+                                    .map(|f| f.path().to_path_buf())
                                     .collect()
                             });
                             if !files.is_empty() {
@@ -5114,7 +5113,7 @@ impl SftpPanel {
         const PERSIST_ID: &str = "mistterm.sftp.drag_hint_dismissed";
         if !self.drag_hint_dismissed {
             if ctx.data_mut(|d| {
-                d.get_persisted::<bool>(egui::Id::new(PERSIST_ID))
+                d.get_persisted::<bool>(egui::Id::unique(PERSIST_ID))
                     .unwrap_or(false)
             }) {
                 self.drag_hint_dismissed = true;
@@ -5147,7 +5146,7 @@ impl SftpPanel {
         if dismissed {
             self.drag_hint_dismissed = true;
             ctx.data_mut(|d| {
-                d.insert_persisted(egui::Id::new(PERSIST_ID), true);
+                d.insert_persisted(egui::Id::unique(PERSIST_ID), true);
             });
         }
     }
@@ -5316,7 +5315,7 @@ impl SftpPanel {
             rect.bottom() - 0.5,
             egui::Stroke::new(1.0, theme.border.to_color32()),
         );
-        let mut child = ui.child_ui(rect, egui::Layout::left_to_right(egui::Align::Center));
+        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(egui::Layout::left_to_right(egui::Align::Center)));
         child.spacing_mut().item_spacing.x = 4.0;
         add(&mut child);
     }
@@ -5344,24 +5343,30 @@ impl SftpPanel {
             egui::Stroke::new(1.0, theme.border.to_color32()),
         );
         let title_font = egui::FontId::proportional(theme.font_size_caption());
-        let title_galley = ui.fonts(|f| {
+        let title_galley = ui.ctx().fonts_mut(|f| {
             f.layout_no_wrap(title.to_string(), title_font, theme.text_tertiary())
         });
         let title_y = rect.center().y - title_galley.size().y * 0.5;
-        ui.painter()
-            .galley(egui::pos2(rect.left() + 10.0, title_y), title_galley.clone());
+        ui.painter().galley(
+            egui::pos2(rect.left() + 10.0, title_y),
+            title_galley.clone(),
+            theme.text_primary(),
+        );
         let mut path_left = rect.left() + 10.0 + title_galley.size().x + 12.0;
         if selected_n > 0 {
             let sel = format!(
                 "{} {selected_n}",
                 crate::i18n::tr(ctx, "Selected", "已选")
             );
-            let sel_galley = ui.fonts(|f| {
+            let sel_galley = ui.ctx().fonts_mut(|f| {
                 f.layout_no_wrap(sel, egui::FontId::proportional(theme.font_size_caption()), theme.accent_color())
             });
             let sel_y = rect.center().y - sel_galley.size().y * 0.5;
-            ui.painter()
-                .galley(egui::pos2(path_left, sel_y), sel_galley.clone());
+            ui.painter().galley(
+                egui::pos2(path_left, sel_y),
+                sel_galley.clone(),
+                theme.accent_color(),
+            );
             path_left += sel_galley.size().x + 10.0;
         }
         let path_rect = egui::Rect::from_min_max(
@@ -5373,7 +5378,7 @@ impl SftpPanel {
         }
         if *editing {
             let mut child =
-                ui.child_ui(path_rect, egui::Layout::left_to_right(egui::Align::Center));
+                ui.new_child(egui::UiBuilder::new().max_rect(path_rect).layout(egui::Layout::left_to_right(egui::Align::Center)));
             crate::ui::chrome::form_singleline_field(
                 &mut child,
                 theme,
@@ -5407,7 +5412,7 @@ impl SftpPanel {
             egui::Stroke::new(1.0, theme.border.to_color32()),
         );
         let inner = rect.shrink2(egui::vec2(8.0, 4.0));
-        let mut child = ui.child_ui(inner, egui::Layout::left_to_right(egui::Align::Center));
+        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(inner).layout(egui::Layout::left_to_right(egui::Align::Center)));
         crate::ui::chrome::search_field(&mut child, theme, id, text, hint, inner.width());
     }
 
@@ -5421,10 +5426,10 @@ impl SftpPanel {
         rect: egui::Rect,
     ) -> Option<PathBuf> {
         let _ = ui.allocate_rect(rect, egui::Sense::hover());
-        if ui.interact(rect, ui.id().with(scroll_id), egui::Sense::click()).double_clicked() {
+        if ui.interact(rect, ui.scope_id().with(scroll_id), egui::Sense::click()).double_clicked() {
             *editing = true;
         }
-        let response = ui.interact(rect, ui.id().with((scroll_id, "path")), egui::Sense::click());
+        let response = ui.interact(rect, ui.scope_id().with((scroll_id, "path")), egui::Sense::click());
         let crumbs = sftp_file_table::path_crumbs(path);
         let mono = egui::FontId::monospace(theme.font_size_caption());
         let color = theme.text_secondary();
@@ -5433,7 +5438,7 @@ impl SftpPanel {
         let width_of = |ui: &egui::Ui, from: usize| -> f32 {
             let text: String = parts.iter().skip(from).map(|(s, _, _)| s.as_str()).collect();
             let prefix = if from > 0 { "…/" } else { "" };
-            ui.fonts(|f| {
+            ui.ctx().fonts_mut(|f| {
                 f.layout_no_wrap(
                     format!("{prefix}{text}"),
                     mono.clone(),
@@ -5450,13 +5455,14 @@ impl SftpPanel {
         let mut hits: Vec<(egui::Rect, PathBuf, bool)> = Vec::new();
         let mut x = rect.left() + 2.0;
         if start > 0 {
-            let galley = ui.fonts(|f| {
+            let galley = ui.ctx().fonts_mut(|f| {
                 f.layout_no_wrap("…/".to_string(), mono.clone(), theme.text_tertiary())
             });
             let w = galley.size().x;
             ui.painter().galley(
                 egui::pos2(x, rect.center().y - galley.size().y * 0.5),
                 galley,
+                theme.text_tertiary(),
             );
             x += w;
         }
@@ -5470,10 +5476,10 @@ impl SftpPanel {
             } else {
                 theme.text_secondary()
             };
-            let galley = ui.fonts(|f| f.layout_no_wrap(label.clone(), mono.clone(), text_color));
+            let galley = ui.ctx().fonts_mut(|f| f.layout_no_wrap(label.clone(), mono.clone(), text_color));
             let w = galley.size().x;
             let top = rect.center().y - galley.size().y * 0.5;
-            ui.painter().galley(egui::pos2(x, top), galley);
+            ui.painter().galley(egui::pos2(x, top), galley, egui::Color32::WHITE);
             if !separator {
                 hits.push((
                     egui::Rect::from_min_size(egui::pos2(x, rect.top()), egui::vec2(w, rect.height())),
@@ -5514,7 +5520,7 @@ impl SftpPanel {
         let pane_w = Self::clip_flux_pane(ui);
         let local_cwd = self.local_cwd.clone();
         let local_hint = crate::platform::home_dir_display_hint();
-        let local_edit_id = egui::Id::new("sftp_flux_local_path");
+        let local_edit_id = egui::Id::unique("sftp_flux_local_path");
         let mut jump_local = Self::paint_flux_head_bar(
             ui,
             theme,
@@ -5598,7 +5604,7 @@ impl SftpPanel {
         Self::paint_flux_filter_bar(
             ui,
             theme,
-            egui::Id::new("sftp_flux_local_filter"),
+            egui::Id::unique("sftp_flux_local_filter"),
             &mut self.local_filter,
             crate::i18n::tr(ctx, "Filter by name", "按名字找"),
             pane_w,
@@ -5620,7 +5626,7 @@ impl SftpPanel {
         let mut enter_local: Option<PathBuf> = None;
         ui.visuals_mut().extreme_bg_color = theme.color_scroll_extreme_bg();
         egui::ScrollArea::vertical()
-            .id_source("sftp_flux_local_list")
+            .id_salt("sftp_flux_local_list")
             .auto_shrink([false, false])
             .max_height(list_h)
             .show(ui, |ui| {
@@ -5698,7 +5704,7 @@ impl SftpPanel {
         ui.spacing_mut().item_spacing.y = 0.0;
         let pane_w = Self::clip_flux_pane(ui);
         let remote_cwd = self.cwd.clone();
-        let remote_edit_id = egui::Id::new("sftp_flux_remote_path");
+        let remote_edit_id = egui::Id::unique("sftp_flux_remote_path");
         let mut jump_remote = Self::paint_flux_head_bar(
             ui,
             theme,
@@ -5779,7 +5785,7 @@ impl SftpPanel {
         Self::paint_flux_filter_bar(
             ui,
             theme,
-            egui::Id::new("sftp_flux_remote_filter"),
+            egui::Id::unique("sftp_flux_remote_filter"),
             &mut self.remote_filter,
             crate::i18n::tr(ctx, "Filter by name", "按名字找"),
             pane_w,
@@ -5796,7 +5802,7 @@ impl SftpPanel {
         let mut enter_remote: Option<PathBuf> = None;
         ui.visuals_mut().extreme_bg_color = theme.color_scroll_extreme_bg();
         egui::ScrollArea::vertical()
-            .id_source("sftp_flux_remote_list")
+            .id_salt("sftp_flux_remote_list")
             .auto_shrink([false, false])
             .max_height(list_h)
             .show(ui, |ui| {
@@ -5811,7 +5817,7 @@ impl SftpPanel {
                         i.raw
                             .dropped_files
                             .iter()
-                            .filter_map(|f| f.path.clone())
+                            .map(|f| f.path().to_path_buf())
                             .collect()
                     });
                     if !files.is_empty() {
@@ -6081,32 +6087,26 @@ impl SftpPanel {
 
     fn paint_browser_section_frame(theme: &Theme) -> egui::Frame {
         if theme.uses_modern_palette() {
-            egui::Frame::none().inner_margin(egui::Margin::symmetric(0.0, theme.spacing_xs()))
+            egui::Frame::NONE.inner_margin(egui::Margin::symmetric((0.0) as i8, (theme.spacing_xs()) as i8))
         } else {
-            egui::Frame::none()
+            egui::Frame::NONE
                 .fill(theme.color_sftp_section_fill())
                 .stroke(theme.sftp_section_stroke())
-                .rounding(theme.radius_panel())
-                .inner_margin(egui::Margin::symmetric(
-                    theme.spacing_body_pad(),
-                    theme.spacing_body_pad(),
-                ))
+                .corner_radius(theme.radius_panel())
+                .inner_margin(egui::Margin::symmetric(theme.spacing_body_pad() as i8, theme.spacing_body_pad() as i8))
         }
     }
 
     fn paint_file_list_viewport_frame(theme: &Theme) -> egui::Frame {
-        egui::Frame::none()
+        egui::Frame::NONE
             .fill(theme.color_file_list_bg())
             .stroke(if theme.uses_modern_palette() {
                 egui::Stroke::NONE
             } else {
                 theme.sftp_list_viewport_stroke()
             })
-            .rounding(theme.radius_panel())
-            .inner_margin(egui::Margin::symmetric(
-                theme.spacing_sm(),
-                theme.spacing_sm(),
-            ))
+            .corner_radius(theme.radius_panel())
+            .inner_margin(egui::Margin::symmetric(theme.spacing_sm() as i8, theme.spacing_sm() as i8))
     }
 }
 

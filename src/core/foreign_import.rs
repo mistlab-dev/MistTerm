@@ -235,6 +235,7 @@ impl JavaRandom {
         ((self.seed as u64) >> (48 - bits)) as i64 as i32
     }
 
+    #[cfg(test)]
     fn next_int(&mut self) -> i32 {
         self.next(32)
     }
