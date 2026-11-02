@@ -9226,7 +9226,7 @@ impl MistTermApp {
             return;
         }
         if let Some(window) = frame.winit_window() {
-            use eframe::winit::platform::macos::WindowExtMacOS;
+            use winit::platform::macos::WindowExtMacOS;
             window.set_option_as_alt(crate::platform::OptionAsAlt::Both);
             log::debug!("macOS OptionAsAlt::Both applied on first frame");
         } else {
