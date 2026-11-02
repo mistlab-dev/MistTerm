@@ -309,7 +309,7 @@ fn paste_row(
                     "{} {} · {} {} KB. {}",
                     crate::i18n::tr(ctx, "Original", "原文"),
                     format_byte_len(entry.original_bytes),
-                    crate::i18n::tr(ctx, "history kept the first", "历史只保留前"),
+                    crate::i18n::tr(ctx, "history keeps the first", "历史只保留前"),
                     cap_kb,
                     crate::i18n::tr(
                         ctx,

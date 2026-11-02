@@ -59,7 +59,7 @@ pub(super) fn show_auth_fields(
         crate::i18n::tr(
             ctx,
             "~/.ssh/id_rsa (empty = password or default keys)",
-            "~/.ssh/id_rsa(留空则用密码或系统默认密钥)",
+            "~/.ssh/id_rsa（留空则用密码或系统默认密钥）",
         )
     };
     MistTermApp::ui_form_singleline(

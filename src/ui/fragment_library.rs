@@ -465,7 +465,7 @@ impl FragmentLibraryState {
                                 crate::ui::chrome::form_field_label(
                                     ui,
                                     theme,
-                                    i18n::tr(ui.ctx(), "Tags (comma-separated)", "标签(逗号分隔)"),
+                                    i18n::tr(ui.ctx(), "Tags (comma-separated)", "标签（逗号分隔）"),
                                 );
                                 crate::ui::chrome::form_singleline_field(
                                     ui,
@@ -703,7 +703,7 @@ impl FragmentLibraryState {
                                 egui::CollapsingHeader::new(i18n::tr(
                                     ctx,
                                     "Preview resolved (session context)",
-                                    "预览替换后(当前会话上下文)",
+                                    "预览替换后（当前会话上下文）",
                                 ))
                                     .id_salt("mistterm_fragment_lib_preview_expand")
                                     .show(ui, |ui| {

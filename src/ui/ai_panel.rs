@@ -438,15 +438,15 @@ fn localize_plan_rationale(ctx: &egui::Context, text: &str) -> String {
         return text.to_string();
     }
     const T: &[(&str, &str)] = &[
-        ("检查各主机占用空间最大的日志文件以准备清理(只读排查)", "Find the largest log files on each host before cleanup (read-only)"),
+        ("检查各主机占用空间最大的日志文件以准备清理（只读排查）", "Find the largest log files on each host before cleanup (read-only)"),
         ("查看各主机内存/CPU占用最高的具体进程", "Show the processes using the most memory / CPU on each host"),
         ("按你输入的命令在目标主机上执行", "Runs the command you typed on the target hosts"),
-        ("查各主机磁盘用量(可改命令)", "Check disk usage on each host (command is editable)"),
-        ("查各主机内存(可改命令)", "Check memory on each host (command is editable)"),
-        ("查各主机负载与运行时间(可改命令)", "Check load and uptime on each host (command is editable)"),
-        ("统计各主机进程数量(可改命令)", "Count processes on each host (command is editable)"),
-        ("列出各主机占用 CPU 较高的进程(可改命令)", "List high-CPU processes on each host (command is editable)"),
-        ("查监听端口(可改命令)", "Check listening ports (command is editable)"),
+        ("查各主机磁盘用量（可改命令）", "Check disk usage on each host (command is editable)"),
+        ("查各主机内存（可改命令）", "Check memory on each host (command is editable)"),
+        ("查各主机负载与运行时间（可改命令）", "Check load and uptime on each host (command is editable)"),
+        ("统计各主机进程数量（可改命令）", "Count processes on each host (command is editable)"),
+        ("列出各主机占用 CPU 较高的进程（可改命令）", "List high-CPU processes on each host (command is editable)"),
+        ("查监听端口（可改命令）", "Check listening ports (command is editable)"),
         ("未识别具体指标，先用通用探活命令；请改成你要跑的命令", "No specific metric recognized; using a generic health check — edit it to the command you want"),
         ("AI 规划的执行命令", "Command planned by AI"),
     ];
@@ -1770,7 +1770,7 @@ impl AiPanel {
         crate::ui::chrome::form_labeled_control_row(
             ui,
             theme,
-            i18n::tr(ctx, "Timeout (s)", "等待超时(秒)"),
+            i18n::tr(ctx, "Timeout (s)", "等待超时（秒）"),
             label_w,
             |ui| {
                 let mut timeout = settings.timeout_secs.min(600) as u32;
@@ -2293,7 +2293,7 @@ impl AiPanel {
                         ops_scope_pill(
                             ui,
                             theme,
-                            i18n::tr(ctx, "(resolving…)", "(解析中…)"),
+                            i18n::tr(ctx, "(resolving…)", "（解析中…）"),
                             theme.text_secondary(),
                         );
                     }
@@ -2683,7 +2683,7 @@ impl AiPanel {
 
         // —— 主机状态矩阵 Pills 网格 (2列并排) ——
         ui.label(
-            egui::RichText::new(i18n::tr(ctx, "Host Matrix", "主机状态矩阵 (点击查看控制台明细)"))
+            egui::RichText::new(i18n::tr(ctx, "Host Matrix", "主机状态矩阵（点击查看控制台明细）"))
                 .size(theme.font_size_caption())
                 .color(theme.color_form_hint()),
         );
@@ -2899,7 +2899,7 @@ impl AiPanel {
                     ui.add_space(6.0);
 
                     let out = if host.output.trim().is_empty() {
-                        host.error.as_deref().unwrap_or(i18n::tr(ctx, "(no output)", "(无标准输出)"))
+                        host.error.as_deref().unwrap_or(i18n::tr(ctx, "(no output)", "（无标准输出）"))
                     } else {
                         &host.output
                     };
@@ -3438,7 +3438,7 @@ impl AiPanel {
                                 i18n::tr(ctx, "Send", "发送"),
                                 true,
                             )
-                            .on_hover_text(i18n::tr(ctx, "Send (Enter)", "发送 (回车)"))
+                            .on_hover_text(i18n::tr(ctx, "Send (Enter)", "发送（回车）"))
                             .clicked()
                         })
                         .inner;
@@ -3777,7 +3777,7 @@ impl AiPanel {
             intent: intent.clone(),
         });
         self.busy = true;
-        self.input_status = Some(i18n::tr(ctx, "AI Planning...", "AI 正在规划运维步骤...").to_string());
+        self.input_status = Some(i18n::tr(ctx, "AI Planning...", "AI 正在规划运维步骤…").to_string());
 
         thread::spawn(move || {
             let extra = Self::await_runbook_prompt(runbook_prompt_rx);

@@ -4133,7 +4133,7 @@ impl TerminalView {
                     crate::i18n::tr(
                         ctx,
                         "Command blocks need shell integration (OSC 133). See the manual: Terminal → Command blocks.",
-                        "命令块需要 shell integration (OSC 133). 见手册「使用终端 → 命令块」.",
+                        "命令块需要 shell integration (OSC 133). 见手册「使用终端 → 命令块」。",
                     )
                     .to_string(),
                 );
@@ -4159,7 +4159,7 @@ impl TerminalView {
                     crate::i18n::tr(
                         ctx,
                         "Command blocks need shell integration (OSC 133). See the manual: Terminal → Command blocks.",
-                        "命令块需要 shell integration (OSC 133). 见手册「使用终端 → 命令块」.",
+                        "命令块需要 shell integration (OSC 133). 见手册「使用终端 → 命令块」。",
                     )
                     .to_string(),
                 );

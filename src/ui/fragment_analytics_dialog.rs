@@ -110,7 +110,7 @@ pub fn show_fragment_analytics_modal(
                     egui::RichText::new(crate::i18n::tr(
                         ctx,
                         "Period counts from local execution log (incremental).",
-                        "区间内次数来自本机执行日志(增量统计)。",
+                        "区间内次数来自本机执行日志（增量统计）。",
                     ))
                     .size(theme.font_size_caption())
                     .color(theme.text_tertiary()),
@@ -129,7 +129,7 @@ pub fn show_fragment_analytics_modal(
             if !dash.member_rows.is_empty() {
                 ui.add_space(theme.spacing_xs());
                 ui.collapsing(
-                    crate::i18n::tr(ctx, "Team members (this period)", "团队成员(本区间)"),
+                    crate::i18n::tr(ctx, "Team members (this period)", "团队成员（本区间）"),
                     |ui| {
                         let hint = if dash.member_stats_from_server {
                             crate::i18n::tr(
@@ -141,7 +141,7 @@ pub fn show_fragment_analytics_modal(
                             crate::i18n::tr(
                                 ctx,
                                 "Based on snippets run on this device (server API unavailable).",
-                                "仅统计本机执行的团队片段(服务端接口未就绪时使用)。",
+                                "仅统计本机执行的团队片段（服务端接口未就绪时使用）。",
                             )
                         };
                         ui.label(

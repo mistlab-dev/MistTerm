@@ -195,7 +195,7 @@ mod tests {
 
     #[test]
     fn line_compact_preserves_cjk_and_symbols() {
-        assert_eq!(line_compact("正在   连 接..."), "正在连接...");
+        assert_eq!(line_compact("正在   连 接…"), "正在连接…");
     }
 
     #[test]

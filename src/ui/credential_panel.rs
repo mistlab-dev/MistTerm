@@ -370,7 +370,7 @@ impl CredentialPanel {
         chrome::form_field_label(
             ui,
             theme,
-            i18n::tr(ui.ctx(), "Username (optional)", "用户名 (可选)"),
+            i18n::tr(ui.ctx(), "Username (optional)", "用户名（可选）"),
         );
         chrome::form_singleline_field_boxed(
             ui,
@@ -468,7 +468,7 @@ impl CredentialPanel {
         chrome::form_field_label(
             ui,
             theme,
-            i18n::tr(ui.ctx(), "Tags (comma-separated)", "标签(逗号分隔)"),
+            i18n::tr(ui.ctx(), "Tags (comma-separated)", "标签（逗号分隔）"),
         );
         chrome::form_singleline_field_boxed(
             ui,
@@ -660,7 +660,7 @@ impl CredentialPanel {
                                     panel.status_msg = i18n::tr(
                                         ui.ctx(),
                                         "Written to Vault (local entry references only)",
-                                        "已写入 Vault(本地条目仅存引用)",
+                                        "已写入 Vault（本地条目仅存引用）",
                                     )
                                     .to_string();
                                     panel.form_secret.clear();

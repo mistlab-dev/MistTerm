@@ -53,7 +53,7 @@ impl MistTermApp {
                             if crate::ui::chrome::modal_primary_button(
                                 ui,
                                 th,
-                                crate::i18n::tr(ctx, "ZMODEM (recommended)", "ZMODEM(推荐)"),
+                                crate::i18n::tr(ctx, "ZMODEM (recommended)", "ZMODEM（推荐）"),
                             )
                             .clicked()
                             {
@@ -263,7 +263,7 @@ impl MistTermApp {
                                 crate::i18n::tr(
                                     ctx,
                                     "Local quick check flagged a sensitive operation (not a server policy):",
-                                    "本地快捷提示检测到敏感操作(非服务器强制策略)：",
+                                    "本地快捷提示检测到敏感操作（非服务器强制策略）：",
                                 )
                             })
                             .size(theme.font_size_normal())
