@@ -9216,6 +9216,26 @@ impl MistTermApp {
         crate::platform::fix_menu_bar_application_title();
     }
 
+    // macOS Option-as-Alt（#207）：eframe 0.37 下扩展挂不上 egui ViewportBuilder，
+    // 首帧经 `frame.winit_window()` 拿到 winit 窗口后调 `set_option_as_alt(Both)`。
+    // 效果同 0.23 时代 `with_option_as_alt(OptionAsAlt::Both)`：Option 键入终端可编 Meta（ESC 前缀）。
+    #[cfg(target_os = "macos")]
+    fn apply_macos_option_as_alt_once(&mut self, frame: &mut eframe::Frame) {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        static DONE: AtomicBool = AtomicBool::new(false);
+        if DONE.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        if let Some(window) = frame.winit_window() {
+            use eframe::winit::platform::macos::WindowExtMacOS;
+            window.set_option_as_alt(crate::platform::OptionAsAlt::Both);
+            log::debug!("macOS OptionAsAlt::Both applied on first frame");
+        } else {
+            // 首帧拿不到窗口（理论上不应发生）：复位标记，下一帧重试。
+            DONE.store(false, Ordering::SeqCst);
+        }
+    }
+
     #[cfg(target_os = "macos")]
     fn handle_mac_menu_action(
         &mut self,
@@ -9433,12 +9453,24 @@ impl eframe::App for MistTermApp {
 
     // #206 S1：eframe 0.34+ 把 App::update 拆成 logic（纯状态，无 UI）+ ui（绘制）。
     // S1 策略：原 update 全身放进 ui（等价旧行为）；logic 空实现。
-    // S2（#207）按梳理 §10「先 logic 调原 update 全身、ui 空」反查脏帧/repaint 行为后再细化拆分。
-    fn logic(&mut self, _ctx: &egui::Context, _frame: &mut eframe::Frame) {}
+    // S2（#207）补：把非绘制的状态/轮询驱动（无 UI 侧效应）拆进 logic；只把
+    // 「绘制 + 输入驱动的 UI 动作 + 面板/弹窗」留在 ui，轮询调用点同步採到 logic，
+    // 防一帧两跑。
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // 监控：`exec` 由 shell 泵串行执行，在此处轮询结果并驱动自动刷新。
+        // 掳出 ui（#207）：无论面板是否可见、无论是否重绘，每帧恰好跑一次。
+        self.monitor_panel.update(ctx, self.show_monitor_panel);
+        self.dispatch_monitor_alert_notifications(ctx);
+        self.poll_team_service(ctx);
+        self.poll_port_forward_panel();
+    }
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         let ctx = &ctx;
+        // macOS Option-as-Alt（#207）：首帧拿到 winit 窗口后补设一次（once 标记防重复）。
+        #[cfg(target_os = "macos")]
+        self.apply_macos_option_as_alt_once(frame);
         if let Some(url) = self.pending_ssh_url.take() {
             self.open_ssh_url(ctx, url);
         }
@@ -9575,11 +9607,7 @@ impl eframe::App for MistTermApp {
 
         let theme = self.theme_manager.current_theme().clone();
 
-        // 监控：`exec` 由 shell 泵串行执行，在此处轮询结果并驱动自动刷新
-        self.monitor_panel.update(ctx, self.show_monitor_panel);
-        self.dispatch_monitor_alert_notifications(ctx);
-        self.poll_team_service(ctx);
-        self.poll_port_forward_panel();
+        // 监控/团队/端口转发轮询已採到 `logic`（#207）：每帧一次、无重复驱动。
         show_team_fragment_editor_modal(
             ctx,
             &theme,
