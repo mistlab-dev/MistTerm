@@ -1132,7 +1132,7 @@ impl MistTermApp {
         desired_width: f32,
         password: bool,
     ) {
-        crate::ui::chrome::form_singleline_field(
+        crate::ui::chrome::form_singleline_field_boxed(
             ui,
             theme,
             ui.make_persistent_id(id),
@@ -1152,7 +1152,7 @@ impl MistTermApp {
         port: &mut u16,
         desired_width: f32,
     ) {
-        let response = crate::ui::chrome::form_singleline_field(
+        let response = crate::ui::chrome::form_singleline_field_boxed(
             ui,
             theme,
             ui.make_persistent_id(id),

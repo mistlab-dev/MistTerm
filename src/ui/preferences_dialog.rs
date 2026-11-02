@@ -1086,7 +1086,7 @@ impl MistTermApp {
                     theme,
                     crate::i18n::tr(ctx, "Address", "地址"),
                 );
-                let vault_addr = crate::ui::chrome::form_singleline_field(
+                let vault_addr = crate::ui::chrome::form_singleline_field_boxed(
                     ui,
                     theme,
                     egui::Id::unique("pref_vault_addr"),
@@ -1105,7 +1105,7 @@ impl MistTermApp {
                     theme,
                     crate::i18n::tr(ctx, "Namespace", "命名空间（可选）"),
                 );
-                let vault_ns = crate::ui::chrome::form_singleline_field(
+                let vault_ns = crate::ui::chrome::form_singleline_field_boxed(
                     ui,
                     theme,
                     egui::Id::unique("pref_vault_ns"),
@@ -1123,7 +1123,7 @@ impl MistTermApp {
                     theme,
                     crate::i18n::tr(ctx, "Default KV mount", "默认密钥路径"),
                 );
-                let vault_mount = crate::ui::chrome::form_singleline_field(
+                let vault_mount = crate::ui::chrome::form_singleline_field_boxed(
                     ui,
                     theme,
                     egui::Id::unique("pref_vault_mount"),
@@ -1184,7 +1184,7 @@ impl MistTermApp {
                     theme,
                     crate::i18n::tr(ctx, "Token", "令牌"),
                 );
-                crate::ui::chrome::form_singleline_field(
+                crate::ui::chrome::form_singleline_field_boxed(
                     ui,
                     theme,
                     egui::Id::unique("pref_vault_token_buf"),
