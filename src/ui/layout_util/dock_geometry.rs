@@ -95,15 +95,52 @@ pub fn clamp_f32(v: f32, lo: f32, hi: f32) -> f32 {
 /// 自定义侧栏 `frame` 时须在回调里传入实际左侧 inner margin。
 pub const EGUI_SIDE_PANEL_FRAME_MARGIN_X: f32 = 8.0;
 
-/// 命令片段 `SidePanel` 的 id(与 `egui::Panel::right` 一致，供 [`side_panel_state_rect`] 读取)。
+/// 命令片段 `SidePanel` 的 id salt(与 `egui::Panel::right` 传入的 salt 一致)。
 pub const FRAGMENT_PANEL_ID: &str = "fragment_panel";
 pub const MONITOR_PANEL_ID: &str = "monitor_panel";
 pub const AI_PANEL_ID: &str = "ai_panel";
 
-/// 读取上一帧 `SidePanel` 落盘的槽位矩形(用于 Central 之后 Foreground 重绘)。
+/// Temp key: parent `Ui::scope_id` that hosts right-dock `Panel::right` this frame.
+const RIGHT_DOCK_PANEL_PARENT_SCOPE_KEY: &str = "mistterm_right_dock_panel_parent_scope";
+
+/// egui 0.37 keys [`PanelState`] as `parent_ui.scope_id().with(id_salt)`, **not**
+/// [`Id::unique`](egui::Id::unique). S1 (#236) kept the 0.23 root-id lookup → miss → black dock (#287).
+#[inline]
+pub fn side_panel_egui_id(parent_scope: egui::Id, panel_id_salt: &str) -> egui::Id {
+    parent_scope.with(panel_id_salt)
+}
+
+/// Remember the parent `Ui` scope used for right-dock `Panel::show` this frame
+/// (call before/while showing panels; resize grip + [`side_panel_state_rect`] need it).
+#[inline]
+pub fn remember_right_dock_panel_parent_scope(ctx: &egui::Context, parent_ui: &egui::Ui) {
+    let scope = parent_ui.scope_id();
+    ctx.data_mut(|d| {
+        d.insert_temp(egui::Id::unique(RIGHT_DOCK_PANEL_PARENT_SCOPE_KEY), scope);
+    });
+}
+
+/// Parent scope remembered by [`remember_right_dock_panel_parent_scope`], or [`Id::NULL`].
+#[inline]
+pub fn right_dock_panel_parent_scope(ctx: &egui::Context) -> egui::Id {
+    ctx.data(|d| d.get_temp(egui::Id::unique(RIGHT_DOCK_PANEL_PARENT_SCOPE_KEY)))
+        .unwrap_or(egui::Id::NULL)
+}
+
+/// Persisted [`PanelState`] id for a right-dock panel salt under the remembered parent scope.
+#[inline]
+pub fn side_panel_persisted_id(ctx: &egui::Context, panel_id_salt: &str) -> egui::Id {
+    side_panel_egui_id(right_dock_panel_parent_scope(ctx), panel_id_salt)
+}
+
+/// 读取本帧 / 上一帧 `Panel` 落盘的槽位矩形(用于 Central 之后 Foreground 重绘与改宽)。
+///
+/// Must be preceded by [`remember_right_dock_panel_parent_scope`] on the same parent `Ui`
+/// that was passed to `Panel::show`.
 #[inline]
 pub fn side_panel_state_rect(ctx: &egui::Context, panel_id: &str) -> Option<egui::Rect> {
-    egui::containers::panel::PanelState::load(ctx, egui::Id::unique(panel_id)).map(|s| s.outer_rect)
+    egui::containers::panel::PanelState::load(ctx, side_panel_persisted_id(ctx, panel_id))
+        .map(|s| s.outer_rect)
 }
 
 /// 将侧栏槽位右缘钉在 `screen` 右缘(`PanelState` 仅为内层内容矩形，勿直接作 Area 外框)。
@@ -649,10 +686,22 @@ mod tests {
     use super::{
         anchor_right_dock_slot_to_right_edge, clamp_f32, inset_slot_for_foreground_paint,
         pin_rect_to_screen_right_edge, side_panel_column_slot_with_width,
+        side_panel_egui_id,
         side_panel_slot_layout_width, terminal_column_width, work_area_inner_rect,
     };
     use crate::ui::chrome::right_dock_slot_content_rect;
     use crate::ui::theme::Theme;
+
+    #[test]
+    fn side_panel_egui_id_is_parent_scoped_not_unique_root() {
+        // Documents the #287 failure mode: Id::unique(salt) ≠ parent.with(salt).
+        let parent = egui::Id::unique("mistterm_test_parent_scope");
+        let salt = "sftp_browser_panel";
+        let scoped = side_panel_egui_id(parent, salt);
+        let unique_root = egui::Id::unique(salt);
+        assert_ne!(scoped, unique_root);
+        assert_eq!(scoped, parent.with(salt));
+    }
 
     #[test]
     fn clamp_f32_normal_order() {
