@@ -440,28 +440,22 @@ impl MonitorPanel {
         }
 
         let (def_w, min_w, max_w) = layout_util::right_dock_resize_bounds(dock_col_w);
-        {
-            egui::Panel::right(layout_util::MONITOR_PANEL_ID)
-                .default_size(def_w)
-                .min_size(min_w)
-                .max_size(max_w)
-                .resizable(true)
-                .frame(crate::ui::chrome::right_dock_placeholder_frame(theme))
-                .show(ui, |ui| {
-                    let h = ui.available_height().max(1.0);
-                    let w = ui.available_width().max(1.0);
-                    ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::hover());
-                });
-        }
+        let panel = egui::Panel::right(layout_util::MONITOR_PANEL_ID)
+            .default_size(def_w)
+            .min_size(min_w)
+            .max_size(max_w)
+            .resizable(true)
+            .frame(crate::ui::chrome::right_dock_placeholder_frame(theme))
+            .show(ui, |ui| {
+                let h = ui.available_height().max(1.0);
+                let w = ui.available_width().max(1.0);
+                ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::hover());
+            });
         let dock_inset = theme.spacing_right_dock_screen_inset();
-        // #206 S1：Panel::show 不再返回 response；槽位改由 PanelState 落盘矩形推得。
-        if let Some(state_rect) =
-            layout_util::side_panel_state_rect(ctx, layout_util::MONITOR_PANEL_ID)
-        {
-            let screen = ctx.content_rect();
-            let mut slot = state_rect;
-            slot.min.x = screen.max.x - slot.width();
-            slot.max.x = screen.max.x - dock_inset;
+        // #287: egui 0.37 Panel::show still returns InnerResponse; prefer response.rect.
+        // PanelState is keyed by parent_scope.with(salt), not Id::unique (see side_panel_state_rect).
+        let slot = layout_util::side_panel_place_slot(ctx, &panel.response, dock_col_w, dock_inset);
+        if slot.is_positive() && slot.width() >= 48.0 {
             crate::ui::chrome::paint_right_dock_slot_gap(ctx, theme, slot);
             self.last_panel_slot_rect = Some(slot);
             layout_util::record_right_dock_panel_rect(&slot, right_dock_outer_left);

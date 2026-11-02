@@ -988,7 +988,8 @@ pub fn show_right_dock_resize_grip_layer(
                 ui.painter().vline(x, gutter.y_range(), stroke);
             }
             if response.dragged() {
-                let id = egui::Id::unique(panel_id);
+                // #287: PanelState id is parent_scope.with(salt), not Id::unique(salt).
+                let id = crate::ui::layout_util::side_panel_persisted_id(ctx, panel_id);
                 if let Some(mut state) = egui::containers::panel::PanelState::load(ctx, id) {
                     let dx = ui.input(|i| i.pointer.delta().x);
                     let current_w = state.outer_rect.width();
