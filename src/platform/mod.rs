@@ -22,10 +22,10 @@ mod macos_ime;
 #[cfg(target_os = "macos")]
 pub mod macos_menu;
 
-// eframe 0.37 重新导出了 winit 的 macOS 扩展 trait（经 eframe::winit）。
-// `winit` 直接依赖仍保留：eframe 不重新导出 winit 全部 API，且 [patch] 必须版本对齐。
+// eframe 0.37 不重新导出 winit；macOS OptionAsAlt 走直接依赖（见 Cargo.toml
+// [target.'cfg(target_os = "macos")'.dependencies] + [patch.crates-io] vendor/winit）。
 #[cfg(target_os = "macos")]
-pub use eframe::winit::platform::macos::OptionAsAlt;
+pub use winit::platform::macos::OptionAsAlt;
 
 pub use app_name::APP_DISPLAY_NAME;
 pub use docs::{
