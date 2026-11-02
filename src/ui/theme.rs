@@ -3321,7 +3321,7 @@ mod theme_semantic_tests {
         let ctx = egui::Context::default();
         // `set_pixels_per_point` 要下一帧才生效；先设置再用一帧把缩放钉住。
         ctx.set_pixels_per_point(2.0);
-        let _ = ctx.run_pass(egui::RawInput::default(), |_| {});
+        ctx.run_pass(egui::RawInput::default(), |_| {}).textures_delta.clear();
         assert!(
             (ctx.pixels_per_point() - 2.0).abs() < 0.01,
             "test context ppp {}",

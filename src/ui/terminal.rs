@@ -5539,12 +5539,13 @@ mod display_link_stroke_tests {
     #[test]
     fn display_link_underline_is_one_physical_pixel() {
         let ctx = egui::Context::default();
-        let _ = ctx.run_pass(
+        let mut out = ctx.run_pass(
             egui::RawInput {
                 ..Default::default()
             },
             |_| {},
         );
+        out.textures_delta.clear();
         let theme = Theme::dark();
         let idle = TerminalView::display_link_underline_stroke(&theme, &ctx, false);
         let hover = TerminalView::display_link_underline_stroke(&theme, &ctx, true);
@@ -5589,9 +5590,10 @@ mod drop_tests {
             ..Default::default()
         };
         let mut out = Vec::new();
-        let _ = ctx.run_pass(raw, |ctx| {
+        let mut frame = ctx.run_pass(raw, |ctx| {
             out = ctx.input(TerminalView::unplaced_dropped_files);
         });
+        frame.textures_delta.clear();
         out
     }
 
@@ -6253,13 +6255,15 @@ mod idle_cursor_repaint_tests {
             time: Some(time),
             ..Default::default()
         };
-        let out = ctx.run_pass(raw, |ctx| {
+        let mut out = ctx.run_pass(raw, |ctx| {
             ctx.root_ui(|root| {
                 egui::CentralPanel::default().show(root, |ui| {
                     view.show(ui, &theme, 860.0, false, true);
                 });
             });
         });
+        // 0.37: 字体纹理增量必须显式消费，否则 Drop 断言 panic。
+        out.textures_delta.clear();
         out.viewport_output
             .get(&egui::ViewportId::ROOT)
             .map(|v| v.repaint_delay)

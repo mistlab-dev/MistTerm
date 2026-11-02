@@ -1242,7 +1242,7 @@ mod tests {
                 },
             ];
             ctx.memory_mut(|m| m.request_focus(ime_id));
-            let out = ctx.run_pass(input, |ctx| {
+            let mut out = ctx.run_pass(input, |ctx| {
                 // 与 app.rs 的顺序一致：先处理复制快捷键，再画终端(含 IME 框)。
                 let hit = ctx.input_mut(|i| {
                     if consume {
@@ -1260,6 +1260,7 @@ mod tests {
                     });
                 });
             });
+            out.textures_delta.clear();
                         out.platform_output
                 .commands
                 .iter()
@@ -1290,10 +1291,11 @@ mod tests {
                 modifiers: terminal_clipboard_modifiers(),
             },
         ];
-        let _ = ctx.run_pass(input, |ctx| {
+        let mut frame = ctx.run_pass(input, |ctx| {
             assert!(ctx.input_mut(consume_terminal_paste_shortcut));
             assert!(ctx.input(|i| !i.events.iter().any(|e| matches!(e, Event::Paste(_)))));
         });
+        frame.textures_delta.clear();
     }
 
     // ── 快捷键审计：同一帧里，egui-winit 附带的语义事件 + 有焦点的空 IME 框，会不会把应用动作搅掉 ──
@@ -1348,26 +1350,29 @@ mod tests {
         let ctx = egui::Context::default();
         let ime_id = egui::Id::unique("ime_capture_audit");
         // 先跑三帧让 IME 框存在、拿到焦点并锁住焦点(和真实终端一样，按键之前它就已经有焦点)。
-        for frame in 0..3 {
-            let _ = ctx.run_pass(egui::RawInput::default(), |ctx| {
-                ctx.root_ui(|root| { egui::CentralPanel::default().show(root, |ui| {
-                    let mut t = String::new();
-                    ui.add(
-                        egui::TextEdit::singleline(&mut t)
-                            .id(ime_id)
-                            .lock_focus(true),
-                    );
+        for frame_idx in 0..3 {
+            let mut frame = ctx.run_pass(egui::RawInput::default(), |ctx| {
+                ctx.root_ui(|root| {
+                    egui::CentralPanel::default().show(root, |ui| {
+                        let mut t = String::new();
+                        ui.add(
+                            egui::TextEdit::singleline(&mut t)
+                                .id(ime_id)
+                                .lock_focus(true),
+                        );
+                    });
                 });
                 // 和真实终端一样只请求一次焦点(每帧请求会把焦点锁重置掉)
-                if frame == 0 {
+                if frame_idx == 0 {
                     ctx.memory_mut(|m| m.request_focus(ime_id));
                 }
-            }) });
+            });
+            frame.textures_delta.clear();
         }
         let mut ime_text_seen = String::new();
         let mut text_left_for_pty = 0;
         let handler = std::cell::RefCell::new(Some(handler));
-        let out = ctx.run_pass(input, |ctx| {
+        let mut out = ctx.run_pass(input, |ctx| {
             let h = handler.borrow_mut().take().unwrap();
             let app_copied = ctx.input_mut(|i| h(i));
             if app_copied {
@@ -1379,18 +1384,23 @@ mod tests {
                     .filter(|e| matches!(e, Event::Text(_)))
                     .count()
             });
-            ctx.root_ui(|root| { egui::CentralPanel::default().show(root, |ui| {
-                let mut t = String::new();
-                ui.add(
-                    egui::TextEdit::singleline(&mut t)
-                        .id(ime_id)
-                        .lock_focus(true),
-                );
-                ime_text_seen = t;
+            ctx.root_ui(|root| {
+                egui::CentralPanel::default().show(root, |ui| {
+                    let mut t = String::new();
+                    ui.add(
+                        egui::TextEdit::singleline(&mut t)
+                            .id(ime_id)
+                            .lock_focus(true),
+                    );
+                    ime_text_seen = t;
+                });
             });
-        }) });
+        });
+        // 0.37: run_pass 产出的字体纹理增量必须显式消费，否则 Drop 断言 panic。
+        out.textures_delta.clear();
         Outcome {
-            copied:             out.platform_output
+            copied: out
+                .platform_output
                 .commands
                 .iter()
                 .find_map(|c| match c {
@@ -1403,6 +1413,7 @@ mod tests {
             text_left_for_pty,
         }
     }
+
 
     fn cs() -> Modifiers {
         Modifiers {
