@@ -1,6 +1,6 @@
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, VecDeque};
-use std::os::raw::{c_char, c_int, c_long, c_ulong};
+use std::os::raw::{c_char, c_int, c_long, c_uint, c_ulong};
 use std::slice;
 use std::sync::{Arc, Mutex};
 
@@ -153,6 +153,13 @@ impl EventProcessor {
         // and forward back. This is not desired for e.g. games since some IMEs may delay the input
         // and game can toggle IME back when e.g. typing into some field where latency won't really
         // matter.
+        // MistTerm: Control chords (Ctrl+C / Ctrl+R / Ctrl+K, …) are not pinyin
+        // composition keys. While a preedit is active, XFilterEvent and the
+        // `is_composing` guard below otherwise drop them, so SIGINT never reaches
+        // the PTY. Bypass the filter for those chords and deliver KeyboardInput.
+        // See vendor/winit/MISTTERM_PATCH.md.
+        let bypass_ime = control_chord_bypasses_ime_event(xev, &self.xmodmap);
+
         let filtered = if event_type == xlib::KeyPress || event_type == xlib::KeyRelease {
             let wt = Self::window_target(&self.target);
             let ime = wt.ime.as_ref();
@@ -161,7 +168,7 @@ impl EventProcessor {
                 .and_then(|ime| window.map(|window| ime.borrow().is_ime_allowed(window)))
                 .unwrap_or(false);
 
-            let filtered = forward_to_ime && self.filter_event(xev);
+            let filtered = !bypass_ime && forward_to_ime && self.filter_event(xev);
             if filtered {
                 let xev: &XKeyEvent = xev.as_ref();
                 if self.xmodmap.is_modifier(xev.keycode as u8) {
@@ -966,7 +973,20 @@ impl EventProcessor {
             self.update_mods_from_core_event(window_id, xev.state as u16, &mut callback);
         }
 
-        if keycode != 0 && !self.is_composing {
+        // Same predicate as the XFilterEvent bypass above.
+        let event_type = match state {
+            ElementState::Pressed => xlib::KeyPress,
+            ElementState::Released => xlib::KeyRelease,
+        };
+        let bypass_ime = control_chord_bypasses_ime(
+            event_type,
+            xev.state,
+            xev.keycode,
+            &self.xmodmap,
+        );
+
+        // MistTerm: still emit KeyboardInput for Control chords during preedit.
+        if keycode != 0 && (!self.is_composing || bypass_ime) {
             // Don't alter the modifiers state from replaying.
             if replay {
                 self.send_synthic_modifier_from_core(window_id, xev.state as u16, &mut callback);
@@ -990,6 +1010,13 @@ impl EventProcessor {
         }
 
         let wt = Self::window_target(&self.target);
+
+        // Control chords during preedit belong to the application. Do not
+        // pass them through Xutf8LookupString, which would hand them back
+        // to XIM after we decided not to filter them.
+        if bypass_ime {
+            return;
+        }
 
         if let Some(ic) =
             wt.ime.as_ref().and_then(|ime| ime.borrow().get_context(window as XWindow))
@@ -1860,6 +1887,37 @@ impl EventProcessor {
     fn window_exists(&self, window_id: xproto::Window) -> bool {
         self.with_window(window_id, |_| ()).is_some()
     }
+}
+
+
+/// MistTerm: a non-modifier key pressed or released while Control is already
+/// down. Pinyin / libpinyin does not use these chords during preedit; shells
+/// do (Ctrl+C SIGINT, Ctrl+R reverse search, Ctrl+K kill-line).
+fn control_chord_bypasses_ime_event(xev: &XEvent, xmodmap: &util::ModifierKeymap) -> bool {
+    let event_type = xev.get_type();
+    if event_type != xlib::KeyPress && event_type != xlib::KeyRelease {
+        return false;
+    }
+    let xkev: &XKeyEvent = xev.as_ref();
+    control_chord_bypasses_ime(event_type, xkev.state, xkev.keycode, xmodmap)
+}
+
+fn control_chord_bypasses_ime(
+    event_type: c_int,
+    state: c_uint,
+    keycode: c_uint,
+    xmodmap: &util::ModifierKeymap,
+) -> bool {
+    if event_type != xlib::KeyPress && event_type != xlib::KeyRelease {
+        return false;
+    }
+    // `keycode == 0` is XIM's synthetic commit key, not a real chord.
+    // Modifier keys themselves (Control, Shift, …) stay with the IME so it
+    // can track modifier state. `state` is the mask *before* this key.
+    if keycode == 0 || state & xlib::ControlMask as c_uint == 0 {
+        return false;
+    }
+    !xmodmap.is_modifier(keycode as u8)
 }
 
 fn is_first_touch(first: &mut Option<u64>, num: &mut u32, id: u64, phase: TouchPhase) -> bool {
