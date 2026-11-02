@@ -564,7 +564,7 @@ fn render_node(
                 });
                 let sep = ui.interact(
                     sep_rect,
-                    ui.id().with((
+                    ui.scope_id().with((
                         "split_sep_h",
                         area.min.x.to_bits(),
                         area.min.y.to_bits(),
@@ -631,7 +631,7 @@ fn render_node(
                 });
                 let sep = ui.interact(
                     sep_rect,
-                    ui.id().with((
+                    ui.scope_id().with((
                         "split_sep_v",
                         area.min.x.to_bits(),
                         area.min.y.to_bits(),

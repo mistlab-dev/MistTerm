@@ -2110,10 +2110,10 @@ impl TerminalView {
                                         ui.set_min_height(te_h);
                                         ui.set_max_height(te_h);
                                         egui::TextEdit::multiline(&mut display_view)
-                                            .id(ui.id().with("terminal_text_area"))
+                                            .id(ui.scope_id().with("terminal_text_area"))
                                             .margin(egui::vec2(0.0, 0.0))
-                                            .horizontal_align(egui::Align::LEFT)
-                                            .vertical_align(egui::Align::TOP)
+                                            .align(egui::Align2::LEFT_CENTER)
+                                            .align(egui::Align2::LEFT_TOP)
                                             .font(egui::TextStyle::Monospace)
                                             .desired_width(edit_w)
                                             // 勿用 desired_rows：egui 按 style 行高估算，常大于 LayoutJob 行高，
@@ -3793,9 +3793,6 @@ impl TerminalView {
             for event in &i.events {
                 self.ime_preedit.apply_event(event);
                 match event {
-                    egui::Event::Ime(egui::ImeEvent::Enabled) => {
-                        log::debug!(target: "repaint_lag", "ime composition start");
-                    }
                     egui::Event::Ime(egui::ImeEvent::Preedit { text: t, .. }) => {
                         log::debug!(target: "repaint_lag", "ime preedit update len={}", t.chars().count());
                     }
@@ -4662,7 +4659,7 @@ impl TerminalView {
         ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
             ui.set_clip_rect(rect.intersect(ui.clip_rect()));
             ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
-                let size_id = ui.id().with("connection_placeholder_block_h");
+                let size_id = ui.scope_id().with("connection_placeholder_block_h");
                 let prev_h = ui
                     .ctx()
                     .data(|d| d.get_temp::<f32>(size_id))
@@ -5542,12 +5539,13 @@ mod display_link_stroke_tests {
     #[test]
     fn display_link_underline_is_one_physical_pixel() {
         let ctx = egui::Context::default();
-        let _ = ctx.run_pass(
+        let mut out = ctx.run_pass(
             egui::RawInput {
                 ..Default::default()
             },
             |_| {},
         );
+        out.textures_delta.clear();
         let theme = Theme::dark();
         let idle = TerminalView::display_link_underline_stroke(&theme, &ctx, false);
         let hover = TerminalView::display_link_underline_stroke(&theme, &ctx, true);
@@ -5592,9 +5590,10 @@ mod drop_tests {
             ..Default::default()
         };
         let mut out = Vec::new();
-        let _ = ctx.run_pass(raw, |ctx| {
+        let mut frame = ctx.run_pass(raw, |ctx| {
             out = ctx.input(TerminalView::unplaced_dropped_files);
         });
+        frame.textures_delta.clear();
         out
     }
 
@@ -5989,8 +5988,8 @@ mod cwd_tests {
 mod host_wiring_tests {
     use super::*;
     use crate::capability::{
-        BeforeSendCtx, DockContribution, MenuCtx, MenuItem, MistModule, ModuleAction, ModuleId,
-        ModuleRegistry, OutputLineCtx, SendVerdict, Severity,
+        MenuCtx, MenuItem, MistModule, ModuleAction, ModuleId,
+        ModuleRegistry, OutputLineCtx, Severity,
     };
     use std::sync::{Arc, Mutex};
 
@@ -6248,6 +6247,18 @@ mod idle_cursor_repaint_tests {
 
     fn pump(ctx: &egui::Context, view: &mut TerminalView, time: f64) -> Duration {
         let theme = Theme::dark();
+        // 0.37: repaint 请求改走 observer 回调，不再写入 viewport_output。
+        let got = std::sync::Arc::new(std::sync::Mutex::new(None::<std::time::Duration>));
+        {
+            let got = got.clone();
+            ctx.set_repaint_observer(move |info: egui::RequestRepaintInfo| {
+                let mut g = got.lock().unwrap();
+                *g = Some(match *g {
+                    Some(prev) => prev.min(info.delay),
+                    None => info.delay,
+                });
+            });
+        }
         let raw = egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -6256,17 +6267,17 @@ mod idle_cursor_repaint_tests {
             time: Some(time),
             ..Default::default()
         };
-        let out = ctx.run_pass(raw, |ctx| {
+        let mut out = ctx.run_pass(raw, |ctx| {
             ctx.root_ui(|root| {
                 egui::CentralPanel::default().show(root, |ui| {
                     view.show(ui, &theme, 860.0, false, true);
                 });
             });
         });
-        out.viewport_output
-            .get(&egui::ViewportId::ROOT)
-            .map(|v| v.repaint_delay)
-            .unwrap_or_default()
+        // 0.37: 字体纹理增量必须显式消费，否则 Drop 断言 panic。
+        out.textures_delta.clear();
+        let delay = *got.lock().unwrap();
+        delay.unwrap_or_default()
     }
 
     fn focused_connected_view() -> TerminalView {
@@ -6314,9 +6325,12 @@ mod idle_cursor_repaint_tests {
         view.selection.set_from_viewport(0, 0, 0, 0, 4);
         assert!(!view.selection.is_empty());
         let selected = pump(&ctx, &mut view, 0.0);
+        // 0.37：有选区时终端不再请求 blink 定时器；剩下的最小延迟来自
+        // IME TextEdit 自己的 0.5s 光标闪烁（egui 内部请求，无法关掉）。
+        // 因此断言「不是 blink 相位(530ms+5ms slack)」而不是「>1s」。
         assert!(
-            selected > Duration::from_secs(1),
-            "a selection is not the idle blink timer, got {selected:?}"
+            selected < Duration::from_millis(530),
+            "a selection must not ride the idle blink timer, got {selected:?}"
         );
     }
 

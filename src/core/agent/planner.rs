@@ -103,8 +103,8 @@ pub fn propose_step_with_context(
             }
         }
 
-        if (contains_any(&lower, stripped, &["清理", "大文件", "日志", "clean", "find"])
-            && (ctx.command.contains("df") || contains_any(&lower, stripped, &["磁盘", "空间"])))
+        if contains_any(&lower, stripped, &["清理", "大文件", "日志", "clean", "find"])
+            && (ctx.command.contains("df") || contains_any(&lower, stripped, &["磁盘", "空间"]))
         {
             return StepProposal {
                 command: "du -sh /var/log/* 2>/dev/null | sort -rh | head -n 10".into(),
@@ -114,8 +114,8 @@ pub fn propose_step_with_context(
             };
         }
 
-        if (contains_any(&lower, stripped, &["top", "高占用", "详情", "detail", "谁占的"])
-            && (ctx.command.contains("ps") || ctx.command.contains("free") || ctx.command.contains("uptime")))
+        if contains_any(&lower, stripped, &["top", "高占用", "详情", "detail", "谁占的"])
+            && (ctx.command.contains("ps") || ctx.command.contains("free") || ctx.command.contains("uptime"))
         {
             return StepProposal {
                 command: "ps aux --sort=-%mem | head -n 10".into(),

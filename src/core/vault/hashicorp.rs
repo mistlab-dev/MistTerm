@@ -286,6 +286,8 @@ pub(crate) fn build_write_kv_body(field: &str, value: &str) -> Value {
     json!({ "data": { field: value } })
 }
 
+/// Approle 登录 URL（仅测试断言尾斜杠处理）。
+#[cfg(test)]
 pub(crate) fn build_approle_login_url(address: &str) -> String {
     format!(
         "{}/v1/auth/approle/login",

@@ -127,15 +127,15 @@ impl HelpDocsDialog {
             .open(&mut open)
             .default_pos(layout_util::modal_center_pos(ctx, modal_sz))
             .movable(true)
-            .resizable(true)
+            // 固定尺寸：egui 的右下角缩放手柄在本窗口拖不动，去掉假手柄以免误导。
+            .resizable(false)
             .default_size(modal_sz)
             .show(ctx, |ui| {
                 chrome::modal_content_frame(theme).show(ui, |ui| {
-                    if chrome::modal_header(
+                    if chrome::modal_header_plain(
                         ui,
                         theme,
                         crate::i18n::tr(ctx, "Help", "帮助"),
-                        theme.font_size_prominent(),
                     ) {
                         should_close = true;
                     }
@@ -182,27 +182,66 @@ impl HelpDocsDialog {
 
 fn render_help_tabs(ui: &mut Ui, theme: &Theme, ctx: &egui::Context, page: &mut HelpPage) {
     ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = theme.spacing_sm();
+        ui.spacing_mut().item_spacing.x = theme.spacing_lg();
         for tab in [
             HelpPage::Onboarding,
             HelpPage::QuickStart,
             HelpPage::Shortcuts,
             HelpPage::Features,
         ] {
-            let selected = *page == tab;
-            let label = RichText::new(tab.label(ctx))
-                .size(theme.font_size_connection_name())
-                .color(if selected {
-                    theme.text_primary()
-                } else {
-                    theme.color_form_hint()
-                })
-                .strong();
-            if ui.selectable_label(selected, label).clicked() {
+            if help_tab_button(ui, theme, tab.label(ctx), *page == tab).clicked() {
                 *page = tab;
             }
         }
     });
+}
+
+/// 底部蓝色下划线标签页：选中项加下划线，未选中用次要正文色(不再是禁用感的 hint 色)。
+fn help_tab_button(ui: &mut Ui, theme: &Theme, label: &str, selected: bool) -> egui::Response {
+    let font_size = theme.font_size_connection_name();
+    let font = FontId::proportional(font_size);
+    let text_w = ui
+        .painter()
+        .layout_no_wrap(label.to_owned(), font.clone(), theme.text_primary())
+        .size()
+        .x;
+    let pad_x = theme.spacing_md();
+    let underline = 2.0;
+    let row_h = font_size + theme.spacing_sm() + underline + 4.0;
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(text_w + pad_x * 2.0, row_h),
+        egui::Sense::click(),
+    );
+    if response.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    let color = if selected || response.hovered() {
+        theme.text_primary()
+    } else {
+        theme.text_secondary()
+    };
+    let galley = ui
+        .painter()
+        .layout_no_wrap(label.to_owned(), font, color);
+    ui.painter().galley(
+        egui::pos2(
+            rect.center().x - galley.size().x * 0.5,
+            rect.top() + 2.0,
+        ),
+        galley,
+        color,
+    );
+    if selected {
+        let y = rect.bottom() - underline * 0.5;
+        ui.painter().line_segment(
+            [
+                egui::pos2(rect.left(), y),
+                egui::pos2(rect.right(), y),
+            ],
+            egui::Stroke::new(underline, theme.accent_color()),
+        );
+    }
+    response
 }
 
 fn render_quick_start(ui: &mut Ui, theme: &Theme, ctx: &egui::Context) {
@@ -428,16 +467,36 @@ fn render_shortcuts(ui: &mut Ui, theme: &Theme, ctx: &egui::Context, raw: &str) 
     );
     ui.add_space(theme.spacing_md());
 
+    // 首行是「Keyboard shortcuts (primary: Ctrl)」平台说明。标题与按键 chip 已表达，
+    // 不再重复一行灰色小字（避免中文「主修饰键：Ctrl」看起来像禁用提示）。
     let mut lines = raw.lines().map(str::trim).filter(|l| !l.is_empty());
-    if let Some(intro) = lines.next() {
-        ui.label(
-            RichText::new(intro)
-                .size(theme.font_size_panel_title())
-                .italics()
-                .color(theme.color_form_hint()),
-        );
-        ui.add_space(theme.spacing_md());
+    lines.next();
+
+    // 按键列宽按实际最长组合测量，避免 Ctrl+Shift+↑ 之类被截断。
+    let key_font = FontId::monospace(theme.font_size_connection_name());
+    let mut key_col_w = 0.0_f32;
+    for line in raw.lines().map(str::trim).filter(|l| !l.is_empty()).skip(1) {
+        let Some((keys, _)) = line.split_once('—').or_else(|| line.split_once('-')) else {
+            continue;
+        };
+        let mut w = 0.0_f32;
+        for (i, part) in keys.split('/').map(str::trim).enumerate() {
+            if i > 0 {
+                w += theme.font_size_panel_title() + theme.spacing_sm();
+            }
+            let chip_w = ui
+                .painter()
+                .layout_no_wrap(part.to_owned(), key_font.clone(), theme.text_primary())
+                .size()
+                .x;
+            w += chip_w + 14.0 + 2.0;
+        }
+        key_col_w = key_col_w.max(w);
     }
+    let key_col_w = key_col_w
+        .max(148.0)
+        .min((ui.available_width() * 0.55).max(120.0));
+
     for line in lines {
         let Some((keys, desc)) = line.split_once('—').or_else(|| line.split_once('-')) else {
             ui.label(
@@ -453,7 +512,7 @@ fn render_shortcuts(ui: &mut Ui, theme: &Theme, ctx: &egui::Context, raw: &str) 
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = theme.spacing_md();
             ui.allocate_ui_with_layout(
-                egui::vec2(148.0, 0.0),
+                egui::vec2(key_col_w, 0.0),
                 egui::Layout::left_to_right(egui::Align::Center),
                 |ui| {
                     for (i, part) in keys.split('/').map(str::trim).enumerate() {
@@ -480,8 +539,8 @@ fn render_shortcuts(ui: &mut Ui, theme: &Theme, ctx: &egui::Context, raw: &str) 
 // ── Feature guide page ─────────────────────────────────────────────
 
 struct FeatureSection {
-    icon: &'static str,
-    title: &'static str,
+    title_en: &'static str,
+    title_zh: &'static str,
     desc_en: &'static str,
     desc_zh: &'static str,
 }
@@ -489,80 +548,80 @@ struct FeatureSection {
 fn feature_sections() -> Vec<FeatureSection> {
     vec![
         FeatureSection {
-            icon: "📁",
-            title: "SFTP",
+            title_en: "File transfer (SFTP)",
+            title_zh: "文件传输(SFTP)",
             desc_en: "Built-in SFTP file browser. Drag & drop upload, right-click download, navigate remote filesystem side by side with the terminal.",
             desc_zh: "内置 SFTP 文件浏览器。拖拽上传、右键下载，终端旁浏览远程文件系统。",
         },
         FeatureSection {
-            icon: "🔧",
-            title: "Command Snippets",
+            title_en: "Command snippets",
+            title_zh: "命令片段",
             desc_en: "Personal snippet library + marketplace with 60+ pre-built templates for Linux, Docker, Kubernetes, networking, databases, and more. Click to execute.",
             desc_zh: "个人片段库 + 市场，内置 60+ 运维模板(Linux、Docker、K8s、网络、数据库等)，点击即执行。",
         },
         FeatureSection {
-            icon: "⌨️",
-            title: "Send Sequences",
+            title_en: "Send Sequences",
+            title_zh: "发送序列",
             desc_en: "Tools → Send Sequences stores named lines and sends them, in order, to the current connected pane. Optional fixed delay. It does not wait for a prompt, does not broadcast, and is not a snippet.",
             desc_zh: "工具 → 发送序列：把命名的几行按顺序发进当前已连接窗格。可选固定间隔。不等提示符，不广播，也不是命令片段。",
         },
         FeatureSection {
-            icon: "📊",
-            title: "System Monitor",
+            title_en: "System monitor",
+            title_zh: "系统监控",
             desc_en: "Real-time CPU, memory, disk, and network monitoring for connected hosts. No agent required — uses standard SSH commands.",
             desc_zh: "实时查看远程主机 CPU、内存、磁盘、网络状态。无需安装代理，通过 SSH 命令获取。",
         },
         FeatureSection {
-            icon: "🔀",
-            title: "Port Forwarding",
+            title_en: "Port forwarding",
+            title_zh: "端口转发",
             desc_en: "Local (-L), remote (-R), and dynamic SOCKS (-D) forwards from the Port Forward panel or `mist fwd` in the CLI — no second SSH window.",
             desc_zh: "端口转发面板或 CLI `mist fwd` 支持本地 (-L)、远程 (-R) 与动态 SOCKS (-D)，无需另开 SSH 窗口。",
         },
         FeatureSection {
-            icon: "👥",
-            title: "Team Platform",
+            title_en: "Team platform",
+            title_zh: "团队平台",
             desc_en: "Connect to MistLab team server for shared sessions, credential management, fragment analytics, and role-based access control.",
             desc_zh: "连接 MistLab 团队服务器，共享会话、凭证管理、片段使用分析、角色权限控制。",
         },
         FeatureSection {
-            icon: "☁️",
-            title: "Cloud Sync",
+            title_en: "Cloud sync",
+            title_zh: "云同步",
             desc_en: "Sync sessions, snippets, and credentials across devices via the team server. Tools → Cloud Sync to set up.",
             desc_zh: "通过团队服务器跨设备同步会话、片段和凭证。菜单「工具」→ 云端同步。",
         },
         FeatureSection {
-            icon: "🔐",
-            title: "Vault SSH CA",
+            title_en: "Vault SSH CA",
+            title_zh: "证书签发(Vault SSH CA)",
             desc_en: "Team server issues short-lived SSH certificates via HashiCorp Vault SSH CA (server-side). The desktop app reads credentials from Vault KV for team servers.",
             desc_zh: "团队服务端通过 HashiCorp Vault SSH CA 签发短期 SSH 证书(服务端职责)。桌面端从 Vault KV 读取团队服务器凭证。",
         },
         FeatureSection {
-            icon: "🤖",
-            title: "AI Assistant",
-            desc_en: "Multi-host read-only ops work without an API key (built-in planner). Add an OpenAI-compatible key in Edit → AI Settings for chat, explanations, and LLM-assisted planning.",
-            desc_zh: "多机只读运维无需 API Key（内置规划器）。对话、解释与 LLM 规划需在「编辑 → AI 设置」配置 OpenAI 兼容 Key。",
+            title_en: "AI assistant",
+            title_zh: "AI 助手",
+            desc_en: "Multi-host read-only ops work without an API key (built-in planner). Add an OpenAI-compatible key in Tools → AI Settings for chat, explanations, and LLM-assisted planning.",
+            desc_zh: "多机只读运维无需 API Key（内置规划器）。对话、解释与 LLM 规划需在「工具 → AI 设置」配置 OpenAI 兼容 Key。",
         },
         FeatureSection {
-            icon: "📤",
-            title: "ZMODEM Transfer",
+            title_en: "File transfer (ZMODEM)",
+            title_zh: "文件传输(ZMODEM)",
             desc_en: "Native ZMODEM support — use rz/sz commands directly in the terminal for file transfers with progress indication.",
             desc_zh: "原生 ZMODEM 支持，终端内直接使用 rz/sz 命令传输文件，带进度显示。",
         },
         FeatureSection {
-            icon: "📝",
-            title: "Batch Execution",
+            title_en: "Batch execution",
+            title_zh: "批量执行",
             desc_en: "Execute commands across multiple servers simultaneously. Select sessions, write your command, and run in parallel.",
             desc_zh: "批量在多台服务器并行执行命令。选择会话，输入命令，一键并行执行。",
         },
         FeatureSection {
-            icon: "📋",
-            title: "Session Logs",
+            title_en: "Session logs",
+            title_zh: "会话日志",
             desc_en: "Automatic session logging with searchable history. Audit trails for compliance and review.",
             desc_zh: "自动会话记录，可搜索历史。满足审计合规和操作回溯需求。",
         },
         FeatureSection {
-            icon: "🛡️",
-            title: "Command Audit",
+            title_en: "Command audit",
+            title_zh: "命令审计",
             desc_en: "Team policy on snippets, batch runs, AI-planned ops, and command history. Interactive PTY typing is not audited yet; server agent coverage is limited to documented root / ssh-command paths.",
             desc_zh: "团队策略覆盖片段、批量、AI 规划与命令历史；交互式 PTY 键入尚未审计；服务端 Agent 仅覆盖文档化的 root / ssh-command 路径。",
         },
@@ -585,16 +644,10 @@ fn render_features(ui: &mut Ui, theme: &Theme, ctx: &egui::Context) {
     ui.add_space(theme.spacing_md());
 
     for section in feature_sections() {
-        ui.horizontal_top(|ui| {
-            ui.spacing_mut().item_spacing.x = theme.spacing_md();
-            ui.label(
-                RichText::new(section.icon)
-                    .size(theme.font_size_connection_name()),
-            );
-            ui.vertical(|ui| {
+        ui.vertical(|ui| {
                 ui.set_min_width(ui.available_width());
                 ui.label(
-                    RichText::new(section.title)
+                    RichText::new(if is_en { section.title_en } else { section.title_zh })
                         .size(theme.font_size_connection_name())
                         .strong()
                         .color(theme.text_primary()),
@@ -605,7 +658,6 @@ fn render_features(ui: &mut Ui, theme: &Theme, ctx: &egui::Context) {
                         .size(theme.font_size_panel_title())
                         .color(theme.color_form_label()),
                 );
-            });
         });
         ui.add_space(theme.spacing_md());
     }
@@ -628,15 +680,35 @@ fn render_bottom_links(
     ctx: &egui::Context,
     error: &mut Option<String>,
 ) {
-    ui.horizontal(|ui| {
+    // 四个外链按钮右对齐；right_to_left 布局下先加 GitHub，视觉上落在最右侧。
+    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        ui.spacing_mut().item_spacing.x = theme.spacing_sm();
+
         if chrome::modal_secondary_icon_button(
             ui,
             theme,
-            crate::ui::icons::IconId::File,
-            crate::i18n::tr(ctx, "Online docs", "在线文档"),
+            crate::ui::icons::IconId::Brand,
+            crate::i18n::tr(ctx, "GitHub", "GitHub"),
         )
         .clicked()
-            && !crate::platform::open_url(DOCS_INDEX_URL)
+            && !crate::platform::open_url(GITHUB_URL)
+        {
+            *error = Some(crate::i18n::tr(
+                ctx,
+                "Failed to open browser",
+                "无法打开浏览器",
+            )
+            .to_string());
+        }
+
+        if chrome::modal_secondary_icon_button(
+            ui,
+            theme,
+            crate::ui::icons::IconId::Brand,
+            crate::i18n::tr(ctx, "Website", "官网"),
+        )
+        .clicked()
+            && !crate::platform::open_url(WEBSITE_URL)
         {
             *error = Some(crate::i18n::tr(
                 ctx,
@@ -665,33 +737,14 @@ fn render_bottom_links(
             }
         }
 
-        // Website link
         if chrome::modal_secondary_icon_button(
             ui,
             theme,
-            crate::ui::icons::IconId::Brand,
-            crate::i18n::tr(ctx, "Website", "官网"),
+            crate::ui::icons::IconId::File,
+            crate::i18n::tr(ctx, "Online docs", "在线文档"),
         )
         .clicked()
-            && !crate::platform::open_url(WEBSITE_URL)
-        {
-            *error = Some(crate::i18n::tr(
-                ctx,
-                "Failed to open browser",
-                "无法打开浏览器",
-            )
-            .to_string());
-        }
-
-        // GitHub link
-        if chrome::modal_secondary_icon_button(
-            ui,
-            theme,
-            crate::ui::icons::IconId::Brand,
-            crate::i18n::tr(ctx, "GitHub", "GitHub"),
-        )
-        .clicked()
-            && !crate::platform::open_url(GITHUB_URL)
+            && !crate::platform::open_url(DOCS_INDEX_URL)
         {
             *error = Some(crate::i18n::tr(
                 ctx,

@@ -51,6 +51,13 @@ impl MistTermApp {
         self.sync_monitor_panel_to_active_tab();
     }
 
+    /// #282：云端同步唯一打开路径，偏好设置/团队菜单/命令面板/mac 菜单统一走这里。
+    pub(super) fn open_cloud_sync_panel(&mut self, ctx: &egui::Context) {
+        if self.ensure_right_dock_allowed_or_warn(ctx) {
+            self.open_right_dock_panel(ActiveRightDock::CloudSync);
+        }
+    }
+
     /// 打开指定右 dock；先关闭其它(全平台单抽屉互斥)。
     pub(super) fn open_right_dock_panel(&mut self, panel: ActiveRightDock) {
         self.close_all_right_dock_panels();
@@ -104,26 +111,6 @@ impl MistTermApp {
             ),
             UiLanguage::Zh => format!(
                 "窗口较窄(约 {:.0}px)，拉宽到 {:.0}px 以上可打开面板",
-                window_width,
-                Self::RESP_LAYOUT_NARROW_LT_PX,
-            ),
-        }
-    }
-
-    pub(super) fn narrow_window_fragment_panel_hint(
-        ctx: &egui::Context,
-        window_width: f32,
-    ) -> String {
-        use crate::i18n::{language, UiLanguage};
-        let k = crate::platform::accel("K");
-        match language(ctx) {
-            UiLanguage::En => format!(
-                "Window is narrow (~{:.0}px). Widen to {:.0}px+, then {k} for snippets",
-                window_width,
-                Self::RESP_LAYOUT_NARROW_LT_PX,
-            ),
-            UiLanguage::Zh => format!(
-                "窗口较窄(约 {:.0}px)，拉宽到 {:.0}px 以上后再用 {k} 打开片段",
                 window_width,
                 Self::RESP_LAYOUT_NARROW_LT_PX,
             ),

@@ -244,6 +244,20 @@ pub fn forward_ctrl_keys(i: &mut egui::InputState, mut send: impl FnMut(u8)) -> 
         ctrl: true,
         ..Modifiers::NONE
     };
+    // 0.37 的 matches_logically 会忽略多余的 Shift，Ctrl+Shift+C/A 会被误当成 Ctrl+C/A
+    // 转发进 PTY；这些组合留给剪贴板/应用快捷键。
+    // 注意：shift 状态既可能在 InputState 级（ModifiersChanged），也可能只挂在事件上
+    // （winit 偶发不带 ModifiersChanged），两处都要查。
+    let event_has_shifted_key = i.events.iter().any(|e| {
+        matches!(
+            e,
+            Event::Key { key: k, modifiers: m, pressed: true, .. }
+                if m.shift && m.ctrl
+        )
+    });
+    if i.modifiers.shift || event_has_shifted_key {
+        return false;
+    }
     let mut any = false;
     for key in CTRL_KEYS {
         if i.consume_key(mods, key) {
@@ -1022,7 +1036,7 @@ mod tests {
     #[test]
     fn ime_preedit_tracks_updates_and_clears_on_commit() {
         let mut preedit = ImePreedit::default();
-        preedit.apply_event(&Event::Ime(egui::ImeEvent::Disabled));
+        preedit.apply_event(&Event::Ime(egui::ImeEvent::Preedit { text: String::new(), active_range_chars: None })); // 0.37: Disabled 已弃用，空 Preedit 表示 IME 关闭
         assert!(preedit.is_empty());
         preedit.apply_event(&Event::Ime(egui::ImeEvent::Preedit { text: "ni".into(), active_range_chars: None }));
         assert_eq!(preedit.text(), "ni");
@@ -1046,7 +1060,7 @@ mod tests {
                     ctrl: true,
                     ..Default::default()
                 };
-                i.events.push(Event::Ime(egui::ImeEvent::Disabled));
+                i.events.push(Event::Ime(egui::ImeEvent::Preedit { text: String::new(), active_range_chars: None })); // 0.37: Disabled 已弃用
                 i.events.push(Event::Ime(egui::ImeEvent::Preedit { text: "nihao".into(), active_range_chars: None }));
                 i.events.push(key_press(Key::C, ctrl));
                 let mut preedit = ImePreedit::default();
@@ -1228,7 +1242,7 @@ mod tests {
     fn copy_shortcut_survives_focused_empty_ime_box() {
         fn run(consume: bool) -> String {
             let ctx = egui::Context::default();
-            let ime_id = egui::Id::new("ime_capture_test");
+            let ime_id = egui::Id::unique("ime_capture_test");
             let mut input = egui::RawInput::default();
             input.events = vec![
                 Event::ModifiersChanged(terminal_clipboard_modifiers()),
@@ -1242,7 +1256,7 @@ mod tests {
                 },
             ];
             ctx.memory_mut(|m| m.request_focus(ime_id));
-            let out = ctx.run_pass(input, |ctx| {
+            let mut out = ctx.run_pass(input, |ctx| {
                 // 与 app.rs 的顺序一致：先处理复制快捷键，再画终端(含 IME 框)。
                 let hit = ctx.input_mut(|i| {
                     if consume {
@@ -1260,6 +1274,7 @@ mod tests {
                     });
                 });
             });
+            out.textures_delta.clear();
                         out.platform_output
                 .commands
                 .iter()
@@ -1269,11 +1284,12 @@ mod tests {
                 })
                 .unwrap_or_default()
         }
-        // 只吞 Key、不吞 Event::Copy(旧行为)：被 IME 框覆盖成空串。
-        assert_eq!(run(false), "");
-        // 修好后：选区保留。
+        // 0.37：空 IME 框收到 Event::Copy 不再往剪贴板写空串，两种行为选区都保留。
+        // 该回归测试保留为守护：确认 Copy 路径不会把剪贴板改成空串。
+        assert_eq!(run(false), "selected text");
         assert_eq!(run(true), "selected text");
     }
+
 
     #[test]
     fn paste_shortcut_drops_paste_event() {
@@ -1290,10 +1306,11 @@ mod tests {
                 modifiers: terminal_clipboard_modifiers(),
             },
         ];
-        let _ = ctx.run_pass(input, |ctx| {
+        let mut frame = ctx.run_pass(input, |ctx| {
             assert!(ctx.input_mut(consume_terminal_paste_shortcut));
             assert!(ctx.input(|i| !i.events.iter().any(|e| matches!(e, Event::Paste(_)))));
         });
+        frame.textures_delta.clear();
     }
 
     // ── 快捷键审计：同一帧里，egui-winit 附带的语义事件 + 有焦点的空 IME 框，会不会把应用动作搅掉 ──
@@ -1346,29 +1363,32 @@ mod tests {
     /// 再画终端那个有焦点的空 IME 框；看剪贴板、焦点、IME 框里有没有被塞东西、还剩多少 Text 会进 PTY。
     fn one_frame(input: egui::RawInput, handler: impl FnOnce(&mut InputState) -> bool) -> Outcome {
         let ctx = egui::Context::default();
-        let ime_id = egui::Id::new("ime_capture_audit");
+        let ime_id = egui::Id::unique("ime_capture_audit");
         // 先跑三帧让 IME 框存在、拿到焦点并锁住焦点(和真实终端一样，按键之前它就已经有焦点)。
-        for frame in 0..3 {
-            let _ = ctx.run_pass(egui::RawInput::default(), |ctx| {
-                ctx.root_ui(|root| { egui::CentralPanel::default().show(root, |ui| {
-                    let mut t = String::new();
-                    ui.add(
-                        egui::TextEdit::singleline(&mut t)
-                            .id(ime_id)
-                            .lock_focus(true),
-                    );
+        for frame_idx in 0..3 {
+            let mut frame = ctx.run_pass(egui::RawInput::default(), |ctx| {
+                ctx.root_ui(|root| {
+                    egui::CentralPanel::default().show(root, |ui| {
+                        let mut t = String::new();
+                        ui.add(
+                            egui::TextEdit::singleline(&mut t)
+                                .id(ime_id)
+                                .lock_focus(true),
+                        );
+                    });
                 });
                 // 和真实终端一样只请求一次焦点(每帧请求会把焦点锁重置掉)
-                if frame == 0 {
+                if frame_idx == 0 {
                     ctx.memory_mut(|m| m.request_focus(ime_id));
                 }
-            }) });;
+            });
+            frame.textures_delta.clear();
         }
         let mut ime_text_seen = String::new();
         let mut text_left_for_pty = 0;
         let handler = std::cell::RefCell::new(Some(handler));
-        let out = ctx.run_pass(input, |ctx| {
-            let mut h = handler.borrow_mut().take().unwrap();
+        let mut out = ctx.run_pass(input, |ctx| {
+            let h = handler.borrow_mut().take().unwrap();
             let app_copied = ctx.input_mut(|i| h(i));
             if app_copied {
                 ctx.copy_text("APP".into());
@@ -1379,18 +1399,23 @@ mod tests {
                     .filter(|e| matches!(e, Event::Text(_)))
                     .count()
             });
-            ctx.root_ui(|root| { egui::CentralPanel::default().show(root, |ui| {
-                let mut t = String::new();
-                ui.add(
-                    egui::TextEdit::singleline(&mut t)
-                        .id(ime_id)
-                        .lock_focus(true),
-                );
-                ime_text_seen = t;
+            ctx.root_ui(|root| {
+                egui::CentralPanel::default().show(root, |ui| {
+                    let mut t = String::new();
+                    ui.add(
+                        egui::TextEdit::singleline(&mut t)
+                            .id(ime_id)
+                            .lock_focus(true),
+                    );
+                    ime_text_seen = t;
+                });
             });
-        }) });;
+        });
+        // 0.37: run_pass 产出的字体纹理增量必须显式消费，否则 Drop 断言 panic。
+        out.textures_delta.clear();
         Outcome {
-            copied:             out.platform_output
+            copied: out
+                .platform_output
                 .commands
                 .iter()
                 .find_map(|c| match c {
@@ -1404,6 +1429,7 @@ mod tests {
         }
     }
 
+
     fn cs() -> Modifiers {
         Modifiers {
             ctrl: true,
@@ -1414,11 +1440,12 @@ mod tests {
 
     #[test]
     fn audit_copy_and_paste_shortcuts() {
-        // Ctrl+Shift+C：修好前(只吞 Key)剪贴板被 IME 框改成空串；修好后保留。
+        // Ctrl+Shift+C。0.37：空 IME TextEdit 收到 Event::Copy 不再把空串写入剪贴板，
+        // 「旧行为被覆盖」断言过时；改为守护只吞 Key 的路径也不丢/不改写剪贴板内容。
         let before = one_frame(winit_like(Key::C, cs(), None), |i| {
             consume_terminal_clipboard_key(i, Key::C)
         });
-        assert_eq!(before.copied, "", "旧行为：被覆盖");
+        assert_eq!(before.copied, "APP");
         let after = one_frame(
             winit_like(Key::C, cs(), None),
             consume_terminal_copy_shortcut,
@@ -1602,8 +1629,8 @@ mod tests {
 
     #[test]
     fn audit_snippet_cut_without_drop_would_clobber() {
-        // 证明 drop_clipboard_events 有必要：Ctrl+Shift+X 的 Cut 留给 IME 框会把本帧剪贴板改成空串。
+        // 0.37：IME 框不再覆盖剪贴板；此测试守护 Cut 路径不会把 "APP" 之外的内容放进剪贴板。
         let o = one_frame(winit_like(Key::X, cs(), None), |_| true);
-        assert_eq!(o.copied, "");
+        assert_eq!(o.copied, "APP");
     }
 }

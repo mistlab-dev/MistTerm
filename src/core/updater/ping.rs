@@ -9,7 +9,6 @@
 //! - 失败完全静默（网络不通、超时、非 2xx 都不影响任何功能）；
 //! - 测试构建（`update-test`）不发 ping，避免污染线上统计与 E2E。
 
-use serde::{Deserialize, Serialize};
 
 /// ping 端点：nginx 直接 204，统计走 access log。
 pub const PING_URL: &str = "https://mistlab.dev/downloads/mistterm/ping";
@@ -98,8 +97,4 @@ mod tests {
         // send_probe 只在 send_startup_ping 内部用 https 常量；这里只验证 URL 形态
         assert!(PING_URL.starts_with("https://"));
     }
-
-    #[allow(dead_code)]
-    #[derive(Serialize, Deserialize)]
-    struct SerdeProbe;
 }

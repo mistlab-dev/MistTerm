@@ -28,8 +28,8 @@ pub fn show_agent_install_modal(
         .open(&mut dialog_open)
         .default_pos(layout_util::modal_center_pos(ctx, modal_sz))
         .movable(true)
-        .resizable(true)
-        .default_size(modal_sz)
+        .resizable(false)
+        .fixed_size(modal_sz)
         .show(ctx, |ui| {
             chrome::modal_content_frame(theme).show(ui, |ui| {
                 if chrome::modal_header(ui, theme, title, theme.font_size_modal_title()) {

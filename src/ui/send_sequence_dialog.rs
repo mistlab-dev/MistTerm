@@ -67,10 +67,9 @@ impl SendSequenceDialog {
         let modal_sz = egui::vec2(760.0, 560.0);
         crate::ui::chrome::modal_window("send_sequence_dialog", theme, ctx)
             .open(&mut keep_open)
-            .default_size(modal_sz)
-            .min_width(560.0)
             .movable(true)
-            .resizable(true)
+            .resizable(false)
+            .fixed_size(modal_sz)
             .show(ctx, |ui| {
                 crate::ui::chrome::modal_content_frame(theme).show(ui, |ui| {
                     if crate::ui::chrome::modal_header(
@@ -207,7 +206,7 @@ impl SendSequenceDialog {
             crate::ui::chrome::form_singleline_field(
                 ui,
                 theme,
-                egui::Id::new("send_sequence_name"),
+                egui::Id::unique("send_sequence_name"),
                 &mut self.name,
                 crate::i18n::tr(ctx, "After login", "登录后"),
                 width,
@@ -223,7 +222,7 @@ impl SendSequenceDialog {
                 crate::ui::chrome::form_u32_stepper(
                     ui,
                     theme,
-                    egui::Id::new("send_sequence_delay"),
+                    egui::Id::unique("send_sequence_delay"),
                     &mut self.delay_ms,
                     0..=MAX_DELAY_MS,
                     50,
@@ -247,7 +246,7 @@ impl SendSequenceDialog {
             crate::ui::chrome::form_multiline_field_with_hint(
                 ui,
                 theme,
-                egui::Id::new("send_sequence_body"),
+                egui::Id::unique("send_sequence_body"),
                 &mut self.body,
                 crate::i18n::tr(
                     ctx,

@@ -378,7 +378,7 @@ mod tests {
         std::thread::spawn(move || {
             let ctx = egui::Context::default();
             // 首帧窗口焦点状态变化时 egui 会清空修饰键，先空跑一帧。
-            let _ = ctx.run_pass(egui::RawInput::default(), |_| {});
+            ctx.run_pass(egui::RawInput::default(), |_| {}).textures_delta.clear();
             let raw = egui::RawInput {
                 events: vec![
                     Event::ModifiersChanged(primary_only()),
@@ -388,9 +388,9 @@ mod tests {
             };
             let mut hit = false;
             let mut comma_left = false;
-            let _ = ctx.run_pass(raw, |ctx| {
+            let mut frame = ctx.run_pass(raw, |ctx| {
                 if focus_text_input {
-                    ctx.memory_mut(|m| m.request_focus(egui::Id::new("some_text_edit")));
+                    ctx.memory_mut(|m| m.request_focus(egui::Id::unique("some_text_edit")));
                 }
                 hit = consume_preferences_shortcut(ctx, true);
                 comma_left = ctx.input(|i| {
@@ -399,6 +399,7 @@ mod tests {
                         .any(|e| matches!(e, Event::Text(t) if t == ","))
                 });
             });
+            frame.textures_delta.clear();
             let _ = tx.send((hit, comma_left));
         });
         rx.recv_timeout(std::time::Duration::from_secs(3)).ok()

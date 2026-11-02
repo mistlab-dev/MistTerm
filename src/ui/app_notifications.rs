@@ -92,18 +92,6 @@ pub(crate) fn status_message_looks_like_error(msg: &str) -> bool {
         || body.contains("失败")
 }
 
-/// 提示文案颜色：错误类用主题红，其余用弱文字色。
-pub(super) fn status_message_text_color(
-    msg: &str,
-    theme: &crate::ui::theme::Theme,
-) -> egui::Color32 {
-    if status_message_looks_like_error(msg) {
-        theme.red_color()
-    } else {
-        theme.color_caption_text()
-    }
-}
-
 /// 级别默认标题(无显式 title 时使用)。
 pub(crate) fn default_toast_title(ctx: &egui::Context, kind: ToastKind) -> String {
     match kind {
@@ -179,17 +167,6 @@ impl MistTermApp {
         });
     }
 
-    /// 需用户确认的 Toast：不自动消失，带主操作与关闭。
-    pub(crate) fn push_action_toast(
-        &mut self,
-        kind: ToastKind,
-        text: impl Into<String>,
-        action: ToastAction,
-        action_label: impl Into<String>,
-    ) {
-        self.push_dual_action_toast(kind, text, action, action_label, None, None::<String>);
-    }
-
     pub(crate) fn push_action_toast_titled(
         &mut self,
         kind: ToastKind,
@@ -206,27 +183,6 @@ impl MistTermApp {
             action_label,
             None,
             None::<String>,
-        );
-    }
-
-    /// 需用户确认的 Toast：主操作 + 可选次要操作(如「用到终端」+「存到个人库」)。
-    pub(crate) fn push_dual_action_toast(
-        &mut self,
-        kind: ToastKind,
-        text: impl Into<String>,
-        action: ToastAction,
-        action_label: impl Into<String>,
-        secondary_action: Option<ToastAction>,
-        secondary_action_label: Option<impl Into<String>>,
-    ) {
-        self.push_dual_action_toast_titled(
-            kind,
-            String::new(),
-            text,
-            action,
-            action_label,
-            secondary_action,
-            secondary_action_label,
         );
     }
 
@@ -467,12 +423,18 @@ impl MistTermApp {
         }
         let margin = theme.toast_screen_margin();
         let screen = ctx.content_rect();
+        // #282：右 dock(云同步/团队面板)占位时把通知移到 dock 左侧，避免盖住底部操作区。
+        let mut toast_left = screen.max.x - size.x - margin;
+        if let Some(dock_left) = self.right_dock_outer_left_x {
+            toast_left = toast_left.min(dock_left - size.x - margin);
+        }
+        toast_left = toast_left.max(screen.min.x + margin);
         let pos = egui::pos2(
-            screen.max.x - size.x - margin,
+            toast_left,
             screen.max.y - size.y - margin,
         );
         // 必须 fixed_pos + 限制尺寸：否则 Area 默认可点区会铺满从原点到右下，左侧菜单全部点不穿。
-        egui::Area::new(egui::Id::new("status_toast"))
+        egui::Area::new(egui::Id::unique("status_toast"))
             .order(egui::Order::Foreground)
             .fixed_pos(pos)
             .constrain_to(screen)

@@ -55,7 +55,7 @@ fn warm_terminal_focus(ctx: &egui::Context, terminal_id: Id) {
 fn tab_with_event_filter_keeps_terminal_focus() {
     let ctx = egui::Context::default();
     ctx.set_fonts(egui::FontDefinitions::default());
-    let terminal_id = Id::new("terminal_focus_test_tab");
+    let terminal_id = Id::unique("terminal_focus_test_tab");
 
     warm_terminal_focus(&ctx, terminal_id);
 
@@ -72,7 +72,7 @@ fn tab_with_event_filter_keeps_terminal_focus() {
 fn escape_with_event_filter_keeps_terminal_focus() {
     let ctx = egui::Context::default();
     ctx.set_fonts(egui::FontDefinitions::default());
-    let terminal_id = Id::new("terminal_focus_test_esc");
+    let terminal_id = Id::unique("terminal_focus_test_esc");
 
     warm_terminal_focus(&ctx, terminal_id);
 
@@ -89,7 +89,7 @@ fn escape_with_event_filter_keeps_terminal_focus() {
 fn arrow_with_event_filter_keeps_terminal_focus() {
     let ctx = egui::Context::default();
     ctx.set_fonts(egui::FontDefinitions::default());
-    let terminal_id = Id::new("terminal_focus_test_arrow");
+    let terminal_id = Id::unique("terminal_focus_test_arrow");
 
     warm_terminal_focus(&ctx, terminal_id);
 

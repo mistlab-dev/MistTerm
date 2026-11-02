@@ -258,6 +258,60 @@ pub fn modal_clone_size(ctx: &egui::Context) -> egui::Vec2 {
     )
 }
 
+/// 团队成员弹窗：按登录态与成员数量估算内容高度。
+/// 未登录只有状态/提示/按钮，收成小确认框尺寸；登录后按行数增长，并夹在视口内。
+#[inline]
+pub fn modal_team_members_size(
+    ctx: &egui::Context,
+    logged_in: bool,
+    member_count: usize,
+) -> egui::Vec2 {
+    let r = ctx.content_rect();
+    let sw = r.width().max(360.0);
+    let sh = r.height().max(280.0);
+    let w = (sw * 0.36).clamp(340.0, 520.0);
+    if !logged_in {
+        let h = (sh * 0.24).clamp(170.0, 230.0);
+        return egui::vec2(w.min(420.0), h);
+    }
+    let rows = member_count.max(1) as f32;
+    let list_h = (rows * 36.0).clamp(88.0, 280.0);
+    let h = (214.0 + list_h).clamp(300.0, (sh - 96.0).max(300.0));
+    egui::vec2(w, h)
+}
+
+/// 团队片段版本历史弹窗：无版本时收成小框，版本多时按行数增长并夹在视口内。
+/// 列表区最大高度 = 返回值高 - 150(标题/说明/底栏占位)。
+#[inline]
+pub fn modal_team_fragment_versions_size(ctx: &egui::Context, version_count: usize) -> egui::Vec2 {
+    let r = ctx.content_rect();
+    let sw = r.width().max(360.0);
+    let sh = r.height().max(280.0);
+    let w = (sw * 0.40).clamp(420.0, 620.0);
+    if version_count == 0 {
+        return egui::vec2(w.min(520.0), (sh * 0.26).clamp(200.0, 250.0));
+    }
+    let list_h = (version_count as f32 * 92.0).clamp(120.0, 300.0);
+    let h = (150.0 + list_h).clamp(250.0, (sh - 96.0).max(250.0));
+    egui::vec2(w, h)
+}
+
+/// 「问：我们怎么……」弹窗：未检索时只留输入区，命中后按条数增长并夹在视口内。
+/// 列表区最大高度 = 返回值高 - 190(标题/提示/搜索行/底栏占位)。
+#[inline]
+pub fn modal_ask_knowledge_size(ctx: &egui::Context, searched: bool, hit_count: usize) -> egui::Vec2 {
+    let r = ctx.content_rect();
+    let sw = r.width().max(360.0);
+    let sh = r.height().max(280.0);
+    let w = (sw * 0.44).clamp(480.0, 680.0);
+    if !searched {
+        return egui::vec2(w, (sh * 0.27).clamp(220.0, 270.0));
+    }
+    let list_h = (hit_count as f32 * 96.0).clamp(96.0, 280.0);
+    let h = (190.0 + list_h).clamp(280.0, (sh - 96.0).max(280.0));
+    egui::vec2(w, h)
+}
+
 /// 删除确认等小弹窗(§8.4.6)。
 #[inline]
 pub fn modal_confirm_size(ctx: &egui::Context) -> egui::Vec2 {

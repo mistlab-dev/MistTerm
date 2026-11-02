@@ -972,7 +972,7 @@ impl AiPanel {
 
     /// 附带选区后聚焦输入框(便于直接输入问题)。
     pub fn focus_draft_input(&self, ctx: &egui::Context) {
-        ctx.memory_mut(|m| m.request_focus(egui::Id::new("mistterm_ai_draft")));
+        ctx.memory_mut(|m| m.request_focus(egui::Id::unique("mistterm_ai_draft")));
     }
 
     /// 只有 AI 输入框真正聚焦时才阻止终端接收键盘；普通查看 AI 回复不应抢 PTY。
@@ -1764,7 +1764,7 @@ impl AiPanel {
                 crate::ui::chrome::form_u32_stepper(
                     ui,
                     theme,
-                    egui::Id::new("ai_settings_max_tokens"),
+                    egui::Id::unique("ai_settings_max_tokens"),
                     &mut settings.max_tokens,
                     256..=128_000,
                     256,
@@ -1781,7 +1781,7 @@ impl AiPanel {
                 if crate::ui::chrome::form_u32_stepper(
                     ui,
                     theme,
-                    egui::Id::new("ai_settings_timeout"),
+                    egui::Id::unique("ai_settings_timeout"),
                     &mut timeout,
                     5..=600,
                     1,
@@ -1801,7 +1801,7 @@ impl AiPanel {
                 crate::ui::chrome::form_u32_stepper(
                     ui,
                     theme,
-                    egui::Id::new("ai_settings_retries"),
+                    egui::Id::unique("ai_settings_retries"),
                     &mut settings.request_retries,
                     0..=10,
                     1,
@@ -2270,7 +2270,7 @@ impl AiPanel {
                     crate::ui::chrome::form_singleline_field(
                         ui,
                         theme,
-                        egui::Id::new("ai_plan_command_edit"),
+                        egui::Id::unique("ai_plan_command_edit"),
                         &mut plan.command_edit,
                         "",
                         ui.available_width(),
@@ -3067,7 +3067,7 @@ impl AiPanel {
                         ctx,
                         theme,
                         context,
-                        ui.id().with(("msg_ctx", msg_index, ci)),
+                        ui.scope_id().with(("msg_ctx", msg_index, ci)),
                         ci,
                         false,
                         &mut remove,
@@ -3264,7 +3264,7 @@ impl AiPanel {
         let can_type = ready && !self.is_background_busy();
         let can_send = self.can_send_now(app_settings);
         let generating = self.busy || self.streaming;
-        let draft_id = egui::Id::new("mistterm_ai_draft");
+        let draft_id = egui::Id::unique("mistterm_ai_draft");
         let focused = ui.memory(|m| m.has_focus(draft_id));
         self.draft_input_focused = focused;
         // Enter 发送；Shift+Enter 换行。须在 TextEdit 之前吃掉 Enter，避免插入换行。
@@ -3356,7 +3356,7 @@ impl AiPanel {
             ui.spacing_mut().item_spacing.x = 6.0;
             if ui
                 .add_enabled_ui(can_type, |ui| {
-                    crate::ui::chrome::panel_toolbar_icon_button(
+                    crate::ui::chrome::panel_ai_action_icon_button(
                         ui,
                         theme,
                         IconId::TerminalPrompt,
@@ -3370,7 +3370,7 @@ impl AiPanel {
             }
             if ui
                 .add_enabled_ui(can_type, |ui| {
-                    crate::ui::chrome::panel_toolbar_icon_button(
+                    crate::ui::chrome::panel_ai_action_icon_button(
                         ui,
                         theme,
                         IconId::Attachment,
@@ -3385,7 +3385,7 @@ impl AiPanel {
             let mut attach_failure_clicked = false;
             if ui
                 .add_enabled_ui(can_type, |ui| {
-                    crate::ui::chrome::panel_toolbar_icon_button(
+                    crate::ui::chrome::panel_ai_action_icon_button(
                         ui,
                         theme,
                         IconId::Warning,
@@ -3403,7 +3403,7 @@ impl AiPanel {
             let mut postmortem_clicked = false;
             if ui
                 .add_enabled_ui(can_type, |ui| {
-                    crate::ui::chrome::panel_toolbar_icon_button(
+                    crate::ui::chrome::panel_ai_action_icon_button(
                         ui,
                         theme,
                         IconId::File,
@@ -3500,7 +3500,7 @@ impl AiPanel {
                     ctx,
                     theme,
                     context,
-                    egui::Id::new(("mistterm_ai_input_ctx", i)),
+                    egui::Id::unique(("mistterm_ai_input_ctx", i)),
                     i,
                     true,
                     &mut remove,
@@ -4319,14 +4319,6 @@ fn stored_to_context_ref(c: StoredContextRef) -> TerminalContextRef {
         original_char_count: c.original_char_count,
         source_key: c.source_key,
     }
-}
-
-fn msg_stable_id(label: &str) -> u64 {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-    let mut h = DefaultHasher::new();
-    label.hash(&mut h);
-    h.finish()
 }
 
 fn ui_message_to_stored(m: &UiMessage) -> StoredAiMessage {

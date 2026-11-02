@@ -665,6 +665,12 @@ pub fn right_dock_header_divider(ui: &mut Ui, theme: &Theme) {
 /// `ctx.available_rect()` 内，右 dock 打开后无法把弹窗拖到 dock 上方。
 ///
 /// 首次居中请用 [`layout_util::modal_center_pos`] + `.default_pos(...)`，勿 `.anchor(...)`(拖拽会弹回)。
+///
+/// 尺寸策略：本函数**不**设置 `resizable`，由各调用点显式决定。
+/// - 固定尺寸弹窗：一律 `.resizable(false).fixed_size(sz)`，不得开 resize，否则内容会把宽/高
+///   钉回原值，出现「看起来能拖但拖不动」的假手柄。
+/// - 允许拖动缩放的弹窗：内容必须尺寸弹性(不要 `set_min_width`/`set_min_size` 钉死，
+///   滚动区不要用 `available_height` 反向撑满窗口)。
 pub fn modal_window<'a>(
     window_id: &'a str,
     theme: &Theme,
@@ -727,7 +733,7 @@ pub fn paint_right_dock_slot_gap(ctx: &egui::Context, theme: &Theme, slot: egui:
     }
     let layer_id = egui::LayerId::new(
         egui::Order::Background,
-        egui::Id::new("mistterm_right_dock_slot_bg"),
+        egui::Id::unique("mistterm_right_dock_slot_bg"),
     );
     let painter = ctx.layer_painter(layer_id);
     painter.rect_filled(bg, 0.0, theme.bg_body_color());
@@ -747,7 +753,7 @@ pub fn paint_right_dock_left_gap(ui: &egui::Ui, theme: &Theme) {
     }
     let layer_id = egui::LayerId::new(
         egui::Order::Background,
-        egui::Id::new("mistterm_right_dock_slot_bg"),
+        egui::Id::unique("mistterm_right_dock_slot_bg"),
     );
     let painter = ui.ctx().layer_painter(layer_id);
     painter.rect_filled(bg, 0.0, theme.bg_body_color());
@@ -774,7 +780,7 @@ pub fn paint_right_dock_screen_gutter(ctx: &egui::Context, theme: &Theme, top_ch
     let gutter = egui::Rect::from_min_max(egui::pos2(x0, y0), screen.max);
     let layer_id = egui::LayerId::new(
         egui::Order::Background,
-        egui::Id::new("mistterm_right_dock_gutter"),
+        egui::Id::unique("mistterm_right_dock_gutter"),
     );
     ctx.layer_painter(layer_id)
         .rect_filled(gutter, 0.0, theme.bg_body_color());
@@ -841,12 +847,12 @@ pub fn right_dock_slot_content_rect(slot: egui::Rect, theme: &Theme) -> egui::Re
 /// Central 之后 Foreground 重绘右 dock 用的图层(仅绘制壳层，勿在此注册可点 `Area`)。
 #[inline]
 pub fn right_dock_foreground_layer_id(id: &'static str) -> egui::LayerId {
-    egui::LayerId::new(egui::Order::Middle, egui::Id::new(id))
+    egui::LayerId::new(egui::Order::Middle, egui::Id::unique(id))
 }
 
 /// 右 dock Foreground `Area`(可点层)；正文仍在 `inner` 子区域布局。
 pub fn right_dock_foreground_body_area(id: &'static str) -> egui::Area {
-    egui::Area::new(egui::Id::new(id))
+    egui::Area::new(egui::Id::unique(id))
         .order(egui::Order::Middle)
         .movable(false)
         .interactable(true)
@@ -962,7 +968,7 @@ pub fn show_right_dock_resize_grip_layer(
     if !gutter.is_positive() {
         return;
     }
-    egui::Area::new(egui::Id::new((area_id, "resize_grip_layer")))
+    egui::Area::new(egui::Id::unique((area_id, "resize_grip_layer")))
         .order(egui::Order::Foreground)
         .movable(false)
         .interactable(true)
@@ -970,7 +976,7 @@ pub fn show_right_dock_resize_grip_layer(
         .show(ctx, |ui| {
             ui.set_min_size(gutter.size());
             ui.set_max_size(gutter.size());
-            let response = ui.interact(gutter, ui.id(), egui::Sense::drag());
+            let response = ui.interact(gutter, ui.scope_id(), egui::Sense::drag());
             if response.hovered() || response.dragged() {
                 ctx.set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
                 let stroke = if response.dragged() {
@@ -982,7 +988,7 @@ pub fn show_right_dock_resize_grip_layer(
                 ui.painter().vline(x, gutter.y_range(), stroke);
             }
             if response.dragged() {
-                let id = egui::Id::new(panel_id);
+                let id = egui::Id::unique(panel_id);
                 if let Some(mut state) = egui::containers::panel::PanelState::load(ctx, id) {
                     let dx = ui.input(|i| i.pointer.delta().x);
                     let current_w = state.outer_rect.width();
@@ -1397,7 +1403,6 @@ pub fn paint_sidebar_selection_accent(
 #[derive(Clone, Copy, PartialEq)]
 enum ControlButtonVariant {
     Primary,
-    ToolbarPrimary,
     Secondary,
     Danger,
 }
@@ -1545,21 +1550,6 @@ fn primary_control_button_colors(
     (theme.color_modal_primary_fill(), c, c)
 }
 
-/// 面板命令栏「强调次要」：暗夜与 Secondary 同族；彩色主题可走实心主色。
-/// 真正的主操作请用 [`ControlButtonVariant::Primary`] / `panel_solid_primary_*` / `panel_action_primary_*`。
-fn toolbar_primary_control_button_colors(
-    theme: &Theme,
-    can_activate: bool,
-    hovered: bool,
-    pressed: bool,
-) -> (Color32, Color32, Color32) {
-    if theme.uses_modern_palette() {
-        secondary_control_button_colors(theme, can_activate, hovered, pressed)
-    } else {
-        primary_control_button_colors(theme, can_activate, hovered, pressed)
-    }
-}
-
 fn paint_control_button(
     ui: &mut Ui,
     theme: &Theme,
@@ -1580,13 +1570,6 @@ fn paint_control_button(
 
     let stroke = match variant {
         ControlButtonVariant::Primary => egui::Stroke::NONE,
-        ControlButtonVariant::ToolbarPrimary => {
-            if theme.uses_modern_palette() {
-                theme.color_control_secondary_stroke(can_activate)
-            } else {
-                egui::Stroke::NONE
-            }
-        }
         ControlButtonVariant::Secondary => theme.color_control_secondary_stroke(can_activate),
         ControlButtonVariant::Danger => egui::Stroke::new(1.0, theme.color_text_input_stroke()),
     };
@@ -1596,9 +1579,6 @@ fn paint_control_button(
         }
         ControlButtonVariant::Primary => {
             primary_control_button_colors(theme, can_activate, hovered, pressed)
-        }
-        ControlButtonVariant::ToolbarPrimary => {
-            toolbar_primary_control_button_colors(theme, can_activate, hovered, pressed)
         }
         ControlButtonVariant::Secondary => {
             secondary_control_button_colors(theme, can_activate, hovered, pressed)
@@ -1689,13 +1669,6 @@ fn paint_icon_only_button_at(
 
     let stroke = match variant {
         ControlButtonVariant::Primary => egui::Stroke::NONE,
-        ControlButtonVariant::ToolbarPrimary => {
-            if theme.uses_modern_palette() {
-                theme.color_control_secondary_stroke(can_activate)
-            } else {
-                egui::Stroke::NONE
-            }
-        }
         ControlButtonVariant::Secondary => theme.color_control_secondary_stroke(can_activate),
         ControlButtonVariant::Danger => egui::Stroke::new(1.0, theme.color_text_input_stroke()),
     };
@@ -1703,12 +1676,6 @@ fn paint_icon_only_button_at(
         ControlButtonVariant::Primary => {
             let (fill, text, icon) =
                 primary_control_button_colors(theme, can_activate, hovered, pressed);
-            let _ = text;
-            (fill, icon)
-        }
-        ControlButtonVariant::ToolbarPrimary => {
-            let (fill, text, icon) =
-                toolbar_primary_control_button_colors(theme, can_activate, hovered, pressed);
             let _ = text;
             (fill, icon)
         }
@@ -1837,6 +1804,25 @@ pub fn panel_toolbar_icon_button(
         icon,
         ControlButtonVariant::Secondary,
         header_toolbar_icon_button_size(theme),
+        true,
+    )
+    .on_hover_text(tooltip)
+}
+
+/// AI 面板底部操作栏纯图标按钮(28×28，悬停文案见 `tooltip`)。
+pub fn panel_ai_action_icon_button(
+    ui: &mut Ui,
+    theme: &Theme,
+    icon: IconId,
+    tooltip: &str,
+) -> Response {
+    let side = theme.size_ai_action_btn();
+    paint_icon_only_button_at(
+        ui,
+        theme,
+        icon,
+        ControlButtonVariant::Secondary,
+        egui::vec2(side, side),
         true,
     )
     .on_hover_text(tooltip)
@@ -2177,7 +2163,7 @@ pub fn form_inline_singleline(
                     .frame(egui::Frame::NONE)
                     .desired_width((width - 8.0).max(40.0))
                     .margin(egui::vec2(0.0, 0.0))
-                    .vertical_align(egui::Align::Center)
+                    .align(egui::Align2::CENTER_CENTER)
                     .text_color(theme.color_text_input_text())
                     .font(egui::FontId::proportional(theme.font_size_control_input()));
                 if !hint.is_empty() {
@@ -2229,7 +2215,7 @@ pub fn form_checkbox_with_id(
     value: &mut bool,
     text: &str,
 ) -> Response {
-    ui.push_id(egui::Id::new(id), |ui| {
+    ui.push_id(egui::Id::unique(id), |ui| {
         let rounding = egui::CornerRadius::same(theme.radius_checkbox() as u8);
         let off_border = theme.color_checkbox_off_stroke_color();
         let w = &mut ui.style_mut().visuals.widgets;
@@ -2791,7 +2777,7 @@ pub fn segmented_control_row(
         } else {
             theme.color_segment_idle_text()
         };
-        let resp = ui.interact(seg_rect, ui.id().with(("seg", idx)), Sense::click());
+        let resp = ui.interact(seg_rect, ui.scope_id().with(("seg", idx)), Sense::click());
         paint_caption_in_rect_center(
             ui,
             seg_rect,
@@ -2826,7 +2812,7 @@ pub fn button_group_toolbar(
         return None;
     }
 
-    ui.push_id(egui::Id::new(id_salt), |ui| {
+    ui.push_id(egui::Id::unique(id_salt), |ui| {
         let pad = theme.spacing_button_group_pad();
         let icon_px = theme.size_icon_glyph();
         let gap = 4.0;
@@ -2882,7 +2868,7 @@ pub fn button_group_toolbar(
             } else {
                 Sense::hover()
             };
-            let resp = ui.interact(item_rect, ui.id().with(("bgrp", idx)), sense);
+            let resp = ui.interact(item_rect, ui.scope_id().with(("bgrp", idx)), sense);
             let text_color = if action.enabled {
                 if resp.hovered() {
                     theme.text_primary()
@@ -3017,7 +3003,7 @@ pub fn sftp_toolbar_actions(
         return None;
     }
     let mut clicked = None;
-    ui.push_id(egui::Id::new(id_salt), |ui| {
+    ui.push_id(egui::Id::unique(id_salt), |ui| {
         ui.spacing_mut().item_spacing.x = theme.spacing_xs();
         for (idx, action) in actions.iter().enumerate() {
             let tip = if action.tooltip.is_empty() {
@@ -3032,7 +3018,7 @@ pub fn sftp_toolbar_actions(
                 action.label,
                 tip,
                 action.enabled,
-                ui.id().with(idx),
+                ui.scope_id().with(idx),
             )
             .clicked()
                 && action.enabled
@@ -3254,7 +3240,8 @@ pub fn form_singleline_field(
     shown.inner
 }
 
-/// 始终有底+描边的单行输入（凭证库等需要一眼看出输入区的场景；不受 modern 下划线模式影响）。
+/// 表单实心单行输入框(凭证库 / 表单弹窗用)：暗夜 #1e1e1e 底 + 1px #3c3c3c 描边，
+/// 不走 [`form_singleline_field`] 的下划线样式，便于和同高的按钮并排对齐。
 pub fn form_singleline_field_boxed(
     ui: &mut Ui,
     theme: &Theme,
@@ -3265,17 +3252,39 @@ pub fn form_singleline_field_boxed(
     password: bool,
 ) -> Response {
     let focused = ui.memory(|m| m.has_focus(id));
-    let inner_w = (desired_width - theme.spacing_search_input_x() * 2.0 - 4.0).max(48.0);
-    theme
-        .frame_boxed_text_input(focused)
-        .show(ui, |ui| {
-            with_underline_field_visuals(ui, theme, |ui| {
+    let row_h = theme.size_control_btn_h().max(28.0);
+    let width = desired_width.max(96.0);
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, row_h), Sense::hover());
+    let stroke = if focused {
+        egui::Stroke::new(1.0, theme.accent_color())
+    } else {
+        egui::Stroke::new(1.0, theme.color_form_input_stroke())
+    };
+    ui.painter().rect(
+        rect,
+        theme.radius_search_input(),
+        theme.color_form_input_fill(),
+        stroke,
+        egui::StrokeKind::Inside,
+    );
+    let pad_x = theme.spacing_search_input_x();
+    let inner = egui::Rect::from_min_max(
+        egui::pos2(rect.left() + pad_x, rect.top()),
+        egui::pos2(rect.right() - pad_x, rect.bottom()),
+    );
+    ui.scope_builder(
+        egui::UiBuilder::new().max_rect(inner),
+        |ui| {
+            ui.set_min_size(inner.size());
+            ui.set_max_size(inner.size());
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                 let prev_override = ui.style_mut().visuals.override_text_color;
                 ui.style_mut().visuals.override_text_color = Some(theme.color_form_hint());
                 let mut edit = egui::TextEdit::singleline(text)
                     .id(id)
                     .frame(egui::Frame::NONE)
-                    .desired_width(inner_w)
+                    .desired_width(inner.width().max(40.0))
+                    .align(egui::Align2::CENTER_CENTER)
                     .text_color(theme.color_text_input_text())
                     .font(egui::FontId::proportional(theme.font_size_control_input()));
                 if !hint.is_empty() {
@@ -3288,8 +3297,10 @@ pub fn form_singleline_field_boxed(
                 ui.style_mut().visuals.override_text_color = prev_override;
                 response
             })
-        })
-        .inner
+            .inner
+        },
+    )
+    .inner
 }
 
 /// 多行输入框：始终用有底边框(不下划线)，避免「上面光标、下面一根线」的假高行。
@@ -3323,12 +3334,9 @@ pub fn form_multiline_field_with_hint(
     egui::Frame::NONE
         .fill(theme.color_text_input_fill())
         .stroke(if focused {
-            egui::Stroke::new(theme.stroke_width_panel().max(1.0), theme.accent_color())
+            egui::Stroke::new(1.0, theme.accent_color())
         } else {
-            egui::Stroke::new(
-                theme.stroke_width_panel().max(1.0),
-                theme.color_text_input_stroke(),
-            )
+            egui::Stroke::new(1.0, theme.color_form_input_stroke())
         })
         .corner_radius(theme.radius_search_input())
         .inner_margin(egui::Margin::symmetric(theme.spacing_search_input_x() as i8, pad_y as i8))
@@ -3571,18 +3579,6 @@ pub fn panel_search_row(
 }
 
 /// 侧栏搜索框([`panel_search_row`] 别名)
-pub fn sidebar_search_field(
-    ui: &mut Ui,
-    theme: &Theme,
-    id: egui::Id,
-    query: &mut String,
-    hint: &str,
-    desired_width: f32,
-) -> Response {
-    let _ = desired_width;
-    panel_search_row(ui, theme, id, query, hint, None)
-}
-
 /// 左栏顶部 SSH 配置导入提示条(§4.2，约 34px，弱提示)
 pub struct SshImportBannerAction {
     pub import: bool,
@@ -4430,6 +4426,35 @@ pub fn modal_header(ui: &mut Ui, theme: &Theme, title: &str, title_px: f32) -> b
     closed
 }
 
+/// 弹窗标题行(标题 + 右侧 ×，无前置图标)。
+/// 用于「帮助」等无需通用加号图标、避免标题前出现误导读致的弹窗。
+pub fn modal_header_plain(ui: &mut Ui, theme: &Theme, title: &str) -> bool {
+    let mx = theme.spacing_modal_content_x();
+    let my = theme.spacing_modal_content_y();
+    let mut closed = false;
+    let band = theme
+        .frame_modal_title_band()
+        .outer_margin(egui::Margin {
+            left: -mx as i8,
+            right: -mx as i8,
+            top: -my as i8,
+            bottom: 0,
+        })
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(rich_panel_header_title(theme, title));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if close_icon_button(ui, theme).clicked() {
+                        closed = true;
+                    }
+                });
+            });
+        });
+    paint_modal_header_bottom_divider(ui, theme, band.response.rect);
+    ui.add_space(theme.spacing_modal_header_after_sep());
+    closed
+}
+
 fn paint_modal_header_bottom_divider(ui: &mut Ui, theme: &Theme, band: egui::Rect) {
     let hairline = theme.hairline_width(ui.ctx());
     let y = theme.snap_y_to_pixel(ui.ctx(), band.bottom() - hairline * 0.5);
@@ -4528,6 +4553,44 @@ pub fn panel_action_button(ui: &mut Ui, theme: &Theme, label: &str) -> Response 
 /// 带启用态的面板次要按钮
 pub fn panel_action_button_ex(ui: &mut Ui, theme: &Theme, label: &str, enabled: bool) -> Response {
     panel_action_button_ex_min_w(ui, theme, label, enabled, theme.size_control_btn_min_w())
+}
+
+/// 把已绘制的按钮标记为「禁用」并挂上「为什么点不动」的悬停说明。
+/// 自绘按钮用 `Sense::click()` 分配、悬停仍可达，`Response::enabled` 默认是 `true`；
+/// 不显式置 false 的话 [`egui::Response::on_disabled_hover_text`] 永远不会触发。
+/// 只在 `enabled == false` 时挂提示，避免无差别给所有按钮加 tooltip。
+pub fn disabled_action_with_reason(mut response: Response, enabled: bool, reason: &str) -> Response {
+    if !enabled {
+        // 0.37 Response 不再暴露 enabled 字段/setter：自绘按钮用 Sense::hover()
+        // 即可同时达成「不响应点击 + 悬停 tooltip 可达」，与原语义一致。
+        response = response.interact(egui::Sense::hover());
+        response = response.on_disabled_hover_text(reason);
+    }
+    response
+}
+
+/// 常显的灰字「为什么禁用」提示(命令历史 / 粘贴历史底栏等需要一眼可见的场合)。
+pub fn disabled_reason_hint(ui: &mut Ui, theme: &Theme, text: &str) {
+    ui.label(
+        egui::RichText::new(text)
+            .size(theme.font_size_small())
+            .color(theme.text_tertiary()),
+    );
+}
+
+/// 带禁用原因的次要按钮；`reason_when_disabled` 仅在 `enabled == false` 时显示。
+pub fn panel_action_button_ex_with_reason(
+    ui: &mut Ui,
+    theme: &Theme,
+    label: &str,
+    enabled: bool,
+    reason_when_disabled: &str,
+) -> Response {
+    disabled_action_with_reason(
+        panel_action_button_ex(ui, theme, label, enabled),
+        enabled,
+        reason_when_disabled,
+    )
 }
 
 /// 指定最小宽度的次要按钮(通栏 / 等分列用)。
@@ -4908,8 +4971,8 @@ pub fn form_u32_stepper(
                 egui::TextEdit::singleline(&mut text)
                     .id(id)
                     .desired_width(field_w - 8.0)
-                    .horizontal_align(egui::Align::Center)
-                    .vertical_align(egui::Align::Center)
+                    .align(egui::Align2::CENTER_CENTER)
+                    .align(egui::Align2::CENTER_CENTER)
                     .margin(egui::vec2(0.0, 0.0))
                     .font(egui::FontId::proportional(theme.font_size_ui_control()))
                     .frame(egui::Frame::NONE),
@@ -5040,8 +5103,8 @@ pub fn form_f32_stepper(
                 egui::TextEdit::singleline(&mut text)
                     .id(id)
                     .desired_width(field_w - 8.0)
-                    .horizontal_align(egui::Align::Center)
-                    .vertical_align(egui::Align::Center)
+                    .align(egui::Align2::CENTER_CENTER)
+                    .align(egui::Align2::CENTER_CENTER)
                     .margin(egui::vec2(0.0, 0.0))
                     .font(egui::FontId::proportional(theme.font_size_ui_control()))
                     .frame(egui::Frame::NONE),

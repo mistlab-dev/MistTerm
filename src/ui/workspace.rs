@@ -482,7 +482,7 @@ impl MistTermApp {
                                         .active_ssh_disconnect_banner(std::time::Instant::now())
                                         .is_some();
                                     let disconnect_t = ctx.animate_bool_with_time(
-                                        egui::Id::new("ssh_disconnect_banner"),
+                                        egui::Id::unique("ssh_disconnect_banner"),
                                         disconnect_open,
                                         0.18,
                                     );
@@ -1132,7 +1132,7 @@ impl MistTermApp {
                             crate::ui::chrome::form_multiline_field_with_hint(
                                 ui,
                                 theme,
-                                egui::Id::new("edit_session_local_forwards"),
+                                egui::Id::unique("edit_session_local_forwards"),
                                 &mut self.edit_session_local_forwards_text,
                                 crate::i18n::tr(
                                     ctx,
@@ -1156,7 +1156,7 @@ impl MistTermApp {
                             crate::ui::chrome::form_multiline_field_with_hint(
                                 ui,
                                 theme,
-                                egui::Id::new("edit_session_remote_forwards"),
+                                egui::Id::unique("edit_session_remote_forwards"),
                                 &mut self.edit_session_remote_forwards_text,
                                 crate::i18n::tr(
                                     ctx,
@@ -1180,7 +1180,7 @@ impl MistTermApp {
                             crate::ui::chrome::form_multiline_field_with_hint(
                                 ui,
                                 theme,
-                                egui::Id::new("edit_session_dynamic_forwards"),
+                                egui::Id::unique("edit_session_dynamic_forwards"),
                                 &mut self.edit_session_dynamic_forwards_text,
                                 crate::i18n::tr(
                                     ctx,
@@ -1201,7 +1201,7 @@ impl MistTermApp {
                             crate::ui::chrome::form_multiline_field_with_hint(
                                 ui,
                                 theme,
-                                egui::Id::new("edit_session_post_connect_command"),
+                                egui::Id::unique("edit_session_post_connect_command"),
                                 &mut self.edit_session_post_connect_command,
                                 crate::i18n::tr(
                                     ctx,
@@ -1285,7 +1285,7 @@ impl MistTermApp {
                                         crate::ui::chrome::form_u32_stepper(
                                             ui,
                                             theme,
-                                            egui::Id::new("edit_sess_ka_interval"),
+                                            egui::Id::unique("edit_sess_ka_interval"),
                                             &mut self.edit_session_keepalive_interval_secs,
                                             5..=300,
                                             5,
@@ -1301,7 +1301,7 @@ impl MistTermApp {
                                         crate::ui::chrome::form_u8_stepper(
                                             ui,
                                             theme,
-                                            egui::Id::new("edit_sess_ka_count"),
+                                            egui::Id::unique("edit_sess_ka_count"),
                                             &mut self.edit_session_keepalive_count_max,
                                             1..=20,
                                             1,
@@ -1474,7 +1474,7 @@ impl MistTermApp {
                                 crate::ui::chrome::form_singleline_field(
                                     ui,
                                     theme,
-                                    egui::Id::new(("pending_frag_var", key.as_str())),
+                                    egui::Id::unique(("pending_frag_var", key.as_str())),
                                     value,
                                     "",
                                     var_field_w,
@@ -1504,7 +1504,7 @@ impl MistTermApp {
                             crate::ui::chrome::form_multiline_field(
                                 ui,
                                 theme,
-                                egui::Id::new("pending_frag_cmd_edit"),
+                                egui::Id::unique("pending_frag_cmd_edit"),
                                 &mut self.pending_fragment_command_edit,
                                 var_field_w,
                                 4,
@@ -1662,7 +1662,7 @@ impl MistTermApp {
                         crate::ui::chrome::search_field(
                             ui,
                             theme,
-                            egui::Id::new("quick_fragment_search"),
+                            egui::Id::unique("quick_fragment_search"),
                             &mut self.quick_selector.search_query,
                             crate::i18n::tr(ctx, "Search snippets…", "搜索片段…"),
                             q_search_w,
@@ -1756,7 +1756,7 @@ impl MistTermApp {
             let scroll_h = layout_util::dialog_scroll_max_height(ctx, 240.0);
             let mut should_close = false;
             crate::ui::chrome::modal_window("fragment_variable_modal", theme, ctx)
-                .id(egui::Id::new("mistterm_fragment_variable_dialog"))
+                .id(egui::Id::unique("mistterm_fragment_variable_dialog"))
                 .movable(true)
                 .resizable(true)
                 .default_pos(layout_util::modal_center_pos(ctx, var_sz_v))
@@ -1807,7 +1807,7 @@ impl MistTermApp {
                                             crate::ui::chrome::form_singleline_field(
                                                 ui,
                                                 theme,
-                                                egui::Id::new(("var_dialog", var.name.as_str())),
+                                                egui::Id::unique(("var_dialog", var.name.as_str())),
                                                 value,
                                                 var.default_value.as_deref().unwrap_or(""),
                                                 var_w,
@@ -1847,7 +1847,7 @@ impl MistTermApp {
                                         crate::ui::chrome::form_multiline_field(
                                             ui,
                                             theme,
-                                            egui::Id::new("var_dialog_cmd_edit"),
+                                            egui::Id::unique("var_dialog_cmd_edit"),
                                             &mut self.variable_dialog.command_edit,
                                             layout_util::finite_content_width(ui),
                                             5,
@@ -1970,7 +1970,7 @@ impl MistTermApp {
             }
             ctx.move_to_top(egui::LayerId::new(
                 egui::Order::Middle,
-                egui::Id::new("mistterm_fragment_variable_dialog"),
+                egui::Id::unique("mistterm_fragment_variable_dialog"),
             ));
         }
 
@@ -2175,7 +2175,7 @@ impl MistTermApp {
             "Server-side audit unavailable; commands use local checks only",
             "服务器侧审计不可用，命令将仅做本地检查",
         );
-        let close_id = egui::Id::new("agent_audit_banner_close");
+        let close_id = egui::Id::unique("agent_audit_banner_close");
         let close_w = theme.spacing_lg() + theme.font_size_small();
         let text_rect = rect.shrink2(egui::vec2(theme.spacing_sm(), theme.spacing_xs()));
         let text_rect = egui::Rect::from_min_max(

@@ -35,8 +35,8 @@ pub fn show_audit_timeline_modal(
         .open(&mut dialog_open)
         .default_pos(layout_util::modal_center_pos(ctx, modal_sz))
         .movable(true)
-        .resizable(true)
-        .default_size(modal_sz)
+        .resizable(false)
+        .fixed_size(modal_sz)
         .show(ctx, |ui| {
             chrome::modal_content_frame(theme).show(ui, |ui| {
                 if chrome::modal_header(ui, theme, title, theme.font_size_modal_title()) {
@@ -55,14 +55,13 @@ pub fn show_audit_timeline_modal(
 
                 crate::ui::chrome::form_control_row(ui, theme, |ui| {
                     chrome::form_inline_label(ui, theme, crate::i18n::tr(ctx, "Host", "主机"));
-                    chrome::form_inline_singleline(
+                    chrome::search_field(
                         ui,
                         theme,
-                        egui::Id::new("audit_timeline_host_filter"),
+                        egui::Id::unique("audit_timeline_host_filter"),
                         host_filter,
                         crate::i18n::tr(ctx, "Filter host…", "筛选主机…"),
                         190.0,
-                        false,
                     );
                     chrome::form_inline_label(ui, theme, crate::i18n::tr(ctx, "Outcome", "结果"));
                     chrome::form_combo(

@@ -172,7 +172,7 @@ pub fn run_batch(
 ) -> Result<i32> {
     let targets: Vec<SessionConfig> = ctx
         .sessions
-        .get_sessions()
+        .list_sessions()
         .iter()
         .filter(|s| all || group.map(|g| s.group == g).unwrap_or(false))
         .cloned()

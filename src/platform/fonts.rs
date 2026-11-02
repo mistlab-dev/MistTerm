@@ -241,7 +241,7 @@ pub fn configure_terminal_font(ctx: &egui::Context, selection: &TerminalFontSele
     if !loaded {
         log::warn!("CJK font not loaded; Chinese UI text may show as tofu");
         ctx.data_mut(|d| {
-            d.insert_temp(egui::Id::new("mist_cjk_font_missing"), ());
+            d.insert_temp(egui::Id::unique("mist_cjk_font_missing"), ());
         });
     }
     loaded

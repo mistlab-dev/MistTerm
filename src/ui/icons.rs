@@ -119,11 +119,11 @@ pub struct UiIcons {
 }
 
 fn icons_store_id() -> egui::Id {
-    egui::Id::new("mist_ui_icons")
+    egui::Id::unique("mist_ui_icons")
 }
 
 fn icons_ppp_id() -> egui::Id {
-    egui::Id::new("mist_ui_icons_ppp")
+    egui::Id::unique("mist_ui_icons_ppp")
 }
 
 impl UiIcons {
@@ -475,8 +475,10 @@ fn draw_icon_cell(img: &mut RgbaImage, id: IconId, cell: u32) {
             w,
         ),
         IconId::Search => {
-            p.circle(0.42, 0.42, 0.22, w);
-            p.segs(&[(0.58, 0.58, 0.78, 0.78)], w);
+            // 放大镜：小圆 + 明显把手，避免被看成孤立小圆圈。
+            let w = 2.2_f32;
+            p.circle(0.38, 0.38, 0.20, w);
+            p.segs(&[(0.53, 0.53, 0.82, 0.82)], w);
         }
         IconId::Monitor => {
             let w = 2.2_f32;

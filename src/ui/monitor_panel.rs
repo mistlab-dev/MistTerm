@@ -102,6 +102,15 @@ impl MonitorPanel {
         std::mem::take(&mut self.pending_rising_alerts)
     }
 
+    /// 偏好设置「监控告警」直接编辑当前会话阈值（CPU / 内存 / 磁盘，%）。
+    pub fn alert_thresholds_mut(&mut self) -> (&mut f32, &mut f32, &mut f32) {
+        (
+            &mut self.alert_cpu_pct,
+            &mut self.alert_mem_pct,
+            &mut self.alert_disk_pct,
+        )
+    }
+
     /// 用给定 locale 重新计算当前告警文案（供通知正文）。
     pub fn current_alert_lines(&self, loc: crate::i18n::Locale) -> Vec<String> {
         let Some(mon) = self.monitor.as_ref() else {
@@ -691,7 +700,7 @@ impl MonitorPanel {
                     let _ = crate::ui::chrome::form_f32_stepper(
                         ui,
                         theme,
-                        egui::Id::new(("monitor_alert_th", idx)),
+                        egui::Id::unique(("monitor_alert_th", idx)),
                         pct,
                         50.0..=100.0,
                         1.0,
@@ -941,12 +950,12 @@ impl MonitorPanel {
 
     /// 显示负载标签
     fn load_chip(&self, ui: &mut egui::Ui, theme: &Theme, label: &str, value: f32) {
-        let color = if value < 1.0 {
-            theme.green_color()
+        let color = if value < 2.0 {
+            theme.text_primary()
         } else if value < 4.0 {
-            theme.amber_color()
+            theme.metric_warn_color()
         } else {
-            theme.red_color()
+            theme.metric_alert_color()
         };
 
         egui::Frame::NONE
@@ -1057,9 +1066,9 @@ impl MonitorPanel {
         let width = layout_util::dock_scroll_content_width(ui, content_w);
         ui.set_max_width(width);
         let plot_margin = egui::vec2(0.05, 0.0);
-        let y_axis = vec![AxisHints::new_y().max_digits(Y_AXIS_DIGITS)];
-        let link_x_id = ui.id().with("monitor_hist_time_axis");
-        let tip_id = ui.id().with("monitor_history_tooltip");
+        let y_axis = vec![AxisHints::new_y().min_thickness(12.0 * Y_AXIS_DIGITS as f32)];
+        let link_x_id = ui.scope_id().with("monitor_hist_time_axis");
+        let _tip_id = ui.scope_id().with("monitor_history_tooltip");
 
         if history.len() < 2 {
             // #251：首次空图骨架 +「数据采集中…」，避免整片灰字空白。
@@ -1137,7 +1146,7 @@ impl MonitorPanel {
         let mut hover_idx: Option<usize> = None;
 
         let pct_resp = monitor_hist_plot(
-            ui.id().with("mist_monitor_pct"),
+            ui.scope_id().with("mist_monitor_pct"),
             width,
             CHART_HEIGHT,
             link_x_id,
@@ -1284,7 +1293,7 @@ impl MonitorPanel {
         );
 
         monitor_hist_plot(
-            ui.id().with("mist_monitor_load"),
+            ui.scope_id().with("mist_monitor_load"),
             width,
             CHART_HEIGHT,
             link_x_id,
@@ -1364,7 +1373,7 @@ impl MonitorPanel {
             let net_max = net_y_max(&rx_line, &tx_line);
 
             monitor_hist_plot(
-                ui.id().with("mist_monitor_net"),
+                ui.scope_id().with("mist_monitor_net"),
                 width,
                 CHART_HEIGHT,
                 link_x_id,

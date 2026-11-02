@@ -541,7 +541,7 @@ fn paint_code_block(
     let code = code.trim_end();
     let code_lang = detect_code_lang(lang, code);
     let is_shell = matches!(code_lang, CodeLang::Shell);
-    let block_id = egui::Id::new(("mistterm_md_codeblock", *code_block_serial));
+    let block_id = egui::Id::unique(("mistterm_md_codeblock", *code_block_serial));
     *code_block_serial = code_block_serial.saturating_add(1);
 
     egui::Frame::NONE

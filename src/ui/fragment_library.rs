@@ -137,17 +137,15 @@ impl FragmentLibraryState {
         }
 
         let mut win_open = self.open;
-        let (lib_def, lib_min) = fragment_library_window_bounds(ctx);
+        let (lib_def, _) = fragment_library_window_bounds(ctx);
         let mut close_via_header = false;
         let lib_sz = egui::vec2(lib_def[0], lib_def[1]);
         crate::ui::chrome::modal_window("fragment_library_modal", theme, ctx)
-            .id(egui::Id::new("mistterm_fragment_library_window"))
+            .id(egui::Id::unique("mistterm_fragment_library_window"))
             .open(&mut win_open)
             .default_pos(modal_center_pos(ctx, lib_sz))
-            .default_size(lib_def)
-            .min_width(lib_min[0])
-            .min_height(lib_min[1])
-            .resizable(true)
+            .resizable(false)
+            .fixed_size(lib_sz)
             .show(ctx, |ui| {
                 let lang = i18n::language(ctx);
                 crate::ui::chrome::modal_content_frame(theme).show(ui, |ui| {
@@ -186,16 +184,14 @@ impl FragmentLibraryState {
                         .to_string();
                     }
                     ui.separator();
-                    crate::ui::chrome::form_field_label(ui, theme, i18n::tr(ctx, "Search", "搜索"));
-                    let search_w = finite_avail_minus(ui, 10.0, 140.0, 280.0);
-                    crate::ui::chrome::form_singleline_field(
+                    let search_w = finite_avail_minus(ui, 10.0, 160.0, 320.0);
+                    crate::ui::chrome::search_field(
                         ui,
                         theme,
-                        egui::Id::new("fragment_lib_search"),
+                        egui::Id::unique("fragment_lib_search"),
                         &mut self.search_query,
                         i18n::tr(ctx, "Title / command / tags", "标题 / 命令 / 标签"),
                         search_w,
-                        false,
                     );
                     ui.separator();
                     if crate::ui::chrome::panel_action_icon_button(
@@ -442,7 +438,7 @@ impl FragmentLibraryState {
                                 let title_resp = crate::ui::chrome::form_singleline_field(
                                     ui,
                                     theme,
-                                    egui::Id::new("fragment_library_form_title"),
+                                    egui::Id::unique("fragment_library_form_title"),
                                     &mut self.form_title,
                                     i18n::tr(ui.ctx(), "e.g. disk usage", "例如：查看磁盘占用"),
                                     edit_w,
@@ -460,7 +456,7 @@ impl FragmentLibraryState {
                                 crate::ui::chrome::form_singleline_field(
                                     ui,
                                     theme,
-                                    egui::Id::new("fragment_library_form_category"),
+                                    egui::Id::unique("fragment_library_form_category"),
                                     &mut self.form_category,
                                     i18n::tr(ui.ctx(), "e.g. ops · host", "例如：运维 · 主机"),
                                     edit_w,
@@ -474,7 +470,7 @@ impl FragmentLibraryState {
                                 crate::ui::chrome::form_singleline_field(
                                     ui,
                                     theme,
-                                    egui::Id::new("fragment_library_form_tags"),
+                                    egui::Id::unique("fragment_library_form_tags"),
                                     &mut self.form_tags,
                                     i18n::tr(ui.ctx(), "e.g. prod, nginx", "例如：prod, nginx"),
                                     edit_w,
@@ -496,7 +492,7 @@ impl FragmentLibraryState {
                                 crate::ui::chrome::form_multiline_field(
                                     ui,
                                     theme,
-                                    egui::Id::new("fragment_library_form_command"),
+                                    egui::Id::unique("fragment_library_form_command"),
                                     &mut self.form_command,
                                     edit_w,
                                     5,
@@ -613,7 +609,7 @@ impl FragmentLibraryState {
                                         crate::ui::chrome::form_singleline_field(
                                             ui,
                                             theme,
-                                            egui::Id::new(("frag_var_name", idx)),
+                                            egui::Id::unique(("frag_var_name", idx)),
                                             name,
                                             "",
                                             edit_w,
@@ -627,7 +623,7 @@ impl FragmentLibraryState {
                                         crate::ui::chrome::form_singleline_field(
                                             ui,
                                             theme,
-                                            egui::Id::new(("frag_var_desc", idx)),
+                                            egui::Id::unique(("frag_var_desc", idx)),
                                             desc,
                                             "",
                                             edit_w,
@@ -638,7 +634,7 @@ impl FragmentLibraryState {
                                             crate::ui::chrome::form_singleline_field(
                                                 ui,
                                                 theme,
-                                                egui::Id::new(("frag_var_default", idx)),
+                                                egui::Id::unique(("frag_var_default", idx)),
                                                 default,
                                                 "",
                                                 (edit_w - 56.0).max(72.0),
@@ -724,14 +720,24 @@ impl FragmentLibraryState {
                                 ui.horizontal(|ui| {
                                     let can_save = !self.form_title.trim().is_empty()
                                         && !self.form_category.trim().is_empty();
-                                    let save_clicked = crate::ui::chrome::panel_action_primary_button_with_icon_ex(
-                                        ui,
-                                        theme,
-                                        crate::ui::icons::IconId::Check,
-                                        i18n::tr(ctx, "Save", "保存"),
+                                    let save_resp =
+                                        crate::ui::chrome::panel_action_primary_button_with_icon_ex(
+                                            ui,
+                                            theme,
+                                            crate::ui::icons::IconId::Check,
+                                            i18n::tr(ctx, "Save", "保存"),
+                                            can_save,
+                                        );
+                                    let save_resp = crate::ui::chrome::disabled_action_with_reason(
+                                        save_resp,
                                         can_save,
-                                    )
-                                    .clicked()
+                                        i18n::tr(
+                                            ctx,
+                                            "Fill in title and category first",
+                                            "先填写标题和分类",
+                                        ),
+                                    );
+                                    let save_clicked = save_resp.clicked()
                                         || self.gui_automation_save_requested;
                                     if self.gui_automation_save_requested {
                                         self.gui_automation_save_requested = false;

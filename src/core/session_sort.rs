@@ -111,6 +111,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn labels_have_no_duplicates_and_all_nonempty() {
         for s in SessionSortBy::ALL {
             let l = s.label();
@@ -130,6 +131,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn label_matches_expected_strings() {
         assert_eq!(SessionSortBy::Name.label(), "名称 (A→Z)");
         assert_eq!(SessionSortBy::NameDesc.label(), "名称 (Z→A)");

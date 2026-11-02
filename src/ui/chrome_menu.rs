@@ -63,7 +63,7 @@ fn menu_selectable_row(
     let text_color = if selected {
         theme.accent_color()
     } else {
-        theme.text_secondary()
+        theme.text_primary()
     };
     let galley = ui.ctx().fonts_mut(|f| {
         f.layout_no_wrap(
@@ -165,7 +165,7 @@ pub fn popup_menu_button_shortcut_enabled(
     let px = theme.font_size_menu_item();
     let pad = ui.spacing().button_padding;
     let title_color = if enabled {
-        theme.text_secondary()
+        theme.text_primary()
     } else {
         theme.text_tertiary()
     };

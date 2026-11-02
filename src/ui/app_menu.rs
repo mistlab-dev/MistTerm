@@ -6,7 +6,7 @@ impl MistTermApp {
         ui: &mut egui::Ui,
         ctx: &egui::Context,
         theme: &crate::ui::theme::Theme,
-        frame: &mut eframe::Frame,
+        _frame: &mut eframe::Frame,
     ) {
         if self.uses_native_menu_bar() {
             return;
@@ -21,7 +21,7 @@ impl MistTermApp {
 
         ui.menu_button(label(l.terminal_menu), |ui| {
             crate::ui::chrome::apply_menu_popup_style(ui, theme);
-            if crate::ui::chrome::popup_menu_button(ui, theme, l.new_session).clicked() {
+            if crate::ui::chrome::popup_menu_button_accel(ui, theme, l.new_session, "n").clicked() {
                 self.show_new_session_dialog = true;
             }
             let new_tab_accel = crate::platform::new_tab_accel();
@@ -160,7 +160,8 @@ impl MistTermApp {
             }
             ui.separator();
             if crate::ui::chrome::popup_menu_button(ui, theme, l.preferences).clicked() {
-                self.show_preferences_dialog = true;
+                self.open_preferences_dialog();
+                ui.close();
             }
             if crate::ui::chrome::popup_menu_button(ui, theme, l.ai_settings).clicked() {
                 self.show_ai_settings_dialog = true;
@@ -214,8 +215,13 @@ impl MistTermApp {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
             }
             ui.separator();
-            if crate::ui::chrome::menu_toggle_item(ui, theme, self.show_sftp_panel, l.sftp_panel)
-                .clicked()
+            if crate::ui::chrome::popup_menu_button_accel_shift(
+                ui,
+                theme,
+                l.sftp_panel,
+                "s",
+            )
+            .clicked()
             {
                 self.toggle_sftp_panel(ctx);
             }
@@ -229,11 +235,11 @@ impl MistTermApp {
             {
                 self.toggle_port_forward_panel(ctx);
             }
-            if crate::ui::chrome::menu_toggle_item(
+            if crate::ui::chrome::popup_menu_button_accel(
                 ui,
                 theme,
-                self.show_fragment_panel,
                 l.fragment_panel,
+                "k",
             )
             .clicked()
             {
@@ -249,7 +255,7 @@ impl MistTermApp {
             {
                 self.toggle_monitor_panel(ctx);
             }
-            if crate::ui::chrome::menu_toggle_item(ui, theme, self.show_ai_panel, l.ai_panel)
+            if crate::ui::chrome::popup_menu_button_accel_shift(ui, theme, l.ai_panel, "i")
                 .clicked()
             {
                 self.toggle_ai_panel(ctx);
@@ -279,9 +285,12 @@ impl MistTermApp {
             crate::ui::chrome::apply_menu_popup_style(ui, theme);
             // 1. 片段与发送
             if crate::ui::chrome::popup_menu_button(ui, theme, l.fragment_library).clicked() {
-                self.fragment_library.open = true;
+                self.open_snippet_library_dialog();
+                ui.close();
             }
-            if crate::ui::chrome::popup_menu_button(ui, theme, l.quick_fragments).clicked() {
+            if crate::ui::chrome::popup_menu_button_accel_shift(ui, theme, l.quick_fragments, "j")
+                .clicked()
+            {
                 self.quick_selector.open = true;
             }
             if crate::ui::chrome::popup_menu_button(ui, theme, l.send_sequences).clicked() {
@@ -289,7 +298,14 @@ impl MistTermApp {
             }
             ui.separator();
             // 2. 历史
-            if crate::ui::chrome::popup_menu_button(ui, theme, l.command_history).clicked() {
+            if crate::ui::chrome::popup_menu_button_shortcut(
+                ui,
+                theme,
+                l.command_history,
+                Some(crate::platform::terminal_history_accel()),
+            )
+            .clicked()
+            {
                 self.menu_open_command_history(ctx);
             }
             if crate::ui::chrome::popup_menu_button_accel_shift(ui, theme, l.paste_history, "P")
@@ -300,8 +316,8 @@ impl MistTermApp {
             ui.separator();
             // 3. 规则与检查
             if crate::ui::chrome::popup_menu_button(ui, theme, l.rule_manager).clicked() {
-                self.rule_manager_dialog
-                    .open_output_trigger(&self.output_trigger_rules);
+                self.open_rule_manager_dialog();
+                ui.close();
             }
             ui.separator();
             // 4. 账号与数据
@@ -317,16 +333,17 @@ impl MistTermApp {
         ui.menu_button(label(l.team_menu), |ui| {
             crate::ui::chrome::apply_menu_popup_style(ui, theme);
             if crate::ui::chrome::popup_menu_button(ui, theme, l.team_sign_in).clicked() {
-                self.show_preferences_dialog = true;
+                self.open_preferences_team_sync(ctx);
+                ui.close();
             }
             if crate::ui::chrome::popup_menu_button(ui, theme, l.team_members).clicked() {
                 self.team_members_dialog.open(&mut self.team_service);
             }
             ui.separator();
             if crate::ui::chrome::popup_menu_button(ui, theme, l.cloud_sync).clicked() {
-                if self.ensure_right_dock_allowed_or_warn(ctx) {
-                    self.open_right_dock_panel(ActiveRightDock::CloudSync);
-                }
+                // #282：与偏好设置「团队与同步 → 打开同步面板」共用同一入口。
+                self.open_cloud_sync_panel(ctx);
+                ui.close();
             }
         });
         ui.menu_button(label(l.help_menu), |ui| {
@@ -387,7 +404,7 @@ impl MistTermApp {
                 },
             );
             ui.menu_button(
-                crate::i18n::tr(ctx, "Advanced", "高级"),
+                crate::i18n::tr(ctx, "Advanced", "高级功能"),
                 |ui| {
                     crate::ui::chrome::apply_menu_popup_style(ui, theme);
                     if crate::ui::chrome::popup_menu_button(ui, theme, l.audit_timeline).clicked() {

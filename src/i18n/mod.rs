@@ -1,8 +1,9 @@
 //! UI localization: English (default) and Simplified Chinese.
 //!
-//! Runtime strings use [`tr`] with egui context; logs should stay English only.
+//! Runtime strings use [`tr`] with egui context; 会话日志注解用 [`current_language`] 跟随 UI 语言。
 
 use std::borrow::Cow;
+use std::sync::atomic::{AtomicU8, Ordering};
 
 use eframe::egui;
 use serde::{Deserialize, Serialize};
@@ -65,15 +66,33 @@ impl From<UiLanguage> for Locale {
 
 fn locale_id() -> egui::Id {
     // `Id::NULL` is reserved; use a stable app-specific id.
-    egui::Id::new("mistterm_ui_language")
+    egui::Id::unique("mistterm_ui_language")
 }
 
+/// 进程级语言镜像(0=En, 1=Zh)。供无 `egui::Context` 的后台线程/写日志等场景读取。
+static CURRENT_LANGUAGE: AtomicU8 = AtomicU8::new(0);
+
 pub fn set_language(ctx: &egui::Context, lang: UiLanguage) {
+    CURRENT_LANGUAGE.store(
+        match lang {
+            UiLanguage::En => 0,
+            UiLanguage::Zh => 1,
+        },
+        Ordering::Relaxed,
+    );
     ctx.data_mut(|d| d.insert_temp(locale_id(), lang));
 }
 
 pub fn language(ctx: &egui::Context) -> UiLanguage {
     ctx.data(|d| d.get_temp::<UiLanguage>(locale_id()).unwrap_or_default())
+}
+
+/// 当前 UI 语言(无 `Context` 时使用；默认英文)。
+pub fn current_language() -> UiLanguage {
+    match CURRENT_LANGUAGE.load(Ordering::Relaxed) {
+        1 => UiLanguage::Zh,
+        _ => UiLanguage::En,
+    }
 }
 
 pub fn locale(ctx: &egui::Context) -> Locale {

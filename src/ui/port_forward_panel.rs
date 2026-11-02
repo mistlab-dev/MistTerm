@@ -351,7 +351,11 @@ impl PortForwardPanel {
         self.prune_stopped(ssh_session_id);
 
         self.show_active_list(ui, ctx, theme, ssh_session_id, session_profile);
-        ui.add_space(theme.spacing_dock_section_gap());
+        // #284：运行列表与下方新建表单之间加 1px 发丝分隔线。
+        let gap = theme.spacing_dock_section_gap();
+        ui.add_space(gap);
+        paint_section_hairline(ui, theme);
+        ui.add_space(gap);
         self.show_add_form(
             ui,
             ctx,
@@ -414,10 +418,16 @@ impl PortForwardPanel {
                         .color(theme.text_primary()),
                 );
                 if entry.from_profile() {
-                    ui.label(
-                        egui::RichText::new(crate::i18n::tr(ctx, "profile", "配置"))
-                            .small()
-                            .color(theme.text_tertiary()),
+                    // #284：灰色文字「配置」改为小齿轮图标，悬停说明来自会话配置。
+                    crate::ui::chrome::panel_toolbar_icon_button(
+                        ui,
+                        theme,
+                        crate::ui::icons::IconId::Settings,
+                        crate::i18n::tr(
+                            ctx,
+                            "Profile forward · comes from the session profile",
+                            "配置转发 · 来自会话配置",
+                        ),
                     );
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -596,7 +606,7 @@ impl PortForwardPanel {
                     crate::ui::chrome::form_inline_singleline(
                         ui,
                         theme,
-                        egui::Id::new("pf_bind_address"),
+                        egui::Id::unique("pf_bind_address"),
                         &mut self.form.bind_address,
                         "127.0.0.1",
                         100.0,
@@ -610,7 +620,7 @@ impl PortForwardPanel {
                     crate::ui::chrome::form_inline_singleline(
                         ui,
                         theme,
-                        egui::Id::new("pf_local_port_ld"),
+                        egui::Id::unique("pf_local_port_ld"),
                         &mut self.form.local_port,
                         "8080",
                         64.0,
@@ -628,7 +638,7 @@ impl PortForwardPanel {
                     crate::ui::chrome::form_inline_singleline(
                         ui,
                         theme,
-                        egui::Id::new("pf_local_port_r"),
+                        egui::Id::unique("pf_local_port_r"),
                         &mut self.form.local_port,
                         "8080",
                         64.0,
@@ -648,7 +658,7 @@ impl PortForwardPanel {
                 crate::ui::chrome::form_inline_singleline(
                     ui,
                     theme,
-                    egui::Id::new("pf_remote_host_l"),
+                    egui::Id::unique("pf_remote_host_l"),
                     &mut self.form.remote_host,
                     "127.0.0.1",
                     120.0,
@@ -658,7 +668,7 @@ impl PortForwardPanel {
                 crate::ui::chrome::form_inline_singleline(
                     ui,
                     theme,
-                    egui::Id::new("pf_remote_port_l"),
+                    egui::Id::unique("pf_remote_port_l"),
                     &mut self.form.remote_port,
                     "80",
                     64.0,
@@ -675,7 +685,7 @@ impl PortForwardPanel {
                 crate::ui::chrome::form_inline_singleline(
                     ui,
                     theme,
-                    egui::Id::new("pf_remote_host_r"),
+                    egui::Id::unique("pf_remote_host_r"),
                     &mut self.form.remote_host,
                     "127.0.0.1",
                     120.0,
@@ -685,7 +695,7 @@ impl PortForwardPanel {
                 crate::ui::chrome::form_inline_singleline(
                     ui,
                     theme,
-                    egui::Id::new("pf_remote_port_r"),
+                    egui::Id::unique("pf_remote_port_r"),
                     &mut self.form.remote_port,
                     "3000",
                     64.0,
@@ -773,6 +783,18 @@ fn section_title(ui: &mut egui::Ui, theme: &Theme, text: impl AsRef<str>) {
         egui::RichText::new(text.as_ref())
             .strong()
             .color(theme.text_secondary()),
+    );
+}
+
+/// 1 物理像素发丝分隔线(运行列表 / 新建表单之间)。
+fn paint_section_hairline(ui: &mut egui::Ui, theme: &Theme) {
+    let w = ui.available_width().max(1.0);
+    let hairline = theme.hairline_width(ui.ctx());
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(w, hairline), egui::Sense::hover());
+    ui.painter().hline(
+        rect.x_range(),
+        theme.snap_y_to_pixel(ui.ctx(), rect.center().y),
+        egui::Stroke::new(hairline, theme.color_dock_header_divider()),
     );
 }
 

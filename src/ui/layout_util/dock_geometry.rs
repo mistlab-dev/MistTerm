@@ -103,7 +103,7 @@ pub const AI_PANEL_ID: &str = "ai_panel";
 /// 读取上一帧 `SidePanel` 落盘的槽位矩形(用于 Central 之后 Foreground 重绘)。
 #[inline]
 pub fn side_panel_state_rect(ctx: &egui::Context, panel_id: &str) -> Option<egui::Rect> {
-    egui::containers::panel::PanelState::load(ctx, egui::Id::new(panel_id)).map(|s| s.outer_rect)
+    egui::containers::panel::PanelState::load(ctx, egui::Id::unique(panel_id)).map(|s| s.outer_rect)
 }
 
 /// 将侧栏槽位右缘钉在 `screen` 右缘(`PanelState` 仅为内层内容矩形，勿直接作 Area 外框)。

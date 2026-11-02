@@ -72,10 +72,9 @@ impl BatchExecDialog {
         let modal_sz = egui::vec2(720.0, 520.0);
         crate::ui::chrome::modal_window("batch_exec_dialog", theme, ctx)
             .open(&mut keep_open)
-            .default_size(modal_sz)
-            .min_width(480.0)
             .movable(true)
-            .resizable(true)
+            .resizable(false)
+            .fixed_size(modal_sz)
             .show(ctx, |ui| {
                 crate::ui::chrome::modal_content_frame(theme).show(ui, |ui| {
                     if crate::ui::chrome::modal_header(
@@ -101,7 +100,7 @@ impl BatchExecDialog {
                 crate::ui::chrome::form_multiline_field_with_hint(
                     ui,
                     theme,
-                    egui::Id::new("batch_exec_command"),
+                    egui::Id::unique("batch_exec_command"),
                     &mut self.command,
                     "uptime && hostname",
                     layout_util::finite_content_width(ui),
@@ -118,7 +117,7 @@ impl BatchExecDialog {
                     crate::ui::chrome::form_u32_stepper(
                         ui,
                         theme,
-                        egui::Id::new("batch_max_parallel"),
+                        egui::Id::unique("batch_max_parallel"),
                         &mut self.max_parallel,
                         1..=16,
                         1,
@@ -166,14 +165,13 @@ impl BatchExecDialog {
                 });
 
                 ui.add_space(theme.spacing_xs());
-                crate::ui::chrome::form_singleline_field(
+                crate::ui::chrome::search_field(
                     ui,
                     theme,
-                    egui::Id::new("batch_host_filter"),
+                    egui::Id::unique("batch_host_filter"),
                     &mut self.select_filter,
                     crate::i18n::tr(ctx, "Filter hosts…", "筛选主机…"),
                     ui.available_width(),
-                    false,
                 );
 
                 ui.add_space(theme.spacing_sm());

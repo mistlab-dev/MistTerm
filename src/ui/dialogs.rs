@@ -55,8 +55,8 @@ impl NewSessionDialog {
         crate::ui::chrome::modal_window("legacy_new_session", theme, ctx)
             .open(&mut open)
             .default_pos(layout_util::modal_center_pos(ctx, modal_sz))
-            .resizable(true)
-            .default_size(modal_sz)
+            .resizable(false)
+            .fixed_size(modal_sz)
             .show(ctx, |ui| {
                 crate::ui::chrome::modal_content_frame(theme).show(ui, |ui| {
                     if crate::ui::chrome::modal_header(
@@ -76,7 +76,7 @@ impl NewSessionDialog {
                     crate::ui::chrome::form_singleline_field(
                         ui,
                         theme,
-                        egui::Id::new("legacy_new_session_name"),
+                        egui::Id::unique("legacy_new_session_name"),
                         &mut self.name,
                         "",
                         form_w,
@@ -93,7 +93,7 @@ impl NewSessionDialog {
                     crate::ui::chrome::form_singleline_field(
                         ui,
                         theme,
-                        egui::Id::new("legacy_new_session_host"),
+                        egui::Id::unique("legacy_new_session_host"),
                         &mut self.host,
                         crate::i18n::tr(ctx, "IP or hostname", "IP 或域名"),
                         form_w,
@@ -109,7 +109,7 @@ impl NewSessionDialog {
                         crate::ui::chrome::form_u16_stepper(
                             ui,
                             theme,
-                            egui::Id::new("legacy_new_session_port"),
+                            egui::Id::unique("legacy_new_session_port"),
                             &mut self.port,
                             1..=65535,
                             1,
@@ -126,7 +126,7 @@ impl NewSessionDialog {
                     crate::ui::chrome::form_singleline_field(
                         ui,
                         theme,
-                        egui::Id::new("legacy_new_session_user"),
+                        egui::Id::unique("legacy_new_session_user"),
                         &mut self.username,
                         crate::i18n::tr(ctx, "e.g. root", "如 root"),
                         form_w,
@@ -141,7 +141,7 @@ impl NewSessionDialog {
                     crate::ui::chrome::form_singleline_field(
                         ui,
                         theme,
-                        egui::Id::new("legacy_new_session_pass"),
+                        egui::Id::unique("legacy_new_session_pass"),
                         &mut self.password,
                         "",
                         form_w,
