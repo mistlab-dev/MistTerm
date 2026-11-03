@@ -547,8 +547,8 @@ impl PortForwardPanel {
         ui.label(
             egui::RichText::new(crate::i18n::tr(
                 ctx,
-                "Same as OpenSSH -L / -R / -D.",
-                "对应 OpenSSH 的 -L / -R / -D。",
+                "Forward a local port to a remote host, or publish a remote port back; SOCKS proxy included.",
+                "把本机端口转发到远端，也可把远端端口转发回来；还能开 SOCKS 代理。",
             ))
             .small()
             .color(theme.text_tertiary()),
