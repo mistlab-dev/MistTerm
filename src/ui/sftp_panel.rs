@@ -215,7 +215,7 @@ pub struct SftpPanel {
 
 impl Default for SftpPanel {
     fn default() -> Self {
-        Self::new()
+        Self::new(false)
     }
 }
 
@@ -2069,7 +2069,8 @@ impl SftpPanel {
         (half.max(min_list), (list_total - half).max(min_list))
     }
 
-    pub fn new() -> Self {
+    /// `drag_hint_dismissed` 由 app 层从内存中的 AppSettings 下发（避免 UI 路径整份读盘）。
+    pub fn new(drag_hint_dismissed: bool) -> Self {
         let local_root = crate::core::local_dir::current().dir;
         Self {
             last_local_by_host: std::collections::HashMap::new(),
@@ -2127,15 +2128,13 @@ impl SftpPanel {
             pending_terminal_cmd: None,
             flux_details_open: false,
             diff: DirDiffUi::default(),
-            drag_hint_dismissed: crate::core::app_settings::AppSettings::load()
-                .sftp_drag_hint_dismissed,
+            drag_hint_dismissed,
         }
     }
 
-    pub fn request_list_on_open(&mut self) {
-        // #312：打开面板时再读一次，避免其它入口改 settings 后本实例仍显示提示。
-        self.drag_hint_dismissed = crate::core::app_settings::AppSettings::load()
-            .sftp_drag_hint_dismissed;
+    pub fn request_list_on_open(&mut self, drag_hint_dismissed: bool) {
+        // #312：打开面板时由 app 层用内存中的 settings 下发，避免本实例显示已被关闭的提示。
+        self.drag_hint_dismissed = drag_hint_dismissed;
         self.pending_auto_list = true;
     }
 
