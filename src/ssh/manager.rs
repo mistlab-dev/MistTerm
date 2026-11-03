@@ -1499,7 +1499,7 @@ mod tests {
     /// 多行文本(每行 ≤4095 字节)在 2KB–1MB 都不应丢；单行 >4095 字节是 tty 行模式内核限制。
     #[test]
     fn paste_roundtrip_via_remote_pty_cat() {
-        use crate::ui::terminal_paste::{next_chunk_len, PASTE_CHUNK};
+        use crate::terminal::paste::{next_chunk_len, PASTE_CHUNK};
         let Some(sess) = crate::test_support::ssh_local::skip_without_sshd() else {
             return;
         };
@@ -1547,7 +1547,7 @@ mod tests {
     /// 真实场景：~50KB「一行一条 INSERT」的 SQL，经 MistTerm 粘贴路径写入远端 vim 并 :w。
     #[test]
     fn paste_sql_into_remote_vim_with_bracketed_paste() {
-        use crate::ui::terminal_paste::{build_paste_payload, next_chunk_len, PASTE_CHUNK};
+        use crate::terminal::paste::{build_paste_payload, next_chunk_len, PASTE_CHUNK};
         use std::io::Read;
         let Some(sess) = crate::test_support::ssh_local::skip_without_sshd() else {
             return;
@@ -1647,7 +1647,7 @@ mod tests {
     /// 对照：不包 bracketed paste、normal 模式粘贴 → 首字符被当成 vim 命令（main 行为）。
     #[test]
     fn paste_sql_vim_normal_mode_without_bp_loses_first_char() {
-        use crate::ui::terminal_paste::{next_chunk_len, PASTE_CHUNK};
+        use crate::terminal::paste::{next_chunk_len, PASTE_CHUNK};
         use std::io::Read;
         let Some(sess) = crate::test_support::ssh_local::skip_without_sshd() else {
             return;
