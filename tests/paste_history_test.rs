@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use mistterm::core::paste_history::*;
-use mistterm::ui::terminal_paste::{build_paste_payload, normalize_paste_newlines};
+use mistterm::terminal::paste::{build_paste_payload, normalize_paste_newlines};
 
 fn note_text(text: &str) -> PasteHistoryNote {
     let (clipped, truncated, original_bytes) = clip_for_history(text);

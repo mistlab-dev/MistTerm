@@ -2,6 +2,7 @@
 
 mod alacritty;
 mod command_block;
+pub mod paste;
 pub mod style;
 
 pub use alacritty::{BlockNav, CopyBlock, NavDir, SearchHit, Terminal, ViewportCursor};

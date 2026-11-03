@@ -23,9 +23,57 @@ use alacritty_terminal::index::{Column, Line, Point};
 use alacritty_terminal::term::viewport_to_point;
 use crate::terminal::{Terminal as VtTerminal, TerminalShellStyle};
 use crate::terminal::style::{
-    cursor_blink_phase, duration_until_next_cursor_blink_phase, format_user_error_line,
-    format_user_info_line, format_user_success_line, format_user_warn_line,
+    cursor_blink_phase, duration_until_next_cursor_blink_phase, feed_ansi_line,
+    truecolor_sgr_bold,
 };
+
+// ── Theme → TerminalShellStyle 适配层（分层规矩：terminal 层不见 Theme，见 P0 #301）──
+
+/// 由当前主题派生终端 shell 着色参数。terminal/style.rs 只认纯类型，主题派生留在 UI 侧。
+fn terminal_shell_style_from_theme(theme: &Theme) -> TerminalShellStyle {
+    TerminalShellStyle {
+        default_fg: theme.terminal_default_fg(),
+        terminal_bg: theme.bg_terminal_color(),
+        prompt_arrow: theme.green_color(),
+        path_hint: theme.accent_color(),
+        user_error: theme.red_color(),
+        user_info: if theme.is_light_theme() {
+            theme.accent_color()
+        } else {
+            theme.terminal_default_fg()
+        },
+        user_success: theme.green_color(),
+        user_warn: theme.amber_color(),
+        command_dim_factor: theme.terminal_command_dim_factor(),
+        output_dim_factor: theme.terminal_output_dim_factor(),
+        search_match_fg: theme.terminal_default_fg(),
+        search_match_bg: theme.list_row_selected_bg(),
+    }
+}
+
+/// `prefix` 由调用方按界面语言传入（如 `Error: ` / `错误：`）。
+fn format_user_error_line(theme: &Theme, prefix: &str, message: &str) -> String {
+    let s = terminal_shell_style_from_theme(theme);
+    feed_ansi_line(
+        &truecolor_sgr_bold(s.user_error),
+        &format!("{prefix}{message}"),
+    )
+}
+
+fn format_user_info_line(theme: &Theme, message: &str) -> String {
+    let s = terminal_shell_style_from_theme(theme);
+    feed_ansi_line(&truecolor_sgr_bold(s.user_info), message)
+}
+
+fn format_user_success_line(theme: &Theme, message: &str) -> String {
+    let s = terminal_shell_style_from_theme(theme);
+    feed_ansi_line(&truecolor_sgr_bold(s.user_success), message)
+}
+
+fn format_user_warn_line(theme: &Theme, message: &str) -> String {
+    let s = terminal_shell_style_from_theme(theme);
+    feed_ansi_line(&truecolor_sgr_bold(s.user_warn), message)
+}
 use crate::i18n::UiLanguage;
 use crate::ui::layout_util;
 use crate::ui::theme::Theme;
@@ -1891,7 +1939,7 @@ impl TerminalView {
 
                     // 必须先按视口同步 PTY 行列，再构建 LayoutJob。
                     // 若先构图再 sync：galley 仍是旧行数，而容器已是新高度 + BOTTOM 对齐 → Tab 下出现大块空白。
-                    let shell = TerminalShellStyle::from_theme(theme);
+                    let shell = terminal_shell_style_from_theme(theme);
                     let cell_w =
                         Self::terminal_cell_metrics(ui, self.font_size, theme.text_primary()).0;
                     self.sync_pty_size_with_ui(
@@ -2893,7 +2941,7 @@ impl TerminalView {
     /// 只有写入成功才从队列移除；输入队列满(远端/本地 shell 一时消化不过来)时保留本片、
     /// 稍后重试，不再像旧实现那样先 drain 再发、失败即丢。
     fn flush_paste_queue(&mut self, ctx: &egui::Context) {
-        use crate::ui::terminal_paste::{next_chunk_len, PASTE_CHUNK};
+        use crate::terminal::paste::{next_chunk_len, PASTE_CHUNK};
         const GAP: Duration = Duration::from_millis(5);
         const RETRY_GAP: Duration = Duration::from_millis(20);
         const MAX_RETRIES: u32 = 500; // ≈10 秒无进展才放弃
@@ -4006,7 +4054,7 @@ impl TerminalView {
     /// 粘贴文本到终端：不自动补回车；远端开了 bracketed paste 时包上 200~/201~；
     /// 一律进分片队列发送(FUNCTIONAL_SPEC §2.4)，写失败不丢片。
     fn paste_text(&mut self, text: &str, ctx: &egui::Context) {
-        use crate::ui::terminal_paste::{
+        use crate::terminal::paste::{
             build_paste_payload, exceeds_canon_line_limit, normalize_paste_newlines, TTY_CANON_LINE_MAX,
         };
         let normalized = normalize_paste_newlines(text);
