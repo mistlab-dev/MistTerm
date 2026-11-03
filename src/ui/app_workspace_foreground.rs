@@ -43,7 +43,7 @@ impl MistTermApp {
                 fragments_path: &fragments_export_path,
                 sessions_path: &sessions_export_path,
                 theme_path: &theme_export_path,
-                fragment_manager: &mut self.fragment_manager,
+                fragment_manager: &mut self.fragment_state.fragment_manager,
                 theme_manager: &mut self.theme_manager,
                 session_manager: &mut self.session_manager,
                 credential_panel: &mut self.credential_panel,
@@ -240,12 +240,12 @@ impl MistTermApp {
                     layout_util::SidePanelProfile::Standard,
                 );
             }
-            if self.show_fragment_panel {
+            if self.fragment_state.show_fragment_panel {
                 crate::ui::chrome::show_right_dock_resize_grip_for_slot(
                     ctx,
                     theme,
                     "mistterm_fragment_fg",
-                    self.fragment_panel_slot_rect,
+                    self.fragment_state.fragment_panel_slot_rect,
                     layout_util::FRAGMENT_PANEL_ID,
                     layout_util::SidePanelProfile::Fragment,
                 );
