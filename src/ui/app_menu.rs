@@ -360,6 +360,15 @@ impl MistTermApp {
             if crate::ui::chrome::popup_menu_button(ui, theme, l.help_guide).clicked() {
                 self.help_docs_dialog.open_page(HelpPage::QuickStart);
             }
+            if crate::ui::chrome::popup_menu_button(
+                ui,
+                theme,
+                crate::i18n::tr(ctx, "Feature guide", "功能指南"),
+            )
+            .clicked()
+            {
+                self.help_docs_dialog.open_page(HelpPage::Features);
+            }
             if crate::ui::chrome::popup_menu_button(ui, theme, l.help_shortcuts).clicked() {
                 self.help_docs_dialog.open_page(HelpPage::Shortcuts);
             }
@@ -380,7 +389,7 @@ impl MistTermApp {
                 self.open_report_issue(ctx);
             }
             ui.menu_button(
-                crate::i18n::tr(ctx, "Diagnostics", "诊断"),
+                l.diagnostics,
                 |ui| {
                     crate::ui::chrome::apply_menu_popup_style(ui, theme);
                     if crate::ui::chrome::popup_menu_button(

@@ -106,6 +106,10 @@ fn menu_selectable_row(
     if response.hovered() {
         ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
     }
+    // #311：自定义 Sense::click 行不会触发 egui Button 的关菜单路径；点选后主动关闭。
+    if response.clicked() && egui::menu::is_in_menu(ui) {
+        ui.close();
+    }
     response
 }
 
@@ -215,6 +219,11 @@ pub fn popup_menu_button_shortcut_enabled(
 
     if response.hovered() && enabled && ui.is_enabled() {
         ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+    }
+
+    // #311：点菜单项后关闭弹出层，否则面板切换被菜单挡住像「无反应」。
+    if response.clicked() && enabled && egui::menu::is_in_menu(ui) {
+        ui.close();
     }
 
     response

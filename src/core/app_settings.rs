@@ -48,6 +48,9 @@ pub struct AppSettings {
     /// #215：自动化规则对话框「一次性短提示」已勾选不再显示。
     #[serde(default)]
     pub rules_intro_dismissed: bool,
+    /// #312：SFTP 拖拽传输「知道了」一次性提示已关闭。
+    #[serde(default)]
+    pub sftp_drag_hint_dismissed: bool,
     /// #251：监控告警推送（声音 / 系统通知 / 仅面板）。
     #[serde(default)]
     pub monitor_alert: MonitorAlertSettings,
@@ -73,6 +76,7 @@ impl Default for AppSettings {
             disabled_modules: Vec::new(),
             reconnect_on_foreground: false,
             rules_intro_dismissed: false,
+            sftp_drag_hint_dismissed: false,
             monitor_alert: MonitorAlertSettings::default(),
         }
     }

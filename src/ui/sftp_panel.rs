@@ -2127,11 +2127,15 @@ impl SftpPanel {
             pending_terminal_cmd: None,
             flux_details_open: false,
             diff: DirDiffUi::default(),
-            drag_hint_dismissed: false,
+            drag_hint_dismissed: crate::core::app_settings::AppSettings::load()
+                .sftp_drag_hint_dismissed,
         }
     }
 
     pub fn request_list_on_open(&mut self) {
+        // #312：打开面板时再读一次，避免其它入口改 settings 后本实例仍显示提示。
+        self.drag_hint_dismissed = crate::core::app_settings::AppSettings::load()
+            .sftp_drag_hint_dismissed;
         self.pending_auto_list = true;
     }
 
@@ -5096,22 +5100,13 @@ impl SftpPanel {
         }
     }
 
-    /// #250：底部一句拖拽提示（可关掉；对齐 #215 一次性短提示）。
+    /// #250 / #312：底部一句拖拽提示（可关掉；对齐 #215 一次性短提示，写入 settings.json）。
     fn paint_drag_transfer_hint(
         &mut self,
         ui: &mut egui::Ui,
         ctx: &egui::Context,
         theme: &Theme,
     ) {
-        const PERSIST_ID: &str = "mistterm.sftp.drag_hint_dismissed";
-        if !self.drag_hint_dismissed {
-            if ctx.data_mut(|d| {
-                d.get_persisted::<bool>(egui::Id::unique(PERSIST_ID))
-                    .unwrap_or(false)
-            }) {
-                self.drag_hint_dismissed = true;
-            }
-        }
         if self.drag_hint_dismissed {
             return;
         }
@@ -5129,7 +5124,10 @@ impl SftpPanel {
                 .color(theme.text_tertiary()),
             );
             let dismiss = crate::i18n::tr(ctx, "Got it", "知道了");
-            if ui.small_button(dismiss).on_hover_text(hide_tip).clicked() {
+            if crate::ui::chrome::panel_action_primary_button(ui, theme, dismiss)
+                .on_hover_text(hide_tip)
+                .clicked()
+            {
                 dismissed = true;
             }
             if ui.small_button("×").on_hover_text(hide_tip).clicked() {
@@ -5138,9 +5136,11 @@ impl SftpPanel {
         });
         if dismissed {
             self.drag_hint_dismissed = true;
-            ctx.data_mut(|d| {
-                d.insert_persisted(egui::Id::unique(PERSIST_ID), true);
-            });
+            let mut settings = crate::core::app_settings::AppSettings::load();
+            settings.sftp_drag_hint_dismissed = true;
+            if let Err(e) = settings.save() {
+                log::warn!("persist sftp drag hint dismissed: {e}");
+            }
         }
     }
 
