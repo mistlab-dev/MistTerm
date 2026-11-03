@@ -59,7 +59,9 @@ pub mod paste_history_overlay;
 pub mod session_log_dialog;
 pub mod postmortem_dialog;
 pub mod session_form;
+pub mod dialog_flags;
 pub mod fragment_state;
+pub mod terminal_search;
 pub mod vault_form;
 pub mod help_docs_dialog;
 
