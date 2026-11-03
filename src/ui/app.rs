@@ -368,50 +368,9 @@ pub struct MistTermApp {
     monitor_last_tab: Option<usize>,
 
     /// 新建会话表单
-    new_session_name: String,
-    new_session_host: String,
-    new_session_port: u16,
-    new_session_port_str: String,
-    new_session_username: String,
-    new_session_password: String,
-    new_session_group: String,
-    new_session_color_tag: String,
-    new_session_private_key_path: String,
-    new_session_use_ssh_agent: bool,
-    new_session_auth_mode: crate::core::session::SessionAuthMode,
-    /// Show red required-field hint only after a failed Save/Enter attempt.
-    new_session_validation_attempted: bool,
-    new_session_proxy_jump: String,
-    new_session_proxy_command: String,
-    new_session_local_forwards_text: String,
-    new_session_remote_forwards_text: String,
-    new_session_dynamic_forwards_text: String,
-    new_session_post_connect_command: String,
-    new_session_vault: VaultSecretForm,
-
-    edit_session_id: Option<String>,
-    edit_session_name: String,
-    edit_session_host: String,
-    edit_session_port: u16,
-    edit_session_port_str: String,
-    edit_session_username: String,
-    edit_session_password: String,
-    edit_session_group: String,
-    edit_session_private_key_path: String,
-    edit_session_use_ssh_agent: bool,
-    edit_session_auth_mode: crate::core::session::SessionAuthMode,
-    edit_session_color_tag: String,
-    edit_session_keepalive_enabled: bool,
-    edit_session_keepalive_interval_secs: u32,
-    edit_session_keepalive_count_max: u8,
-    edit_session_keepalive_auto_reconnect: bool,
-    edit_session_proxy_jump: String,
-    edit_session_proxy_command: String,
-    edit_session_local_forwards_text: String,
-    edit_session_remote_forwards_text: String,
-    edit_session_dynamic_forwards_text: String,
-    edit_session_post_connect_command: String,
-    edit_session_vault: VaultSecretForm,
+    new_session_form: crate::ui::session_form::NewSessionForm,
+    /// 编辑会话表单
+    edit_session_form: crate::ui::session_form::EditSessionForm,
     sidebar_search_query: String,
     sidebar_filter: String,
     session_sort_by: SessionSortBy,
@@ -1347,48 +1306,8 @@ impl MistTermApp {
             fragment_filter_status: "all".to_string(),
             pending_fragment_insert: None,
             fragment_insert_only: false,
-            new_session_name: String::new(),
-            new_session_host: String::new(),
-            new_session_port: 22,
-            new_session_port_str: "22".to_string(),
-            new_session_username: String::new(),
-            new_session_password: String::new(),
-            new_session_group: boot_loc.tr("Default", "默认").to_string(),
-            new_session_color_tag: String::new(),
-            new_session_private_key_path: String::new(),
-            new_session_use_ssh_agent: true,
-            new_session_auth_mode: crate::core::session::SessionAuthMode::Standard,
-            new_session_validation_attempted: false,
-            new_session_proxy_jump: String::new(),
-            new_session_proxy_command: String::new(),
-            new_session_local_forwards_text: String::new(),
-            new_session_remote_forwards_text: String::new(),
-            new_session_dynamic_forwards_text: String::new(),
-            new_session_post_connect_command: String::new(),
-            new_session_vault: VaultSecretForm::default(),
-            edit_session_id: None,
-            edit_session_name: String::new(),
-            edit_session_host: String::new(),
-            edit_session_port: 22,
-            edit_session_port_str: "22".to_string(),
-            edit_session_username: String::new(),
-            edit_session_password: String::new(),
-            edit_session_group: boot_loc.tr("Default", "默认").to_string(),
-            edit_session_private_key_path: String::new(),
-            edit_session_use_ssh_agent: true,
-            edit_session_auth_mode: crate::core::session::SessionAuthMode::Standard,
-            edit_session_color_tag: String::new(),
-            edit_session_keepalive_enabled: true,
-            edit_session_keepalive_interval_secs: 30,
-            edit_session_keepalive_count_max: 3,
-            edit_session_keepalive_auto_reconnect: true,
-            edit_session_proxy_jump: String::new(),
-            edit_session_proxy_command: String::new(),
-            edit_session_local_forwards_text: String::new(),
-            edit_session_remote_forwards_text: String::new(),
-            edit_session_dynamic_forwards_text: String::new(),
-            edit_session_post_connect_command: String::new(),
-            edit_session_vault: VaultSecretForm::default(),
+            new_session_form: crate::ui::session_form::NewSessionForm::new(boot_loc),
+            edit_session_form: crate::ui::session_form::EditSessionForm::new(boot_loc),
             sidebar_search_query: String::new(),
             sidebar_filter: "all".to_string(),
             session_sort_by: SessionSortBy::default(),
@@ -3526,8 +3445,8 @@ impl MistTermApp {
         }
         if let Some(ip) = display_link_connect {
             // 新开连接（#90 后续）：预填 IP 到新建连接弹窗，名称留空由用户填。
-            self.new_session_host = ip;
-            self.new_session_name.clear();
+            self.new_session_form.host = ip;
+            self.new_session_form.name.clear();
             self.show_new_session_dialog = true;
         }
         self.poll_connection_placeholder_actions(ctx);
@@ -7729,11 +7648,11 @@ impl MistTermApp {
             return;
         }
         self.reset_new_session_form();
-        self.new_session_name = url.display();
-        self.new_session_host = url.host.clone();
-        self.new_session_port = url.port;
-        self.new_session_port_str = url.port.to_string();
-        self.new_session_username = url.user.clone().unwrap_or_default();
+        self.new_session_form.name = url.display();
+        self.new_session_form.host = url.host.clone();
+        self.new_session_form.port = url.port;
+        self.new_session_form.port_str = url.port.to_string();
+        self.new_session_form.username = url.user.clone().unwrap_or_default();
         self.show_new_session_dialog = true;
         self.notify_auto(match crate::i18n::language(ctx) {
             crate::i18n::UiLanguage::En => format!(
@@ -7748,7 +7667,7 @@ impl MistTermApp {
     }
 
     fn create_and_connect_session(&mut self, ctx: &egui::Context) {
-        if self.new_session_name.is_empty() || self.new_session_host.is_empty() {
+        if self.new_session_form.name.is_empty() || self.new_session_form.host.is_empty() {
             self.notify_auto(
                 crate::i18n::tr(
                     ctx,
@@ -7762,32 +7681,32 @@ impl MistTermApp {
 
         // 创建会话
         let session = self.session_manager.create_session(
-            &self.new_session_name,
-            &self.new_session_host,
-            self.new_session_port,
-            &self.new_session_username,
-            &self.new_session_password,
-            &self.new_session_group,
-            &self.new_session_private_key_path,
+            &self.new_session_form.name,
+            &self.new_session_form.host,
+            self.new_session_form.port,
+            &self.new_session_form.username,
+            &self.new_session_form.password,
+            &self.new_session_form.group,
+            &self.new_session_form.private_key_path,
         );
         let sid = session.id.clone();
-        let backend = self.new_session_vault.to_backend(&self.app_settings.vault);
-        let proxy_jump = self.new_session_proxy_jump.trim().to_string();
-        let proxy_command = self.new_session_proxy_command.trim().to_string();
-        let local_forwards_text = self.new_session_local_forwards_text.clone();
-        let remote_forwards_text = self.new_session_remote_forwards_text.clone();
-        let dynamic_forwards_text = self.new_session_dynamic_forwards_text.clone();
-        let post_connect_command = self.new_session_post_connect_command.trim().to_string();
+        let backend = self.new_session_form.vault.to_backend(&self.app_settings.vault);
+        let proxy_jump = self.new_session_form.proxy_jump.trim().to_string();
+        let proxy_command = self.new_session_form.proxy_command.trim().to_string();
+        let local_forwards_text = self.new_session_form.local_forwards_text.clone();
+        let remote_forwards_text = self.new_session_form.remote_forwards_text.clone();
+        let dynamic_forwards_text = self.new_session_form.dynamic_forwards_text.clone();
+        let post_connect_command = self.new_session_form.post_connect_command.trim().to_string();
         self.session_manager.patch_session(&sid, |s| {
             s.proxy_jump = proxy_jump.clone();
             s.proxy_command = proxy_command.clone();
-            s.use_ssh_agent = self.new_session_use_ssh_agent || self.new_session_auth_mode.is_fido2();
-            s.auth_mode = self.new_session_auth_mode;
+            s.use_ssh_agent = self.new_session_form.use_ssh_agent || self.new_session_form.auth_mode.is_fido2();
+            s.auth_mode = self.new_session_form.auth_mode;
             s.local_forwards_text = local_forwards_text;
             s.remote_forwards_text = remote_forwards_text;
             s.dynamic_forwards_text = dynamic_forwards_text;
             s.post_connect_command = post_connect_command;
-            s.color_tag = self.new_session_color_tag.clone();
+            s.color_tag = self.new_session_form.color_tag.clone();
             if !matches!(backend, SecretBackend::LocalEncrypted) {
                 s.secret_backend = backend.clone();
                 if backend.is_vault() {
@@ -7815,27 +7734,27 @@ impl MistTermApp {
 
     /// 重置新建会话表单
     fn reset_new_session_form(&mut self) {
-        self.new_session_name.clear();
-        self.new_session_host.clear();
-        self.new_session_port = 22;
-        self.new_session_port_str = "22".to_string();
-        self.new_session_username.clear();
-        self.new_session_password.clear();
-        self.new_session_group = crate::i18n::Locale::from(self.app_settings.ui_language)
+        self.new_session_form.name.clear();
+        self.new_session_form.host.clear();
+        self.new_session_form.port = 22;
+        self.new_session_form.port_str = "22".to_string();
+        self.new_session_form.username.clear();
+        self.new_session_form.password.clear();
+        self.new_session_form.group = crate::i18n::Locale::from(self.app_settings.ui_language)
             .tr("Default", "默认")
             .to_string();
-        self.new_session_color_tag.clear();
-        self.new_session_private_key_path.clear();
-        self.new_session_use_ssh_agent = true;
-        self.new_session_auth_mode = crate::core::session::SessionAuthMode::Standard;
-        self.new_session_validation_attempted = false;
-        self.new_session_proxy_jump.clear();
-        self.new_session_proxy_command.clear();
-        self.new_session_local_forwards_text.clear();
-        self.new_session_remote_forwards_text.clear();
-        self.new_session_dynamic_forwards_text.clear();
-        self.new_session_post_connect_command.clear();
-        self.new_session_vault = VaultSecretForm::default();
+        self.new_session_form.color_tag.clear();
+        self.new_session_form.private_key_path.clear();
+        self.new_session_form.use_ssh_agent = true;
+        self.new_session_form.auth_mode = crate::core::session::SessionAuthMode::Standard;
+        self.new_session_form.validation_attempted = false;
+        self.new_session_form.proxy_jump.clear();
+        self.new_session_form.proxy_command.clear();
+        self.new_session_form.local_forwards_text.clear();
+        self.new_session_form.remote_forwards_text.clear();
+        self.new_session_form.dynamic_forwards_text.clear();
+        self.new_session_form.post_connect_command.clear();
+        self.new_session_form.vault = VaultSecretForm::default();
     }
 
     /// 删除会话
@@ -7884,30 +7803,30 @@ impl MistTermApp {
 
     fn open_edit_session_dialog(&mut self, session_id: &str) {
         if let Some(session) = self.session_manager.get_session(session_id).cloned() {
-            self.edit_session_id = Some(session.id);
-            self.edit_session_name = session.name;
-            self.edit_session_host = session.host;
-            self.edit_session_port = session.port;
-            self.edit_session_port_str = session.port.to_string();
-            self.edit_session_username = session.username;
+            self.edit_session_form.id = Some(session.id);
+            self.edit_session_form.name = session.name;
+            self.edit_session_form.host = session.host;
+            self.edit_session_form.port = session.port;
+            self.edit_session_form.port_str = session.port.to_string();
+            self.edit_session_form.username = session.username;
             // FUNCTIONAL_SPEC §1.3.3：不将真实密码填入 UI
-            self.edit_session_password = "****".to_string();
-            self.edit_session_group = session.group;
-            self.edit_session_private_key_path = session.private_key_path;
-            self.edit_session_use_ssh_agent = session.use_ssh_agent;
-            self.edit_session_auth_mode = session.auth_mode;
-            self.edit_session_color_tag = session.color_tag.clone();
-            self.edit_session_keepalive_enabled = session.keepalive_enabled;
-            self.edit_session_keepalive_interval_secs = session.keepalive_interval_secs;
-            self.edit_session_keepalive_count_max = session.keepalive_count_max;
-            self.edit_session_keepalive_auto_reconnect = session.keepalive_auto_reconnect;
-            self.edit_session_proxy_jump = session.proxy_jump.clone();
-            self.edit_session_proxy_command = session.proxy_command.clone();
-            self.edit_session_local_forwards_text = session.local_forwards_text.clone();
-            self.edit_session_remote_forwards_text = session.remote_forwards_text.clone();
-            self.edit_session_dynamic_forwards_text = session.dynamic_forwards_text.clone();
-            self.edit_session_post_connect_command = session.post_connect_command.clone();
-            self.edit_session_vault = VaultSecretForm::from_backend(
+            self.edit_session_form.password = "****".to_string();
+            self.edit_session_form.group = session.group;
+            self.edit_session_form.private_key_path = session.private_key_path;
+            self.edit_session_form.use_ssh_agent = session.use_ssh_agent;
+            self.edit_session_form.auth_mode = session.auth_mode;
+            self.edit_session_form.color_tag = session.color_tag.clone();
+            self.edit_session_form.keepalive_enabled = session.keepalive_enabled;
+            self.edit_session_form.keepalive_interval_secs = session.keepalive_interval_secs;
+            self.edit_session_form.keepalive_count_max = session.keepalive_count_max;
+            self.edit_session_form.keepalive_auto_reconnect = session.keepalive_auto_reconnect;
+            self.edit_session_form.proxy_jump = session.proxy_jump.clone();
+            self.edit_session_form.proxy_command = session.proxy_command.clone();
+            self.edit_session_form.local_forwards_text = session.local_forwards_text.clone();
+            self.edit_session_form.remote_forwards_text = session.remote_forwards_text.clone();
+            self.edit_session_form.dynamic_forwards_text = session.dynamic_forwards_text.clone();
+            self.edit_session_form.post_connect_command = session.post_connect_command.clone();
+            self.edit_session_form.vault = VaultSecretForm::from_backend(
                 &session.secret_backend,
                 &self.app_settings.vault.default_mount,
             );
@@ -7916,11 +7835,11 @@ impl MistTermApp {
     }
 
     fn save_edit_session(&mut self, ctx: &egui::Context) {
-        let Some(session_id) = self.edit_session_id.clone() else {
+        let Some(session_id) = self.edit_session_form.id.clone() else {
             return;
         };
 
-        if self.edit_session_name.is_empty() || self.edit_session_host.is_empty() {
+        if self.edit_session_form.name.is_empty() || self.edit_session_form.host.is_empty() {
             self.notify_auto(
                 crate::i18n::tr(
                     ctx,
@@ -7937,46 +7856,46 @@ impl MistTermApp {
             .get_session(&session_id)
             .map(|s| s.password.clone())
             .unwrap_or_default();
-        let trimmed = self.edit_session_password.trim();
+        let trimmed = self.edit_session_form.password.trim();
         let password_to_store = if trimmed.is_empty() || trimmed == "****" {
             old_password
         } else {
-            self.edit_session_password.clone()
+            self.edit_session_form.password.clone()
         };
 
         let updated = self.session_manager.update_session(
             &session_id,
-            &self.edit_session_name,
-            &self.edit_session_host,
-            self.edit_session_port,
-            &self.edit_session_username,
+            &self.edit_session_form.name,
+            &self.edit_session_form.host,
+            self.edit_session_form.port,
+            &self.edit_session_form.username,
             &password_to_store,
-            &self.edit_session_group,
-            &self.edit_session_private_key_path,
+            &self.edit_session_form.group,
+            &self.edit_session_form.private_key_path,
         );
 
         if updated {
-            let color = self.edit_session_color_tag.clone();
-            let ka_on = self.edit_session_keepalive_enabled;
-            let ka_int = self.edit_session_keepalive_interval_secs;
-            let ka_max = self.edit_session_keepalive_count_max;
-            let ka_ar = self.edit_session_keepalive_auto_reconnect;
-            let backend = self.edit_session_vault.to_backend(&self.app_settings.vault);
+            let color = self.edit_session_form.color_tag.clone();
+            let ka_on = self.edit_session_form.keepalive_enabled;
+            let ka_int = self.edit_session_form.keepalive_interval_secs;
+            let ka_max = self.edit_session_form.keepalive_count_max;
+            let ka_ar = self.edit_session_form.keepalive_auto_reconnect;
+            let backend = self.edit_session_form.vault.to_backend(&self.app_settings.vault);
             let _ = self.session_manager.patch_session(&session_id, |s| {
                 s.color_tag = color;
                 s.keepalive_enabled = ka_on;
                 s.keepalive_interval_secs = ka_int;
                 s.keepalive_count_max = ka_max;
                 s.keepalive_auto_reconnect = ka_ar;
-                s.proxy_jump = self.edit_session_proxy_jump.trim().to_string();
-                s.proxy_command = self.edit_session_proxy_command.trim().to_string();
+                s.proxy_jump = self.edit_session_form.proxy_jump.trim().to_string();
+                s.proxy_command = self.edit_session_form.proxy_command.trim().to_string();
                 s.use_ssh_agent =
-                    self.edit_session_use_ssh_agent || self.edit_session_auth_mode.is_fido2();
-                s.auth_mode = self.edit_session_auth_mode;
-                s.local_forwards_text = self.edit_session_local_forwards_text.clone();
-                s.remote_forwards_text = self.edit_session_remote_forwards_text.clone();
-                s.dynamic_forwards_text = self.edit_session_dynamic_forwards_text.clone();
-                s.post_connect_command = self.edit_session_post_connect_command.trim().to_string();
+                    self.edit_session_form.use_ssh_agent || self.edit_session_form.auth_mode.is_fido2();
+                s.auth_mode = self.edit_session_form.auth_mode;
+                s.local_forwards_text = self.edit_session_form.local_forwards_text.clone();
+                s.remote_forwards_text = self.edit_session_form.remote_forwards_text.clone();
+                s.dynamic_forwards_text = self.edit_session_form.dynamic_forwards_text.clone();
+                s.post_connect_command = self.edit_session_form.post_connect_command.trim().to_string();
                 s.secret_backend = backend.clone();
                 if backend.is_vault() {
                     s.password.clear();
@@ -7989,12 +7908,12 @@ impl MistTermApp {
                     AuditOutcome::Success,
                 )
                 .with_session(&session_id)
-                .with_host(&self.edit_session_host),
+                .with_host(&self.edit_session_form.host),
             );
             self.notify_auto(format!(
                 "{} {}",
                 crate::i18n::tr(ctx, "Session updated:", "已更新会话："),
-                self.edit_session_name
+                self.edit_session_form.name
             ));
             if self.selected_session_id.as_deref() == Some(session_id.as_str()) {
                 self.select_session(ctx, &session_id);
@@ -9372,34 +9291,34 @@ impl MistTermApp {
             .with_host(&c.host),
         );
         self.show_new_session_dialog = true;
-        self.new_session_name = if c.name.is_empty() {
+        self.new_session_form.name = if c.name.is_empty() {
             c.host.clone()
         } else {
             c.name.clone()
         };
-        self.new_session_host = c.host.clone();
-        self.new_session_port = c.port.max(1);
-        self.new_session_port_str = self.new_session_port.to_string();
-        self.new_session_username = c.username.clone();
-        self.new_session_vault = VaultSecretForm::from_backend(
+        self.new_session_form.host = c.host.clone();
+        self.new_session_form.port = c.port.max(1);
+        self.new_session_form.port_str = self.new_session_form.port.to_string();
+        self.new_session_form.username = c.username.clone();
+        self.new_session_form.vault = VaultSecretForm::from_backend(
             &c.secret_backend,
             &self.app_settings.vault.default_mount,
         );
         match c.auth {
             CredentialAuthKind::Password | CredentialAuthKind::Token => {
-                self.new_session_password = if c.secret_backend.is_vault() {
+                self.new_session_form.password = if c.secret_backend.is_vault() {
                     String::new()
                 } else {
                     c.secret.clone()
                 };
-                self.new_session_private_key_path.clear();
+                self.new_session_form.private_key_path.clear();
             }
             CredentialAuthKind::SshKey => {
-                self.new_session_password.clear();
+                self.new_session_form.password.clear();
                 if c.secret.contains("BEGIN") {
-                    self.new_session_private_key_path.clear();
+                    self.new_session_form.private_key_path.clear();
                 } else {
-                    self.new_session_private_key_path = c.secret.clone();
+                    self.new_session_form.private_key_path = c.secret.clone();
                 }
             }
         }

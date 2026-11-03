@@ -983,7 +983,7 @@ impl MistTermApp {
                 .fixed_size(modal_sz)
                 .show(ctx, |ui| {
                     let required_missing =
-                        self.edit_session_name.trim().is_empty() || self.edit_session_host.trim().is_empty();
+                        self.edit_session_form.name.trim().is_empty() || self.edit_session_form.host.trim().is_empty();
 
                     crate::ui::chrome::modal_content_frame(theme).show(ui, |ui| {
                             ui.push_id("edit_session_form", |ui| {
@@ -1008,7 +1008,7 @@ impl MistTermApp {
                                 ui,
                                 theme,
                                 "edit_session_name",
-                                &mut self.edit_session_name,
+                                &mut self.edit_session_form.name,
                                 crate::i18n::tr(ctx, "e.g. prod-server-01", "例：生产服务器-01"),
                                 form_w,
                                 false,
@@ -1025,7 +1025,7 @@ impl MistTermApp {
                                         ui,
                                         theme,
                                         "edit_session_host",
-                                        &mut self.edit_session_host,
+                                        &mut self.edit_session_form.host,
                                         crate::i18n::tr(ctx, "IP or hostname", "IP 或域名"),
                                         host_w,
                                         false,
@@ -1038,8 +1038,8 @@ impl MistTermApp {
                                         ui,
                                         theme,
                                         "edit_session_port",
-                                        &mut self.edit_session_port_str,
-                                        &mut self.edit_session_port,
+                                        &mut self.edit_session_form.port_str,
+                                        &mut self.edit_session_form.port,
                                         88.0,
                                     );
                                 });
@@ -1056,7 +1056,7 @@ impl MistTermApp {
                                         ui,
                                         theme,
                                         "edit_session_username",
-                                        &mut self.edit_session_username,
+                                        &mut self.edit_session_form.username,
                                         crate::i18n::tr(ctx, "e.g. root", "如 root"),
                                         half,
                                         false,
@@ -1069,7 +1069,7 @@ impl MistTermApp {
                                         ui,
                                         theme,
                                         "edit_session_password",
-                                        &mut self.edit_session_password,
+                                        &mut self.edit_session_form.password,
                                         crate::i18n::tr(
                                             ctx,
                                             "**** keeps the saved password; enter a new value to reset",
@@ -1087,9 +1087,9 @@ impl MistTermApp {
                                 theme,
                                 "edit_session",
                                 form_w,
-                                &mut self.edit_session_auth_mode,
-                                &mut self.edit_session_use_ssh_agent,
-                                &mut self.edit_session_private_key_path,
+                                &mut self.edit_session_form.auth_mode,
+                                &mut self.edit_session_form.use_ssh_agent,
+                                &mut self.edit_session_form.private_key_path,
                             );
 
                             Self::ui_field_label(ui, theme, crate::i18n::tr(ctx, "Jump host", "跳板机"));
@@ -1097,7 +1097,7 @@ impl MistTermApp {
                                 ui,
                                 theme,
                                 "edit_session_proxy_jump",
-                                &mut self.edit_session_proxy_jump,
+                                &mut self.edit_session_form.proxy_jump,
                                 crate::i18n::tr(
                                     ctx,
                                     "bastion or user@bastion:22 (comma-separated hops; OpenSSH ProxyJump)",
@@ -1112,7 +1112,7 @@ impl MistTermApp {
                                 ui,
                                 theme,
                                 "edit_session_proxy_command",
-                                &mut self.edit_session_proxy_command,
+                                &mut self.edit_session_form.proxy_command,
                                 crate::i18n::tr(
                                     ctx,
                                     "e.g. ssh -W %h:%p jump (OpenSSH ProxyCommand)",
@@ -1135,7 +1135,7 @@ impl MistTermApp {
                                 ui,
                                 theme,
                                 egui::Id::unique("edit_session_local_forwards"),
-                                &mut self.edit_session_local_forwards_text,
+                                &mut self.edit_session_form.local_forwards_text,
                                 crate::i18n::tr(
                                     ctx,
                                     "8080:127.0.0.1:80 (one per line)",
@@ -1159,7 +1159,7 @@ impl MistTermApp {
                                 ui,
                                 theme,
                                 egui::Id::unique("edit_session_remote_forwards"),
-                                &mut self.edit_session_remote_forwards_text,
+                                &mut self.edit_session_form.remote_forwards_text,
                                 crate::i18n::tr(
                                     ctx,
                                     "8080:127.0.0.1:3000 (one per line)",
@@ -1183,7 +1183,7 @@ impl MistTermApp {
                                 ui,
                                 theme,
                                 egui::Id::unique("edit_session_dynamic_forwards"),
-                                &mut self.edit_session_dynamic_forwards_text,
+                                &mut self.edit_session_form.dynamic_forwards_text,
                                 crate::i18n::tr(
                                     ctx,
                                     "1080 or 0.0.0.0:1080 (one per line)",
@@ -1204,7 +1204,7 @@ impl MistTermApp {
                                 ui,
                                 theme,
                                 egui::Id::unique("edit_session_post_connect_command"),
-                                &mut self.edit_session_post_connect_command,
+                                &mut self.edit_session_form.post_connect_command,
                                 crate::i18n::tr(
                                     ctx,
                                     "e.g. tmux attach -t main | empty = off; runs once after connect/reconnect",
@@ -1220,7 +1220,7 @@ impl MistTermApp {
                                 ui,
                                 theme,
                                 "edit_session_group",
-                                &mut self.edit_session_group,
+                                &mut self.edit_session_form.group,
                                 crate::i18n::tr(ctx, "Default group", "默认分组"),
                                 form_w,
                                 false,
@@ -1235,9 +1235,9 @@ impl MistTermApp {
                                     ctx,
                                     SESSION_COLOR_TAGS
                                         .iter()
-                                        .find(|(v, _)| *v == self.edit_session_color_tag.as_str())
+                                        .find(|(v, _)| *v == self.edit_session_form.color_tag.as_str())
                                         .map(|(v, _)| *v)
-                                        .unwrap_or_else(|| self.edit_session_color_tag.as_str()),
+                                        .unwrap_or_else(|| self.edit_session_form.color_tag.as_str()),
                                 ),
                                 form_w,
                                 |ui| {
@@ -1245,7 +1245,7 @@ impl MistTermApp {
                                         let label = crate::i18n::session_color_tag(ctx, value);
                                         if ui
                                             .selectable_value(
-                                                &mut self.edit_session_color_tag,
+                                                &mut self.edit_session_form.color_tag,
                                                 value.to_string(),
                                                 label,
                                             )
@@ -1265,10 +1265,10 @@ impl MistTermApp {
                                 ui,
                                 theme,
                                 "edit_session_keepalive_enabled",
-                                &mut self.edit_session_keepalive_enabled,
+                                &mut self.edit_session_form.keepalive_enabled,
                                 crate::i18n::tr(ctx, "Enable keepalive pings", "空闲时发送心跳，防止被断开"),
                             );
-                            if self.edit_session_keepalive_enabled {
+                            if self.edit_session_form.keepalive_enabled {
                                 // 与偏好设置一致：两个步进器各占一行，窄表单不把标签折断（#130）。
                                 let every = crate::i18n::tr(ctx, "Interval (s)", "每隔（秒）");
                                 let give_up = crate::i18n::tr(ctx, "Max timeouts", "连续无应答");
@@ -1288,7 +1288,7 @@ impl MistTermApp {
                                             ui,
                                             theme,
                                             egui::Id::unique("edit_sess_ka_interval"),
-                                            &mut self.edit_session_keepalive_interval_secs,
+                                            &mut self.edit_session_form.keepalive_interval_secs,
                                             5..=300,
                                             5,
                                         )
@@ -1304,7 +1304,7 @@ impl MistTermApp {
                                             ui,
                                             theme,
                                             egui::Id::unique("edit_sess_ka_count"),
-                                            &mut self.edit_session_keepalive_count_max,
+                                            &mut self.edit_session_form.keepalive_count_max,
                                             1..=20,
                                             1,
                                         )
@@ -1315,12 +1315,12 @@ impl MistTermApp {
                                 ui,
                                 theme,
                                 "edit_session_keepalive_auto_reconnect",
-                                &mut self.edit_session_keepalive_auto_reconnect,
+                                &mut self.edit_session_form.keepalive_auto_reconnect,
                                 crate::i18n::tr(ctx, "Reconnect automatically after disconnect", "断开后自动重连"),
                             );
 
                             ui.add_space(theme.spacing_sm());
-                            self.edit_session_vault.show(
+                            self.edit_session_form.vault.show(
                                 ui,
                                 theme,
                                 form_w,
