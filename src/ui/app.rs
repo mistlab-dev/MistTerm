@@ -1115,6 +1115,8 @@ impl MistTermApp {
         // fc-list / 扫盘可能要几秒。先丢到后台，首帧和偏好下拉都不要等它。
         crate::platform::start_system_mono_font_scan();
         let app_settings = AppSettings::load();
+        // #313：首帧前就同步进程级语言，避免会话日志注解落成英文 skipped。
+        crate::i18n::set_process_language(app_settings.ui_language);
         crate::core::local_dir::set_configured(&app_settings.default_local_dir);
         let show_onboarding_help = !app_settings.onboarding_help_shown;
         let team_service = TeamService::new(app_settings.team.clone());
@@ -8873,8 +8875,8 @@ impl MistTermApp {
                     full.y_range(),
                     egui::Stroke::new(1.0, theme.border_divider_color()),
                 );
-                ui.add_space(8.0);
                 ui.vertical_centered(|ui| {
+                    ui.add_space(8.0);
                     ui.spacing_mut().item_spacing.y = 6.0;
                     if crate::ui::chrome::activity_rail_button(
                         ui,
@@ -8962,10 +8964,11 @@ impl MistTermApp {
                     {
                         self.toggle_ai_panel(ctx);
                     }
-                });
 
-                ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
-                    ui.add_space(10.0);
+                    // #310：用弹性空白把设置齿轮钉在活动栏底部，避免 bottom_up 可点区被吃光。
+                    let settings_block = theme.size_activity_rail_btn() + 14.0 + 10.0;
+                    let gap = (ui.available_height() - settings_block).max(6.0);
+                    ui.add_space(gap);
                     if crate::ui::chrome::activity_rail_button(
                         ui,
                         theme,
@@ -8979,7 +8982,12 @@ impl MistTermApp {
                     )
                     .clicked()
                     {
-                        self.open_preferences_dialog();
+                        if self.dialog_flags.preferences {
+                            self.dialog_flags.preferences = false;
+                        } else {
+                            self.open_preferences_dialog();
+                        }
+                        ctx.request_repaint();
                     }
                 });
             });

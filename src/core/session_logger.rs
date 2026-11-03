@@ -674,6 +674,62 @@ pub fn log_text_for_display(raw: &str) -> String {
         }
         out.push(c);
     }
+    localize_log_markers_for_display(&out)
+}
+
+/// #313：中文 UI 下把历史英文注解（含裸 skipped）译成中文。
+fn localize_log_markers_for_display(text: &str) -> String {
+    if crate::i18n::current_language() != crate::i18n::UiLanguage::Zh {
+        return text.to_string();
+    }
+    let mut out = text.to_string();
+    // 完整短语优先。
+    let pairs = [
+        (
+            "[fullscreen TUI started — screen refresh omitted from log]",
+            "[全屏 TUI 开始 — 屏幕刷新不写入日志]",
+        ),
+        ("[fullscreen TUI ended]", "[全屏 TUI 结束]"),
+        ("<- session connected", "<- 会话已连接"),
+        ("<- session disconnected", "<- 会话已断开"),
+    ];
+    for (en, zh) in pairs {
+        out = out.replace(en, zh);
+    }
+    out = rewrite_skipped_marker(
+        &out,
+        "[skipped vim tilde padding x",
+        "[已跳过 ",
+        " 行 vim 波浪填充]",
+    );
+    out = rewrite_skipped_marker(
+        &out,
+        "[skipped duplicate lines x",
+        "[已跳过 ",
+        " 行重复内容]",
+    );
+    out
+}
+
+fn rewrite_skipped_marker(text: &str, en_prefix: &str, zh_prefix: &str, zh_suffix: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(idx) = rest.find(en_prefix) {
+        out.push_str(&rest[..idx]);
+        let after = &rest[idx + en_prefix.len()..];
+        if let Some(end) = after.find(']') {
+            let num = &after[..end];
+            out.push_str(zh_prefix);
+            out.push_str(num);
+            out.push_str(zh_suffix);
+            rest = &after[end + 1..];
+        } else {
+            out.push_str(en_prefix);
+            rest = after;
+            break;
+        }
+    }
+    out.push_str(rest);
     out
 }
 
@@ -685,6 +741,17 @@ mod tests {
     fn log_text_for_display_strips_csi_color() {
         let raw = "ok\x1b[39;49m\x1b[0m\n";
         assert_eq!(log_text_for_display(raw), "ok\n");
+    }
+
+    #[test]
+    fn localize_skipped_markers_in_zh() {
+        crate::i18n::set_process_language(crate::i18n::UiLanguage::Zh);
+        let raw = "[MistTerm 2026-01-01 00:00:00] [skipped vim tilde padding x12]\n[MistTerm 2026-01-01 00:00:01] [skipped duplicate lines x3]\n";
+        let got = log_text_for_display(raw);
+        assert!(got.contains("已跳过 12 行 vim 波浪填充"), "{got}");
+        assert!(got.contains("已跳过 3 行重复内容"), "{got}");
+        assert!(!got.contains("skipped"), "{got}");
+        crate::i18n::set_process_language(crate::i18n::UiLanguage::En);
     }
 
     #[test]

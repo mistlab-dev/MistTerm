@@ -72,7 +72,8 @@ fn locale_id() -> egui::Id {
 /// 进程级语言镜像(0=En, 1=Zh)。供无 `egui::Context` 的后台线程/写日志等场景读取。
 static CURRENT_LANGUAGE: AtomicU8 = AtomicU8::new(0);
 
-pub fn set_language(ctx: &egui::Context, lang: UiLanguage) {
+/// 无 egui Context 时同步进程级语言(启动加载 settings / 后台写日志)。
+pub fn set_process_language(lang: UiLanguage) {
     CURRENT_LANGUAGE.store(
         match lang {
             UiLanguage::En => 0,
@@ -80,6 +81,10 @@ pub fn set_language(ctx: &egui::Context, lang: UiLanguage) {
         },
         Ordering::Relaxed,
     );
+}
+
+pub fn set_language(ctx: &egui::Context, lang: UiLanguage) {
+    set_process_language(lang);
     ctx.data_mut(|d| d.insert_temp(locale_id(), lang));
 }
 
