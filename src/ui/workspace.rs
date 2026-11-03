@@ -141,7 +141,7 @@ impl MistTermApp {
         // #287: egui 0.37 PanelState is keyed by this parent Ui's scope_id().with(salt).
         layout_util::remember_right_dock_panel_parent_scope(ctx, ui);
 
-        if self.show_fragment_panel {
+        if self.fragment_state.show_fragment_panel {
             self.show_fragment_panel(ctx, ui, theme, dock_col_w);
         }
 
@@ -765,17 +765,17 @@ impl MistTermApp {
             .as_deref()
             .and_then(|sid| self.session_manager.get_session(sid).cloned());
         let fragment_cfg = FragmentManager::default_config_path();
-        let lib_saved = self.fragment_library.show_window(
+        let lib_saved = self.fragment_state.fragment_library.show_window(
             ctx,
-            &mut self.fragment_manager,
-            &mut self.fragment_sort_by,
+            &mut self.fragment_state.fragment_manager,
+            &mut self.fragment_state.fragment_sort_by,
             &fragment_cfg,
-            &mut self.fragment_shortcut_store,
+            &mut self.fragment_state.fragment_shortcut_store,
             session_for_fragments.as_ref(),
             theme,
         );
         if lib_saved {
-            self.fragment_manager.sort(self.fragment_sort_by);
+            self.fragment_state.fragment_manager.sort(self.fragment_state.fragment_sort_by);
         }
 
         self.render_new_session_modal(ctx, theme);
@@ -791,7 +791,7 @@ impl MistTermApp {
         if open_paste_history {
             self.menu_open_paste_history(ctx);
         }
-        if self.paste_history_overlay.open {
+        if self.fragment_state.paste_history_overlay.open {
             let term_rect = self
                 .active_tab
                 .and_then(|i| self.tabs.get(i))
@@ -799,24 +799,24 @@ impl MistTermApp {
                 .map(|pane| pane.last_term_rect)
                 .unwrap_or(egui::Rect::NOTHING);
             let remembering = self.app_settings.remember_paste_history;
-            match self.paste_history_overlay.show(
+            match self.fragment_state.paste_history_overlay.show(
                 ctx,
                 theme,
-                &self.paste_history,
+                &self.fragment_state.paste_history,
                 term_rect,
                 remembering,
             ) {
                 PasteHistoryAction::Close => {
-                    self.paste_history_overlay.open = false;
+                    self.fragment_state.paste_history_overlay.open = false;
                 }
                 PasteHistoryAction::Apply(text) => {
                     self.paste_history_text_to_active(ctx, &text);
-                    self.paste_history_overlay.open = false;
+                    self.fragment_state.paste_history_overlay.open = false;
                 }
                 PasteHistoryAction::Delete(id) => {
-                    self.paste_history.remove_id(id);
-                    if self.paste_history_overlay.selected > 0 {
-                        self.paste_history_overlay.selected -= 1;
+                    self.fragment_state.paste_history.remove_id(id);
+                    if self.fragment_state.paste_history_overlay.selected > 0 {
+                        self.fragment_state.paste_history_overlay.selected -= 1;
                     }
                 }
                 PasteHistoryAction::None => {}
@@ -1376,8 +1376,8 @@ impl MistTermApp {
             self.show_edit_session_dialog = open && !should_close;
         }
 
-        if self.show_fragments_dialog {
-            let mut open = self.show_fragments_dialog;
+        if self.fragment_state.show_fragments_dialog {
+            let mut open = self.fragment_state.show_fragments_dialog;
             let mut should_close = false;
             let modal_sz = layout_util::modal_confirm_size(ctx);
             crate::ui::chrome::modal_window("fragments_modal", theme, ctx)
@@ -1434,11 +1434,11 @@ impl MistTermApp {
             if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
                 should_close = true;
             }
-            self.show_fragments_dialog = open && !should_close;
+            self.fragment_state.show_fragments_dialog = open && !should_close;
         }
 
-        if self.show_fragment_vars_dialog {
-            let mut open = self.show_fragment_vars_dialog;
+        if self.fragment_state.show_fragment_vars_dialog {
+            let mut open = self.fragment_state.show_fragment_vars_dialog;
             let mut should_close = false;
             let modal_sz = layout_util::fragment_vars_modal_size(ctx);
             crate::ui::chrome::modal_window("fragment_vars_modal", theme, ctx)
@@ -1460,14 +1460,14 @@ impl MistTermApp {
                                 egui::RichText::new(format!(
                                     "{} {}",
                                     crate::i18n::tr(ctx, "Snippet:", "片段："),
-                                    self.pending_fragment_name
+                                    self.fragment_state.pending_fragment_name
                                 ))
                                     .size(theme.font_size_fragment_dialog_caption())
                                     .color(theme.color_caption_text()),
                             );
                             ui.add_space(theme.spacing_panel_gap());
                             let var_field_w = layout_util::finite_content_width(ui);
-                            for (key, value) in &mut self.pending_fragment_vars {
+                            for (key, value) in &mut self.fragment_state.pending_fragment_vars {
                                 crate::ui::chrome::form_field_label(
                                     ui,
                                     theme,
@@ -1507,14 +1507,14 @@ impl MistTermApp {
                                 ui,
                                 theme,
                                 egui::Id::unique("pending_frag_cmd_edit"),
-                                &mut self.pending_fragment_command_edit,
+                                &mut self.fragment_state.pending_fragment_command_edit,
                                 var_field_w,
                                 4,
                                 false,
                             );
                             ui.add_space(theme.spacing_sm());
                             crate::ui::chrome::modal_footer_actions(ui, theme, |ui, th| {
-                                    let insert_label = match self.fragment_vars_completion {
+                                    let insert_label = match self.fragment_state.fragment_vars_completion {
                                         FragmentVarsCompletion::PasteInsertStats => {
                                             crate::i18n::tr(ctx, "Insert into terminal", "插入终端")
                                         }
@@ -1532,10 +1532,10 @@ impl MistTermApp {
                                     {
                                         match self.finalize_pending_fragment_send() {
                                             Ok(filled) => {
-                                                match self.fragment_vars_completion {
+                                                match self.fragment_state.fragment_vars_completion {
                                                     FragmentVarsCompletion::PasteInsertStats => {
                                                         if let Some(id) =
-                                                            self.pending_fragment_id.clone()
+                                                            self.fragment_state.pending_fragment_id.clone()
                                                         {
                                                             self.insert_expanded_fragment_with_stats(
                                                                 ctx,
@@ -1577,7 +1577,7 @@ impl MistTermApp {
                                                                         return;
                                                                     }
                                                                     if let Some(ref fid) =
-                                                                        self.pending_fragment_id
+                                                                        self.fragment_state.pending_fragment_id
                                                                     {
                                                                         let dur_ms = start
                                                                             .elapsed()
@@ -1593,7 +1593,7 @@ impl MistTermApp {
                                                                         );
                                                                     }
                                                                 } else if let Some(fid) =
-                                                                    self.pending_fragment_id.clone()
+                                                                    self.fragment_state.pending_fragment_id.clone()
                                                                 {
                                                                     self.insert_fragment_at_tab_index(
                                                                         ctx,
@@ -1604,7 +1604,7 @@ impl MistTermApp {
                                                                 }
                                                             }
                                                         }
-                                                        self.quick_selector.open = false;
+                                                        self.fragment_state.quick_selector.open = false;
                                                     }
                                                 }
                                                 should_close = true;
@@ -1633,16 +1633,16 @@ impl MistTermApp {
                         });
                 });
             if should_close {
-                self.pending_fragment_id = None;
-                self.pending_fragment_name.clear();
-                self.pending_fragment_command.clear();
-                self.pending_fragment_vars.clear();
+                self.fragment_state.pending_fragment_id = None;
+                self.fragment_state.pending_fragment_name.clear();
+                self.fragment_state.pending_fragment_command.clear();
+                self.fragment_state.pending_fragment_vars.clear();
             }
-            self.show_fragment_vars_dialog = open && !should_close;
+            self.fragment_state.show_fragment_vars_dialog = open && !should_close;
         }
 
         // 快速片段选择器
-        if self.quick_selector.open {
+        if self.fragment_state.quick_selector.open {
             let qsz = layout_util::centered_window_default_size(ctx, 0.40, 0.48);
             let qsz_v = egui::vec2(qsz[0], qsz[1]);
             let q_scroll_max = layout_util::dialog_scroll_max_height(ctx, 220.0);
@@ -1665,7 +1665,7 @@ impl MistTermApp {
                             ui,
                             theme,
                             egui::Id::unique("quick_fragment_search"),
-                            &mut self.quick_selector.search_query,
+                            &mut self.fragment_state.quick_selector.search_query,
                             crate::i18n::tr(ctx, "Search snippets…", "搜索片段…"),
                             q_search_w,
                         );
@@ -1676,8 +1676,8 @@ impl MistTermApp {
                         egui::ScrollArea::vertical()
                             .max_height(q_scroll_max)
                             .show(ui, |ui| {
-                                let fragments: Vec<_> = self.fragment_manager.list().to_vec();
-                                let search_lower = self.quick_selector.search_query.to_lowercase();
+                                let fragments: Vec<_> = self.fragment_state.fragment_manager.list().to_vec();
+                                let search_lower = self.fragment_state.quick_selector.search_query.to_lowercase();
                                 let matched: Vec<_> = fragments
                                     .iter()
                                     .filter(|fragment| {
@@ -1711,7 +1711,7 @@ impl MistTermApp {
                                 } else {
                                     for (idx, fragment) in matched.iter().enumerate() {
                                         let is_selected =
-                                            idx == self.quick_selector.selected_index;
+                                            idx == self.fragment_state.quick_selector.selected_index;
                                         let title = crate::i18n::fragment_display_title(
                                             ui.ctx(),
                                             fragment,
@@ -1719,7 +1719,7 @@ impl MistTermApp {
 
                                         if ui.selectable_label(is_selected, title).clicked() {
                                             self.execute_fragment(ctx, fragment);
-                                            self.quick_selector.open = false;
+                                            self.fragment_state.quick_selector.open = false;
                                         }
                                     }
                                 }
@@ -1741,13 +1741,13 @@ impl MistTermApp {
                     });
                 });
             if should_close {
-                self.quick_selector.open = false;
+                self.fragment_state.quick_selector.open = false;
             }
         }
 
         // 变量输入对话框(片段库定义的变量；与命令里的 `<pod>` 等占位符可串联)
-        if self.variable_dialog.open {
-            let ok_label_static = if self.variable_dialog.paste_after_fill {
+        if self.fragment_state.variable_dialog.open {
+            let ok_label_static = if self.fragment_state.variable_dialog.paste_after_fill {
                 crate::i18n::tr(ctx, "Insert into terminal", "插入终端")
             } else {
                 crate::i18n::tr(ctx, "Execute", "执行")
@@ -1773,14 +1773,14 @@ impl MistTermApp {
                         );
                         ui.label(crate::ui::chrome::rich_caption(
                             theme,
-                            &self.variable_dialog.fragment_title,
+                            &self.fragment_state.variable_dialog.fragment_title,
                         ));
                         ui.add_space(theme.spacing_sm());
                         egui::ScrollArea::vertical()
                             .max_height(scroll_h)
                             .show(ui, |ui| {
-                                if let Some(fragment_id) = &self.variable_dialog.fragment_id {
-                                    if let Some(fragment) = self.fragment_manager.get(fragment_id) {
+                                if let Some(fragment_id) = &self.fragment_state.variable_dialog.fragment_id {
+                                    if let Some(fragment) = self.fragment_state.fragment_manager.get(fragment_id) {
                                         for var in &fragment.variables {
                                             ui.label(
                                                 egui::RichText::new(&var.description)
@@ -1801,7 +1801,7 @@ impl MistTermApp {
                                                 .color(theme.text_tertiary()),
                                             );
                                             let value = self
-                                                .variable_dialog
+                                                .fragment_state.variable_dialog
                                                 .values
                                                 .entry(var.name.clone())
                                                 .or_default();
@@ -1830,11 +1830,11 @@ impl MistTermApp {
                                         )
                                         .clicked()
                                         {
-                                            self.variable_dialog.last_finalize_error = None;
-                                            self.variable_dialog.command_edit = self
+                                            self.fragment_state.variable_dialog.last_finalize_error = None;
+                                            self.fragment_state.variable_dialog.command_edit = self
                                                 .build_fragment_command_preview(
                                                     fragment,
-                                                    &self.variable_dialog.values,
+                                                    &self.fragment_state.variable_dialog.values,
                                                 );
                                         }
                                         crate::ui::chrome::form_field_label(
@@ -1850,7 +1850,7 @@ impl MistTermApp {
                                             ui,
                                             theme,
                                             egui::Id::unique("var_dialog_cmd_edit"),
-                                            &mut self.variable_dialog.command_edit,
+                                            &mut self.fragment_state.variable_dialog.command_edit,
                                             layout_util::finite_content_width(ui),
                                             5,
                                             false,
@@ -1858,7 +1858,7 @@ impl MistTermApp {
                                     }
                                 }
                             });
-                        if let Some(ref err) = self.variable_dialog.last_finalize_error {
+                        if let Some(ref err) = self.fragment_state.variable_dialog.last_finalize_error {
                             ui.add_space(theme.spacing_panel_gap());
                             ui.label(
                                 egui::RichText::new(err)
@@ -1876,16 +1876,16 @@ impl MistTermApp {
                                 ))
                                 .clicked()
                             {
-                                let paste = self.variable_dialog.paste_after_fill;
-                                if let Some(fid) = self.variable_dialog.fragment_id.clone() {
-                                    if let Some(fragment) = self.fragment_manager.get(&fid).cloned()
+                                let paste = self.fragment_state.variable_dialog.paste_after_fill;
+                                if let Some(fid) = self.fragment_state.variable_dialog.fragment_id.clone() {
+                                    if let Some(fragment) = self.fragment_state.fragment_manager.get(&fid).cloned()
                                     {
                                         match self.finalize_fragment_command_text(
-                                            &self.variable_dialog.command_edit,
-                                            &self.variable_dialog.values,
+                                            &self.fragment_state.variable_dialog.command_edit,
+                                            &self.fragment_state.variable_dialog.values,
                                         ) {
                                             Ok(cmd) => {
-                                                self.variable_dialog.last_finalize_error = None;
+                                                self.fragment_state.variable_dialog.last_finalize_error = None;
                                                 let needs = placeholders_needing_user(&cmd);
                                                 if needs.is_empty() {
                                                     if paste {
@@ -1903,29 +1903,29 @@ impl MistTermApp {
                                                                     ctx, &cmd,
                                                                 );
                                                         }
-                                                        self.quick_selector.open = false;
+                                                        self.fragment_state.quick_selector.open = false;
                                                     }
                                                 } else {
-                                                    self.pending_fragment_id = Some(fid.clone());
-                                                    self.pending_fragment_name =
+                                                    self.fragment_state.pending_fragment_id = Some(fid.clone());
+                                                    self.fragment_state.pending_fragment_name =
                                                         crate::i18n::fragment_display_title(
                                                             ctx, &fragment,
                                                         );
-                                                    self.pending_fragment_command = cmd;
-                                                    self.pending_fragment_vars = needs
+                                                    self.fragment_state.pending_fragment_command = cmd;
+                                                    self.fragment_state.pending_fragment_vars = needs
                                                         .into_iter()
                                                         .map(|k| (k, String::new()))
                                                         .collect();
-                                                    self.fragment_vars_completion = if paste {
+                                                    self.fragment_state.fragment_vars_completion = if paste {
                                                         FragmentVarsCompletion::PasteInsertStats
                                                     } else {
                                                         FragmentVarsCompletion::QuickExecuteSend
                                                     };
                                                     self.sync_pending_fragment_command_edit();
-                                                    self.show_fragment_vars_dialog = true;
+                                                    self.fragment_state.show_fragment_vars_dialog = true;
                                                 }
-                                                self.variable_dialog.paste_after_fill = false;
-                                                self.variable_dialog.open = false;
+                                                self.fragment_state.variable_dialog.paste_after_fill = false;
+                                                self.fragment_state.variable_dialog.open = false;
                                             }
                                             Err(e) => {
                                                 let localized =
@@ -1934,7 +1934,7 @@ impl MistTermApp {
                                                         &e,
                                                     );
                                                 self.notify_error(localized.clone());
-                                                self.variable_dialog.last_finalize_error =
+                                                self.fragment_state.variable_dialog.last_finalize_error =
                                                     Some(localized);
                                             }
                                         }
@@ -1958,17 +1958,17 @@ impl MistTermApp {
                             )
                             .clicked()
                             {
-                                self.variable_dialog.open = false;
-                                self.variable_dialog.paste_after_fill = false;
-                                self.variable_dialog.last_finalize_error = None;
+                                self.fragment_state.variable_dialog.open = false;
+                                self.fragment_state.variable_dialog.paste_after_fill = false;
+                                self.fragment_state.variable_dialog.last_finalize_error = None;
                             }
                         });
                     });
                 });
             if should_close {
-                self.variable_dialog.open = false;
-                self.variable_dialog.paste_after_fill = false;
-                self.variable_dialog.last_finalize_error = None;
+                self.fragment_state.variable_dialog.open = false;
+                self.fragment_state.variable_dialog.paste_after_fill = false;
+                self.fragment_state.variable_dialog.last_finalize_error = None;
             }
             ctx.move_to_top(egui::LayerId::new(
                 egui::Order::Middle,

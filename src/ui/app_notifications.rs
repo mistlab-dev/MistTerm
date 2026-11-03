@@ -293,7 +293,7 @@ impl MistTermApp {
     pub(crate) fn clear_toast(&mut self) {
         self.active_toast = None;
         self.status_message.clear();
-        self.pending_suggested_snippet = None;
+        self.fragment_state.pending_suggested_snippet = None;
     }
 
     /// Tab index of a sticky reconnect toast, if any.
@@ -491,7 +491,7 @@ impl MistTermApp {
             }
             ToastAction::InsertSuggestedSnippet => {
                 // 必须在 clear_toast 之前取出(clear 会丢掉 pending)
-                let pending = self.pending_suggested_snippet.take();
+                let pending = self.fragment_state.pending_suggested_snippet.take();
                 self.active_toast = None;
                 self.status_message.clear();
                 if let Some((tab_idx, fragment)) = pending {
@@ -502,7 +502,7 @@ impl MistTermApp {
                 }
             }
             ToastAction::SaveSuggestedSnippet => {
-                let pending = self.pending_suggested_snippet.clone();
+                let pending = self.fragment_state.pending_suggested_snippet.clone();
                 if let Some((_tab_idx, fragment)) = pending {
                     let (is_new, _stored_title) =
                         self.save_suggested_snippet_to_personal(&fragment);
@@ -528,12 +528,12 @@ impl MistTermApp {
                     .pending_ask_fallback_question
                     .take()
                     .unwrap_or_else(|| self.ask_knowledge_query.clone());
-                self.pending_fragment_candidate = None;
+                self.fragment_state.pending_fragment_candidate = None;
                 self.clear_toast();
                 self.open_ai_with_model_fallback(ctx, &q);
             }
             ToastAction::ConfirmSaveCandidate => {
-                let pending = self.pending_fragment_candidate.take();
+                let pending = self.fragment_state.pending_fragment_candidate.take();
                 self.clear_toast();
                 if let Some(cand) = pending {
                     self.save_fragment_candidate(ctx, &cand);
