@@ -22,7 +22,7 @@ impl MistTermApp {
         ui.menu_button(label(l.terminal_menu), |ui| {
             crate::ui::chrome::apply_menu_popup_style(ui, theme);
             if crate::ui::chrome::popup_menu_button_accel(ui, theme, l.new_session, "n").clicked() {
-                self.show_new_session_dialog = true;
+                self.dialog_flags.new_session = true;
             }
             let new_tab_accel = crate::platform::new_tab_accel();
             if crate::ui::chrome::popup_menu_button_shortcut(
@@ -164,7 +164,7 @@ impl MistTermApp {
                 ui.close();
             }
             if crate::ui::chrome::popup_menu_button(ui, theme, l.ai_settings).clicked() {
-                self.show_ai_settings_dialog = true;
+                self.dialog_flags.ai_settings = true;
             }
         });
         ui.menu_button(label(l.view_menu), |ui| {
@@ -467,7 +467,7 @@ impl MistTermApp {
                 self.update_check_now(ctx);
             }
             if crate::ui::chrome::popup_menu_button(ui, theme, l.help_about).clicked() {
-                self.show_about_dialog = true;
+                self.dialog_flags.about = true;
             }
         });
     }

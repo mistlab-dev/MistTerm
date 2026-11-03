@@ -323,7 +323,7 @@ impl MistTermApp {
                                 let _ = col_actions;
 
                                 if sidebar_output.create_session_clicked {
-                                    self.show_new_session_dialog = true;
+                                    self.dialog_flags.new_session = true;
                                 }
                                 if sidebar_output.local_shell_clicked {
                                     self.open_local_shell_tab(ctx);
@@ -470,7 +470,7 @@ impl MistTermApp {
                                         );
                                     }
 
-                                    let search_h = if self.show_terminal_search {
+                                    let search_h = if self.terminal_search.open {
                                         theme.size_terminal_search_bar_h()
                                     } else {
                                         0.0
@@ -495,7 +495,7 @@ impl MistTermApp {
                                         - agent_banner_h
                                         - disconnect_banner_h)
                                         .max(1.0);
-                                    let terminal_search_open = self.show_terminal_search;
+                                    let terminal_search_open = self.terminal_search.open;
                                     ui.allocate_ui_with_layout(
                                         egui::vec2(
                                             term_col_w,
@@ -601,11 +601,11 @@ impl MistTermApp {
                                             tab_sep_stroke,
                                         );
                                     }
-                                    if self.show_terminal_search
+                                    if self.terminal_search.open
                                         && self.show_terminal_search_bar(ui, theme)
                                     {
-                                        self.show_terminal_search = false;
-                                        self.terminal_search_pending_focus = false;
+                                        self.terminal_search.open = false;
+                                        self.terminal_search.pending_focus = false;
                                     }
                                     if self.command_history_overlay.open {
                                         if let Some(idx) = self.active_tab {
@@ -694,21 +694,21 @@ impl MistTermApp {
         self.tick_status_toast();
         self.show_status_toast(ctx, theme);
 
-        if self.show_ai_settings_dialog {
+        if self.dialog_flags.ai_settings {
             self.ai_panel.show_settings_dialog(
                 ctx,
                 theme,
-                &mut self.show_ai_settings_dialog,
+                &mut self.dialog_flags.ai_settings,
                 &mut self.app_settings,
             );
         }
 
-        if self.show_audit_timeline_dialog {
+        if self.dialog_flags.audit_timeline {
             let mut action = crate::ui::audit_timeline_dialog::AuditTimelineUiAction::None;
             crate::ui::audit_timeline_dialog::show_audit_timeline_modal(
                 ctx,
                 theme,
-                &mut self.show_audit_timeline_dialog,
+                &mut self.dialog_flags.audit_timeline,
                 &self.audit_timeline,
                 &mut self.audit_timeline_host_filter,
                 &mut self.audit_timeline_outcome_filter,
@@ -719,21 +719,21 @@ impl MistTermApp {
             }
         }
 
-        if self.show_agent_install_dialog {
+        if self.dialog_flags.agent_install {
             crate::ui::agent_install_dialog::show_agent_install_modal(
                 ctx,
                 theme,
-                &mut self.show_agent_install_dialog,
+                &mut self.dialog_flags.agent_install,
                 &mut self.agent_install_copied,
             );
         }
 
-        if self.show_ask_knowledge_dialog {
+        if self.dialog_flags.ask_knowledge {
             let mut action = crate::ui::ask_knowledge_dialog::AskKnowledgeUiAction::None;
             crate::ui::ask_knowledge_dialog::show_ask_knowledge_modal(
                 ctx,
                 theme,
-                &mut self.show_ask_knowledge_dialog,
+                &mut self.dialog_flags.ask_knowledge,
                 &mut self.ask_knowledge_query,
                 &self.ask_knowledge_hits,
                 self.ask_knowledge_searched,
@@ -747,13 +747,13 @@ impl MistTermApp {
                     if let Some(hit) = self.ask_knowledge_hits.get(i) {
                         if let Some(frag) = hit.fragment.clone() {
                             self.begin_fragment_insert(ctx, &frag, true);
-                            self.show_ask_knowledge_dialog = false;
+                            self.dialog_flags.ask_knowledge = false;
                         }
                     }
                 }
                 crate::ui::ask_knowledge_dialog::AskKnowledgeUiAction::AskModel => {
                     let q = self.ask_knowledge_query.clone();
-                    self.show_ask_knowledge_dialog = false;
+                    self.dialog_flags.ask_knowledge = false;
                     self.open_ai_with_model_fallback(ctx, &q);
                 }
                 crate::ui::ask_knowledge_dialog::AskKnowledgeUiAction::None => {}
@@ -828,8 +828,8 @@ impl MistTermApp {
             self.render_crash_notice_dialog(ctx, theme);
         }
 
-        if self.show_about_dialog {
-            let mut open = self.show_about_dialog;
+        if self.dialog_flags.about {
+            let mut open = self.dialog_flags.about;
             let mut should_close = false;
             let about_title = crate::i18n::tr(ctx, "About MistTerm", "关于 MistTerm");
             let subtitle = crate::i18n::tr(
@@ -928,7 +928,7 @@ impl MistTermApp {
                             )
                             .clicked()
                             {
-                                self.show_licenses_dialog = true;
+                                self.dialog_flags.licenses = true;
                             }
                         });
                     });
@@ -936,12 +936,12 @@ impl MistTermApp {
             if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
                 should_close = true;
             }
-            self.show_about_dialog = open && !should_close;
+            self.dialog_flags.about = open && !should_close;
         }
         self.render_licenses_modal(ctx, theme);
         self.render_update_dialog(ctx, theme);
 
-        if self.show_preferences_dialog {
+        if self.dialog_flags.preferences {
             self.show_preferences_modal(ctx, theme);
         }
 
@@ -971,8 +971,8 @@ impl MistTermApp {
             self.notify_error(error);
         }
 
-        if self.show_edit_session_dialog {
-            let mut open = self.show_edit_session_dialog;
+        if self.dialog_flags.edit_session {
+            let mut open = self.dialog_flags.edit_session;
             let mut should_close = false;
             let modal_sz = layout_util::modal_edit_size(ctx);
             crate::ui::chrome::modal_window("edit_session_modal", theme, ctx)
@@ -1351,7 +1351,7 @@ impl MistTermApp {
                                     && can_save
                                 {
                                     self.save_edit_session(ui.ctx());
-                                    should_close = !self.show_edit_session_dialog;
+                                    should_close = !self.dialog_flags.edit_session;
                                 }
                                 if crate::ui::chrome::modal_secondary_icon_button(
                                     ui,
@@ -1367,13 +1367,13 @@ impl MistTermApp {
                     });
                     if ui.input(|i| i.key_pressed(egui::Key::Enter)) && !required_missing {
                         self.save_edit_session(ui.ctx());
-                        should_close = !self.show_edit_session_dialog;
+                        should_close = !self.dialog_flags.edit_session;
                     }
                     if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                         should_close = true;
                     }
                 });
-            self.show_edit_session_dialog = open && !should_close;
+            self.dialog_flags.edit_session = open && !should_close;
         }
 
         if self.fragment_state.show_fragments_dialog {
@@ -2651,7 +2651,7 @@ impl MistTermApp {
         } else if open_local {
             self.open_local_shell_tab(ctx);
         } else if open_new_connection {
-            self.show_new_session_dialog = true;
+            self.dialog_flags.new_session = true;
         }
     }
 

@@ -320,17 +320,17 @@ pub struct MistTermApp {
     rule_manager_dialog: crate::ui::rule_manager_dialog::RuleManagerDialog,
 
     /// 是否显示新建会话对话框
-    show_new_session_dialog: bool,
-    show_edit_session_dialog: bool,
-    show_about_dialog: bool,
+
+
+
     /// 关于 → 开源许可(第三方许可证全文)
-    show_licenses_dialog: bool,
+
     /// #189：启动检测到上次运行有未提示过的崩溃时弹一次的提示窗。
     crash_notice: Option<crate::core::crash_reporter::CrashNotice>,
     /// 自动更新：后台检查状态与「软件更新」窗口。
     update_ui: update::UpdateUi,
     /// 原型 / 常见桌面习惯：⌘, 偏好设置(主题等)
-    show_preferences_dialog: bool,
+
     /// 偏好设置 → Vault Token 输入草稿(不落盘；保存时写入钥匙串)
     pref_vault_token_draft: String,
     /// 偏好「默认本地目录」输入框草稿（失焦/回车时校验并保存）。
@@ -338,17 +338,15 @@ pub struct MistTermApp {
     /// 本帧命令片段 `SidePanel` 槽位矩形(`ui.max_rect()`)
     /// 本帧任意右侧 dock(片段/SFTP/监控等)与主区交界的最左 **屏幕 x**(多栏时取 min，即贴主区的那条边)
     right_dock_outer_left_x: Option<f32>,
+    /// 弹窗开关集合（P1c 收编：new/edit/about/licenses/preferences/ai_settings/audit_timeline/agent_install/ask_knowledge）
+    pub(crate) dialog_flags: crate::ui::dialog_flags::DialogFlags,
     show_monitor_panel: bool, // 监控面板
     show_ai_panel: bool,
-    show_ai_settings_dialog: bool,
+
     /// 终端视口搜索(当前屏缓冲，不含卷动历史)
-    show_terminal_search: bool,
     /// 打开查找条后首帧聚焦输入框
-    terminal_search_pending_focus: bool,
-    terminal_search_query: String,
-    terminal_search_ignore_case: bool,
-    terminal_search_hits: Vec<crate::terminal::SearchHit>,
-    terminal_search_cur: usize,
+    /// 终端搜索（Ctrl+F）状态（P1c 收编）
+    pub(crate) terminal_search: crate::ui::terminal_search::TerminalSearchState,
     show_sftp_panel: bool, // SFTP 文件浏览器
     show_port_forward_panel: bool,
     /// 上次已同步 SFTP 列表的终端标签索引(切换标签时重置远端浏览状态)
@@ -380,14 +378,14 @@ pub struct MistTermApp {
     team_service: TeamService,
     team_login_form: TeamLoginForm,
     team_settings_dialog: TeamSettingsState,
-    show_audit_timeline_dialog: bool,
-    show_agent_install_dialog: bool,
+
+
     agent_install_copied: bool,
     audit_timeline: AuditTimeline,
     audit_timeline_host_filter: String,
     audit_timeline_outcome_filter: Option<TimelineOutcome>,
     /// 「问：我们怎么……」对话框
-    show_ask_knowledge_dialog: bool,
+
     ask_knowledge_query: String,
     ask_knowledge_hits: Vec<KnowledgeHit>,
     ask_knowledge_searched: bool,
@@ -798,7 +796,7 @@ impl MistTermApp {
         if self.ask_knowledge_query.is_empty() && !self.fragment_state.fragment_search_query.is_empty() {
             self.ask_knowledge_query = self.fragment_state.fragment_search_query.clone();
         }
-        self.show_ask_knowledge_dialog = true;
+        self.dialog_flags.ask_knowledge = true;
     }
 
     fn run_ask_knowledge_search(&mut self) {
@@ -1176,25 +1174,15 @@ impl MistTermApp {
             cmd_audit_personal_rules,
             prev_viewport_focused: true,
             pending_foreground_reconnect: None,
-            show_new_session_dialog: false,
-            show_edit_session_dialog: false,
-            show_about_dialog: false,
-            show_licenses_dialog: false,
             crash_notice: crate::core::crash_reporter::take_startup_notice(),
             update_ui: update::UpdateUi::new(),
-            show_preferences_dialog: false,
             pref_vault_token_draft: String::new(),
             pref_local_dir_draft: None,
             right_dock_outer_left_x: None,
+            dialog_flags: crate::ui::dialog_flags::DialogFlags::default(),
             show_monitor_panel: false,
             show_ai_panel: false,
-            show_ai_settings_dialog: false,
-            show_terminal_search: false,
-            terminal_search_pending_focus: false,
-            terminal_search_query: String::new(),
-            terminal_search_ignore_case: true,
-            terminal_search_hits: Vec::new(),
-            terminal_search_cur: 0,
+            terminal_search: crate::ui::terminal_search::TerminalSearchState::default(),
             show_sftp_panel: false,
             show_port_forward_panel: false,
             sftp_last_tab: None,
@@ -1209,13 +1197,10 @@ impl MistTermApp {
             team_service,
             team_login_form: TeamLoginForm::default(),
             team_settings_dialog: TeamSettingsState::default(),
-            show_audit_timeline_dialog: false,
-            show_agent_install_dialog: false,
             agent_install_copied: false,
             audit_timeline: AuditTimeline::new(),
             audit_timeline_host_filter: String::new(),
             audit_timeline_outcome_filter: None,
-            show_ask_knowledge_dialog: false,
             ask_knowledge_query: String::new(),
             ask_knowledge_hits: Vec::new(),
             ask_knowledge_searched: false,
@@ -1624,12 +1609,12 @@ impl MistTermApp {
     }
 
     pub(crate) fn open_audit_timeline_dialog(&mut self) {
-        self.show_audit_timeline_dialog = true;
+        self.dialog_flags.audit_timeline = true;
     }
 
     pub(crate) fn open_agent_install_dialog(&mut self) {
         self.agent_install_copied = false;
-        self.show_agent_install_dialog = true;
+        self.dialog_flags.agent_install = true;
     }
 
     /// 经命令审计后发送到指定标签的 PTY(拦截/确认在 UI 层处理)。
@@ -3354,7 +3339,7 @@ impl MistTermApp {
             // 新开连接（#90 后续）：预填 IP 到新建连接弹窗，名称留空由用户填。
             self.new_session_form.host = ip;
             self.new_session_form.name.clear();
-            self.show_new_session_dialog = true;
+            self.dialog_flags.new_session = true;
         }
         self.poll_connection_placeholder_actions(ctx);
         self.dismiss_stale_reconnect_toast_if_needed();
@@ -3810,24 +3795,24 @@ impl MistTermApp {
 
     /// 存在模态/表单/查找条等需使用标准编辑快捷键(⌘C/V/A)的 UI
     fn global_shortcuts_blocked(&self) -> bool {
-        self.show_new_session_dialog
-            || self.show_edit_session_dialog
-            || self.show_about_dialog
+        self.dialog_flags.new_session
+            || self.dialog_flags.edit_session
+            || self.dialog_flags.about
             || self.crash_notice.is_some()
-            || self.show_licenses_dialog
+            || self.dialog_flags.licenses
             || self.update_ui.dialog_open()
-            || self.show_preferences_dialog
+            || self.dialog_flags.preferences
             || self.fragment_state.show_fragments_dialog
             || self.fragment_state.show_fragment_vars_dialog
             || self.fragment_state.show_fragment_analytics_dialog
-            || self.show_audit_timeline_dialog
-            || self.show_agent_install_dialog
-            || self.show_ask_knowledge_dialog
+            || self.dialog_flags.audit_timeline
+            || self.dialog_flags.agent_install
+            || self.dialog_flags.ask_knowledge
             || self.fragment_state.variable_dialog.open
             || self.fragment_state.fragment_library.open
             || self.fragment_state.send_sequence_dialog.open
             || self.rule_manager_dialog.open
-            || self.show_terminal_search
+            || self.terminal_search.open
             || self.delete_session_confirm.is_some()
             || self.close_tab_confirm_idx.is_some()
             || self.cmd_audit_confirm.is_some()
@@ -3843,7 +3828,7 @@ impl MistTermApp {
             || self.session_log_dialog.open
             || self.team_members_dialog.open
             || self.help_docs_dialog.open
-            || self.show_ai_settings_dialog
+            || self.dialog_flags.ai_settings
             || self.fragment_state.team_fragment_versions.open
             || self.fragment_state.team_fragment_shares.open
             || self.team_settings_dialog.open
@@ -4437,7 +4422,7 @@ impl MistTermApp {
     ) {
         use crate::ui::command_palette::PaletteAction;
         match action {
-            PaletteAction::NewSession => self.show_new_session_dialog = true,
+            PaletteAction::NewSession => self.dialog_flags.new_session = true,
             PaletteAction::NewTab => self.open_new_tab_from_selection(ctx),
             PaletteAction::LocalShell => self.open_local_shell_tab(ctx),
             PaletteAction::Sftp => self.toggle_sftp_panel(ctx),
@@ -4450,7 +4435,7 @@ impl MistTermApp {
             PaletteAction::SnippetPanel => self.toggle_fragment_sidebar(ctx),
             PaletteAction::QuickSnippets => self.fragment_state.quick_selector.open = true,
             PaletteAction::FindInTerminal => self.toggle_terminal_search(),
-            PaletteAction::About => self.show_about_dialog = true,
+            PaletteAction::About => self.dialog_flags.about = true,
             PaletteAction::Immersive => self.toggle_activity_rail(),
             PaletteAction::Credentials => {
                 if self.ensure_right_dock_allowed_or_warn(ctx) {
@@ -4801,11 +4786,11 @@ impl MistTermApp {
     /// 居中模态窗打开时不绘制右 dock Foreground，避免与弹窗标题栏 × 叠在同一位置。
     /// 偏好设置等视口居中弹窗不抑制：弹窗在终端区，不与右侧 dock 关闭钮重叠。
     fn suppress_right_dock_foreground(&self) -> bool {
-        self.show_new_session_dialog
-            || self.show_edit_session_dialog
+        self.dialog_flags.new_session
+            || self.dialog_flags.edit_session
             || self.fragment_state.show_fragments_dialog
             || self.fragment_state.show_fragment_vars_dialog
-            || self.show_ai_settings_dialog
+            || self.dialog_flags.ai_settings
             || self.fragment_state.variable_dialog.open
             || self.ssh_import_dialog.open
             || self.foreign_import_dialog.open
@@ -5892,29 +5877,29 @@ impl MistTermApp {
         let ctx = ui.ctx().clone();
         let detail = if self.current_terminal().is_none() {
             crate::i18n::tr(&ctx, "Open a terminal tab first", "请先打开终端标签").to_string()
-        } else if self.terminal_search_query.is_empty() {
+        } else if self.terminal_search.query.is_empty() {
             crate::i18n::tr(
                 &ctx,
                 "Matches terminal buffer (incl. scrollback)",
                 "匹配终端缓冲(含 scrollback)",
             )
             .to_string()
-        } else if self.terminal_search_hits.is_empty() {
+        } else if self.terminal_search.hits.is_empty() {
             crate::i18n::tr(&ctx, "No matches", "无匹配").to_string()
         } else {
-            let hit = self.terminal_search_hits[self.terminal_search_cur];
+            let hit = self.terminal_search.hits[self.terminal_search.cur];
             match crate::i18n::language(&ctx) {
                 crate::i18n::UiLanguage::En => format!(
                     "{}/{} · line {} col {}",
-                    self.terminal_search_cur + 1,
-                    self.terminal_search_hits.len(),
+                    self.terminal_search.cur + 1,
+                    self.terminal_search.hits.len(),
                     hit.line.0,
                     hit.column + 1
                 ),
                 crate::i18n::UiLanguage::Zh => format!(
                     "第 {}/{} · 行{} 列{}",
-                    self.terminal_search_cur + 1,
-                    self.terminal_search_hits.len(),
+                    self.terminal_search.cur + 1,
+                    self.terminal_search.hits.len(),
                     hit.line.0,
                     hit.column + 1
                 ),
@@ -5946,25 +5931,25 @@ impl MistTermApp {
                     ui,
                     theme,
                     search_id,
-                    &mut self.terminal_search_query,
+                    &mut self.terminal_search.query,
                     crate::i18n::tr(&ctx, "Keyword…", "关键词…"),
                     input_w,
                     false,
                 );
-                if self.terminal_search_pending_focus {
+                if self.terminal_search.pending_focus {
                     resp.request_focus();
-                    self.terminal_search_pending_focus = false;
+                    self.terminal_search.pending_focus = false;
                 }
                 if resp.changed() {
                     self.rebuild_terminal_search_matches();
                 }
                 if resp.has_focus()
                     && ui.ctx().input(|i| i.key_pressed(Key::Enter))
-                    && !self.terminal_search_hits.is_empty()
+                    && !self.terminal_search.hits.is_empty()
                 {
                     self.terminal_search_step(1);
                 }
-                if crate::ui::chrome::form_checkbox(ui, theme, &mut self.terminal_search_ignore_case, "Aa")
+                if crate::ui::chrome::form_checkbox(ui, theme, &mut self.terminal_search.ignore_case, "Aa")
                     .on_hover_text(crate::i18n::tr(&ctx, "Ignore case", "忽略大小写"))
                     .changed()
                 {
@@ -6584,7 +6569,7 @@ impl MistTermApp {
                     self.attach_recent_failure_to_ai(ctx);
                 }
                 AppAction::OpenQuickConnectDialog => {
-                    self.show_new_session_dialog = true;
+                    self.dialog_flags.new_session = true;
                 }
                 AppAction::OpenSnippetsDialog => {
                     self.fragment_state.show_fragments_dialog = true;
@@ -7014,7 +6999,7 @@ impl MistTermApp {
     /// 同一时刻最多保留一层的业务弹窗；打开任一层前先收起其它层。
     fn close_competing_business_dialogs_for(&mut self, target: BusinessDialog) {
         if target != BusinessDialog::Preferences {
-            self.show_preferences_dialog = false;
+            self.dialog_flags.preferences = false;
         }
         if target != BusinessDialog::SnippetLibrary {
             self.fragment_state.fragment_library.open = false;
@@ -7038,7 +7023,7 @@ impl MistTermApp {
 
     pub(crate) fn open_preferences_dialog(&mut self) {
         self.close_competing_business_dialogs_for(BusinessDialog::Preferences);
-        self.show_preferences_dialog = true;
+        self.dialog_flags.preferences = true;
     }
 
     pub(crate) fn open_snippet_library_dialog(&mut self) {
@@ -7417,27 +7402,27 @@ impl MistTermApp {
     }
 
     fn toggle_terminal_search(&mut self) {
-        self.show_terminal_search = !self.show_terminal_search;
-        if self.show_terminal_search {
-            self.terminal_search_pending_focus = true;
+        self.terminal_search.open = !self.terminal_search.open;
+        if self.terminal_search.open {
+            self.terminal_search.pending_focus = true;
             self.rebuild_terminal_search_matches();
         } else {
-            self.terminal_search_pending_focus = false;
+            self.terminal_search.pending_focus = false;
             self.sync_terminal_search_highlight();
         }
     }
 
     fn sync_terminal_search_highlight(&mut self) {
-        let q_len = self.terminal_search_query.chars().count();
-        if !self.show_terminal_search || self.terminal_search_query.is_empty() || q_len == 0 {
+        let q_len = self.terminal_search.query.chars().count();
+        if !self.terminal_search.open || self.terminal_search.query.is_empty() || q_len == 0 {
             if let Some(t) = self.current_terminal_mut() {
                 t.set_search_highlight(None);
             }
             return;
         }
         let Some(hit) = self
-            .terminal_search_hits
-            .get(self.terminal_search_cur)
+            .terminal_search.hits
+            .get(self.terminal_search.cur)
             .copied()
         else {
             if let Some(t) = self.current_terminal_mut() {
@@ -7454,40 +7439,40 @@ impl MistTermApp {
     }
 
     fn terminal_search_step(&mut self, delta: isize) {
-        if self.terminal_search_hits.is_empty() {
+        if self.terminal_search.hits.is_empty() {
             return;
         }
-        let n = self.terminal_search_hits.len();
-        self.terminal_search_cur = if delta >= 0 {
-            (self.terminal_search_cur + 1) % n
+        let n = self.terminal_search.hits.len();
+        self.terminal_search.cur = if delta >= 0 {
+            (self.terminal_search.cur + 1) % n
         } else {
-            (self.terminal_search_cur + n - 1) % n
+            (self.terminal_search.cur + n - 1) % n
         };
         self.sync_terminal_search_highlight();
     }
 
     fn rebuild_terminal_search_matches(&mut self) {
-        self.terminal_search_hits.clear();
+        self.terminal_search.hits.clear();
         let Some(t) = self.current_terminal() else {
-            self.terminal_search_cur = 0;
+            self.terminal_search.cur = 0;
             self.sync_terminal_search_highlight();
             return;
         };
-        if self.terminal_search_query.is_empty() {
-            self.terminal_search_cur = 0;
+        if self.terminal_search.query.is_empty() {
+            self.terminal_search.cur = 0;
             self.sync_terminal_search_highlight();
             return;
         }
-        self.terminal_search_hits = t.search_all(
-            &self.terminal_search_query,
-            self.terminal_search_ignore_case,
+        self.terminal_search.hits = t.search_all(
+            &self.terminal_search.query,
+            self.terminal_search.ignore_case,
         );
-        if self.terminal_search_hits.is_empty() {
-            self.terminal_search_cur = 0;
+        if self.terminal_search.hits.is_empty() {
+            self.terminal_search.cur = 0;
         } else {
-            self.terminal_search_cur = self
-                .terminal_search_cur
-                .min(self.terminal_search_hits.len() - 1);
+            self.terminal_search.cur = self
+                .terminal_search.cur
+                .min(self.terminal_search.hits.len() - 1);
         }
         self.sync_terminal_search_highlight();
     }
@@ -7560,7 +7545,7 @@ impl MistTermApp {
         self.new_session_form.port = url.port;
         self.new_session_form.port_str = url.port.to_string();
         self.new_session_form.username = url.user.clone().unwrap_or_default();
-        self.show_new_session_dialog = true;
+        self.dialog_flags.new_session = true;
         self.notify_auto(match crate::i18n::language(ctx) {
             crate::i18n::UiLanguage::En => format!(
                 "{} is not saved yet. Fill in the password (or choose a key), then click Save & connect.",
@@ -7737,7 +7722,7 @@ impl MistTermApp {
                 &session.secret_backend,
                 &self.app_settings.vault.default_mount,
             );
-            self.show_edit_session_dialog = true;
+            self.dialog_flags.edit_session = true;
         }
     }
 
@@ -7825,7 +7810,7 @@ impl MistTermApp {
             if self.selected_session_id.as_deref() == Some(session_id.as_str()) {
                 self.select_session(ctx, &session_id);
             }
-            self.show_edit_session_dialog = false;
+            self.dialog_flags.edit_session = false;
         } else {
             self.notify_error(
                 crate::i18n::tr(ctx, "Failed to update session", "更新会话失败").to_string(),
@@ -8952,7 +8937,7 @@ impl MistTermApp {
                         ui,
                         theme,
                         crate::ui::icons::IconId::Settings,
-                        self.show_preferences_dialog,
+                        self.dialog_flags.preferences,
                         &tip(
                             menu.preferences,
                             Some(crate::platform::accel_literal(",")),
@@ -9072,7 +9057,7 @@ impl MistTermApp {
         match action {
             MacMenuAction::ImportSsh => self.open_ssh_import_dialog(ctx),
             MacMenuAction::ImportForeign => self.open_foreign_import_dialog(),
-            MacMenuAction::NewSession => self.show_new_session_dialog = true,
+            MacMenuAction::NewSession => self.dialog_flags.new_session = true,
             MacMenuAction::NewTab => self.open_new_tab_from_selection(ctx),
             MacMenuAction::LocalShell => self.open_local_shell_tab(ctx),
             MacMenuAction::SplitHorizontal => {
@@ -9172,7 +9157,7 @@ impl MistTermApp {
             }
             MacMenuAction::OpenCrashReports => self.open_crash_report_folder(ctx),
             MacMenuAction::OpenHangReports => self.open_hang_report_folder(ctx),
-            MacMenuAction::About => self.show_about_dialog = true,
+            MacMenuAction::About => self.dialog_flags.about = true,
             MacMenuAction::CheckForUpdates => self.update_check_now(ctx),
         }
     }
@@ -9197,7 +9182,7 @@ impl MistTermApp {
             .with_resource(&c.id)
             .with_host(&c.host),
         );
-        self.show_new_session_dialog = true;
+        self.dialog_flags.new_session = true;
         self.new_session_form.name = if c.name.is_empty() {
             c.host.clone()
         } else {
@@ -9324,7 +9309,7 @@ impl eframe::App for MistTermApp {
                 self.show_ai_panel,
                 self.show_sftp_panel,
                 self.show_port_forward_panel,
-                self.show_terminal_search,
+                self.terminal_search.open,
                 self.activity_rail_collapsed
             ),
             busy_hint: {
@@ -9345,13 +9330,13 @@ impl eframe::App for MistTermApp {
                 {
                     parts.push("ssh.connecting");
                 }
-                if self.show_new_session_dialog {
+                if self.dialog_flags.new_session {
                     parts.push("dialog.new_session");
                 }
-                if self.show_edit_session_dialog {
+                if self.dialog_flags.edit_session {
                     parts.push("dialog.edit_session");
                 }
-                if self.show_preferences_dialog {
+                if self.dialog_flags.preferences {
                     parts.push("dialog.preferences");
                 }
                 if self.delete_session_confirm.is_some() {
@@ -9404,7 +9389,7 @@ impl eframe::App for MistTermApp {
         {
             self.fragment_state.quick_selector.open = true;
         }
-        if self.show_terminal_search {
+        if self.terminal_search.open {
             if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::F))
                 || ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::F))
             {
@@ -9417,7 +9402,7 @@ impl eframe::App for MistTermApp {
                 self.toggle_terminal_search();
             }
         }
-        if self.show_terminal_search {
+        if self.terminal_search.open {
             let step = ctx.input(|i| {
                 if i.key_pressed(egui::Key::F3) {
                     Some(if i.modifiers.shift { -1 } else { 1 })
@@ -9836,7 +9821,7 @@ impl eframe::App for MistTermApp {
         // Ctrl+Shift+Backspace 关闭新建会话弹窗(勿用 Esc 组合：Windows Ctrl+Shift+Esc 打开任务管理器)
         // Ctrl+Shift+S 切换 SFTP；Ctrl+Shift+F7 打开命令片段库；Ctrl+Shift+F9/F10 上传/下载 MISTTERM_E2E_FILE
         if crate::ui::sftp_panel::SftpPanel::gui_automation_enabled() {
-            if self.show_new_session_dialog
+            if self.dialog_flags.new_session
                 && ctx.input_mut(|i| {
                     i.consume_key(
                         egui::Modifiers::CTRL | egui::Modifiers::SHIFT,
@@ -9844,7 +9829,7 @@ impl eframe::App for MistTermApp {
                     )
                 })
             {
-                self.show_new_session_dialog = false;
+                self.dialog_flags.new_session = false;
                 self.reset_new_session_form();
             }
             if ctx.input_mut(|i| {
@@ -9907,7 +9892,7 @@ impl eframe::App for MistTermApp {
                     && Self::input_primary_mod(i)
                     && i.key_pressed(egui::Key::N)
             }) {
-                self.show_new_session_dialog = true;
+                self.dialog_flags.new_session = true;
             }
             if ctx.input(|i| {
                 self.app_tab_navigation_enabled()
@@ -10029,7 +10014,7 @@ impl eframe::App for MistTermApp {
                     && Self::input_primary_mod(i)
                     && i.key_pressed(egui::Key::H)
             }) {
-                self.show_about_dialog = true;
+                self.dialog_flags.about = true;
             }
             if ctx.input(|i| {
                 self.app_shortcut_overrides_terminal(i)
@@ -10370,7 +10355,7 @@ impl MistTermApp {
                             )
                             .clicked()
                             {
-                                self.show_new_session_dialog = true;
+                                self.dialog_flags.new_session = true;
                                 self.sidebar_collapsed = false;
                                 self.sidebar_user_dismissed_responsive = false;
                             }
