@@ -858,8 +858,8 @@ fn lookup(id: &str) -> Option<Entry> {
             hint_zh: "匹配 shred 等不可恢复删除",
         },
         "DL-ERR-001" => Entry {
-            title_en: "Error path / errno",
-            title_zh: "错误路径",
+            title_en: "Open error-path help",
+            title_zh: "打开错误路径说明",
             hint_en: "Turns common errno tokens into clickable links",
             hint_zh: "把常见错误码变成可点链接",
         },
@@ -876,8 +876,8 @@ fn lookup(id: &str) -> Option<Entry> {
             hint_zh: "把输出里的本地路径变成可点链接",
         },
         "DL-URL-001" => Entry {
-            title_en: "URL",
-            title_zh: "URL",
+            title_en: "Open link in browser",
+            title_zh: "在浏览器打开链接",
             hint_en: "Turns http(s) URLs into browser links",
             hint_zh: "把 http(s) URL 变成浏览器链接",
         },
