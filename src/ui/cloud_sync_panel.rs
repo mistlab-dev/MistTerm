@@ -1262,8 +1262,18 @@ impl CloudSyncPanel {
                                     &mut cols[1],
                                     theme,
                                     &mut self.settings.sync_team_config,
-                                    loc.tr("Team config (no tokens)", "团队配置（不含令牌）"),
+                                    loc.tr("Team config", "团队配置"),
                                 );
+                                // #317: 「团队配置（不含令牌）」在窄栏折行时复选框会贴到
+                                // 第二行残字旁。主标签缩短，「不含令牌」作行内旁注，
+                                // 复选框与其它项保持同列对齐；不改同步语义。
+                                cols[1].horizontal(|ui| {
+                                    ui.spacing_mut().item_spacing.x = theme.spacing_xs();
+                                    ui.label(chrome::rich_caption(
+                                        theme,
+                                        loc.tr("no tokens", "不含令牌"),
+                                    ));
+                                });
                             });
                             chrome::settings_row_divider(ui, theme);
                             paint_bullet_list(
