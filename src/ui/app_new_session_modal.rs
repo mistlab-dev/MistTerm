@@ -8,8 +8,8 @@ impl MistTermApp {
         theme: &crate::ui::theme::Theme,
     ) {
         // 显示新建会话对话框
-        if self.show_new_session_dialog {
-            let mut open = self.show_new_session_dialog;
+        if self.dialog_flags.new_session {
+            let mut open = self.dialog_flags.new_session;
             let mut should_close = false;
             let modal_sz = layout_util::modal_new_session_size(ctx);
             let modal_resp = crate::ui::chrome::modal_window("new_session_modal", theme, ctx)
@@ -255,9 +255,9 @@ impl MistTermApp {
                 crate::ui::chrome::raise_window_response(ctx, &inner.response);
             }
             if should_close {
-                self.show_new_session_dialog = false;
+                self.dialog_flags.new_session = false;
             } else {
-                self.show_new_session_dialog = open;
+                self.dialog_flags.new_session = open;
             }
         }
     }

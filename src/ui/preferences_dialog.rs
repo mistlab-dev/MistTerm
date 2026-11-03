@@ -54,7 +54,7 @@ impl MistTermApp {
         ctx: &egui::Context,
         theme: &crate::ui::theme::Theme,
     ) {
-        let mut open = self.show_preferences_dialog;
+        let mut open = self.dialog_flags.preferences;
         let mut should_close = false;
         let label_color = theme.color_form_label();
         let text_low = theme.color_form_hint();
@@ -113,7 +113,7 @@ impl MistTermApp {
         if self.rule_manager_dialog.take_close_preferences() {
             open = false;
         }
-        self.show_preferences_dialog = open && !should_close;
+        self.dialog_flags.preferences = open && !should_close;
     }
 
     fn preferences_row_divider(ui: &mut egui::Ui, theme: &crate::ui::theme::Theme) {

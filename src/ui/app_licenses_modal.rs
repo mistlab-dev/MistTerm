@@ -14,7 +14,7 @@ impl MistTermApp {
         ctx: &egui::Context,
         theme: &crate::ui::theme::Theme,
     ) {
-        if !self.show_licenses_dialog {
+        if !self.dialog_flags.licenses {
             return;
         }
         let mut open = true;
@@ -49,7 +49,7 @@ impl MistTermApp {
                         });
                 });
             });
-        self.show_licenses_dialog = open && !should_close;
+        self.dialog_flags.licenses = open && !should_close;
     }
 }
 
