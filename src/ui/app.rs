@@ -7946,6 +7946,17 @@ impl MistTermApp {
         );
         ui.add_space(theme.spacing_dock_control_gap());
 
+        self.fragment_panel_search_and_actions(ui, theme);
+        self.fragment_panel_scope_and_filters(ui, theme);
+        self.fragment_panel_list(ui, theme, panel_w);
+    }
+
+    /// 搜索框 + 新建/导入/市场动作按钮行（P2 自 show_fragment_panel_contents 抽出，纯搬家）。
+    fn fragment_panel_search_and_actions(
+        &mut self,
+        ui: &mut egui::Ui,
+        theme: &crate::ui::theme::Theme,
+    ) {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 6.0;
             if crate::ui::chrome::panel_outlined_toolbar_button_with_icon_ex(
@@ -7982,6 +7993,15 @@ impl MistTermApp {
                 self.open_ask_knowledge_dialog();
             }
         });
+        ui.add_space(theme.spacing_dock_control_gap());
+    }
+
+    /// scope 切换（个人/团队/市场）+ 团队信息与操作 + 市场分类/状态筛选（P2 抽出，纯搬家）。
+    fn fragment_panel_scope_and_filters(
+        &mut self,
+        ui: &mut egui::Ui,
+        theme: &crate::ui::theme::Theme,
+    ) {
         ui.add_space(theme.spacing_dock_control_gap());
 
         if self.team_service.is_configured() && self.team_service.is_logged_in() {
@@ -8322,6 +8342,16 @@ impl MistTermApp {
 
         self.sync_market_catalog_query_fingerprint();
 
+    }
+
+    /// 命令片段列表滚动区（P2 抽出，纯搬家）。
+    fn fragment_panel_list(
+        &mut self,
+        ui: &mut egui::Ui,
+        theme: &crate::ui::theme::Theme,
+        panel_w: f32,
+    ) {
+        let scroll_h = ui.available_height().max(80.0);
         let search_lower = self.fragment_state.fragment_search_query.to_lowercase();
         let search_ctx = ui.ctx().clone();
         let search_match = |f: &FragmentStats| {
@@ -8459,8 +8489,6 @@ impl MistTermApp {
             }
             _ => {}
         }
-
-        let scroll_h = ui.available_height().max(80.0);
         let is_team_scope = self.fragment_state.fragment_list_scope == FragmentListScope::Team;
         let is_market_scope = self.fragment_state.fragment_list_scope == FragmentListScope::Market;
         let prev_extreme = ui.visuals().extreme_bg_color;
@@ -8562,6 +8590,8 @@ impl MistTermApp {
             });
         ui.visuals_mut().extreme_bg_color = prev_extreme;
     }
+
+
 
     fn resolve_fragment_stats_by_id(&self, id: &str) -> Option<FragmentStats> {
         if let Some(f) = self.fragment_state.fragment_manager.get_by_id(id) {
