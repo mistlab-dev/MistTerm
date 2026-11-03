@@ -37,7 +37,7 @@ impl MistTermApp {
 
     /// 关闭所有右侧 `SidePanel`(不含居中 `Window` 如片段库弹窗)
     pub(super) fn close_all_right_dock_panels(&mut self) {
-        self.show_fragment_panel = false;
+        self.fragment_state.show_fragment_panel = false;
         self.show_monitor_panel = false;
         self.show_ai_panel = false;
         self.show_sftp_panel = false;
@@ -62,7 +62,7 @@ impl MistTermApp {
     pub(super) fn open_right_dock_panel(&mut self, panel: ActiveRightDock) {
         self.close_all_right_dock_panels();
         match panel {
-            ActiveRightDock::Fragment => self.show_fragment_panel = true,
+            ActiveRightDock::Fragment => self.fragment_state.show_fragment_panel = true,
             ActiveRightDock::Credential => self.credential_panel.open = true,
             ActiveRightDock::CloudSync => self.cloud_sync_panel.open = true,
             ActiveRightDock::Sftp => self.show_sftp_panel = true,

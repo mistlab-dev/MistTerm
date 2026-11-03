@@ -19,8 +19,7 @@ use crate::core::{
     CmdAuditAlertRequest, CmdAuditCacheStore, CmdAuditEngine, CmdAuditResult, CmdAuditSource,
     AuditTimeline, TimelineEntry, TimelineOutcome,
     CommandHistory, CommandSendResult, Credential, CredentialAuthKind, FragmentManager,
-    PasteHistory,
-    FragmentShortcutStore, FragmentStats, HangReporter, HangSnapshot, PortForwardKind,
+    FragmentStats, HangReporter, HangSnapshot, PortForwardKind,
     SecretBackend, SecretResolver,
     ServerAuditEvent, SessionConfig, SessionLogSettings, SessionLogWriter, SessionManager,
     SessionSortBy, SortBy, SshConfigCandidate, SshConfigParseResult, SshInfo, TeamService, TempKeyFile,
@@ -35,9 +34,8 @@ use crate::ui::ai_panel::AiPanel;
 use crate::ui::batch_exec_dialog::{BatchExecDialog, BatchExecUiAction};
 use crate::ui::cloud_sync_panel::{CloudSyncDeps, CloudSyncPanel};
 use crate::ui::command_history_overlay::{CommandHistoryAction, CommandHistoryOverlay};
-use crate::ui::paste_history_overlay::{PasteHistoryAction, PasteHistoryOverlay};
+use crate::ui::paste_history_overlay::PasteHistoryAction;
 use crate::ui::credential_panel::{CredentialPanel, CredentialPanelAction};
-use crate::ui::fragment_library::FragmentLibraryState;
 use crate::ui::help_docs_dialog::{HelpDocsDialog, HelpPage};
 use crate::ui::layout_util;
 use crate::ui::monitor_panel::MonitorPanel;
@@ -50,12 +48,11 @@ use crate::ui::foreign_import_dialog::ForeignImportDialog;
 use crate::ui::tab_pane::{TabLayout, TerminalPane, TerminalTab};
 use crate::ui::team_fragment_dialog::{
     open_create_editor, open_edit_editor, show_team_fragment_conflict_modal,
-    show_team_fragment_editor_modal, TeamFragmentConflictState, TeamFragmentEditorState,
+    show_team_fragment_editor_modal,
 };
 use crate::ui::team_fragment_extras_dialog::{
     open_shares, open_team_settings, open_versions, show_fragment_shares_modal,
-    show_fragment_versions_modal, show_team_settings_modal, FragmentSharesState,
-    FragmentVersionsState, TeamSettingsState,
+    show_fragment_versions_modal, show_team_settings_modal, TeamSettingsState,
 };
 use crate::ui::team_members_dialog::TeamMembersDialog;
 use crate::ui::team_ui::TeamLoginForm;
@@ -86,7 +83,7 @@ const MISTTERM_UI_STORAGE_KEY: &str = "mistterm_ui_v1";
 
 /// 命令片段侧栏：个人库 vs 团队同步库。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-enum FragmentListScope {
+pub(crate) enum FragmentListScope {
     #[default]
     Personal,
     Team,
@@ -280,13 +277,9 @@ pub struct MistTermApp {
     action_bus: crate::ui::action::ActionBus,
     /// 会话管理器
     session_manager: SessionManager,
-    /// 命令片段管理器
-    fragment_manager: FragmentManager,
-    /// 片段快捷键本地映射（含团队片段；不随团队同步）
-    fragment_shortcut_store: FragmentShortcutStore,
+    /// Fragment/命令面板/市场/发送序列/粘贴历史 域状态（P1b 收编，含原 fragment_manager/shortcut_store 等 44 字段）
+    pub(crate) fragment_state: crate::ui::fragment_state::FragmentState,
     /// 命名发送序列。和片段库分开存，重放只打当前窗格。
-    send_sequences: crate::core::SendSequenceStore,
-    send_sequence_dialog: crate::ui::send_sequence_dialog::SendSequenceDialog,
     send_replay: Option<SequenceReplay>,
     /// 本帧键盘复制的选区文字，帧末核对后再提示「已复制」。
     pending_terminal_copy: Option<String>,
@@ -342,10 +335,7 @@ pub struct MistTermApp {
     pref_vault_token_draft: String,
     /// 偏好「默认本地目录」输入框草稿（失焦/回车时校验并保存）。
     pref_local_dir_draft: Option<String>,
-    show_fragments_dialog: bool,
-    show_fragment_panel: bool, // 命令片段侧边栏
     /// 本帧命令片段 `SidePanel` 槽位矩形(`ui.max_rect()`)
-    fragment_panel_slot_rect: Option<egui::Rect>,
     /// 本帧任意右侧 dock(片段/SFTP/监控等)与主区交界的最左 **屏幕 x**(多栏时取 min，即贴主区的那条边)
     right_dock_outer_left_x: Option<f32>,
     show_monitor_panel: bool, // 监控面板
@@ -374,36 +364,22 @@ pub struct MistTermApp {
     sidebar_search_query: String,
     sidebar_filter: String,
     session_sort_by: SessionSortBy,
-    fragment_search_query: String,
 
     /// 片段排序方式
-    fragment_sort_by: SortBy,
     /// 变量输入对话框
-    variable_dialog: FragmentVariableDialog,
     /// `show_fragment_vars_dialog` 确认后的行为(见 [`FragmentVarsCompletion`])
-    fragment_vars_completion: FragmentVarsCompletion,
     /// 快速片段选择器
-    quick_selector: FragmentQuickSelector,
     /// 失焦 ⌘K / Ctrl+K 统一命令面板（#162）。聚焦时 Ctrl+K 仍进 PTY。
-    command_palette: crate::ui::command_palette::CommandPalette,
 
     monitor_panel: MonitorPanel,
     ai_panel: AiPanel,
     sftp_panel: SftpPanel,
     port_forward_panel: PortForwardPanel,
-    fragment_library: FragmentLibraryState,
     credential_panel: CredentialPanel,
     cloud_sync_panel: CloudSyncPanel,
     team_service: TeamService,
     team_login_form: TeamLoginForm,
-    team_fragment_editor: TeamFragmentEditorState,
-    team_fragment_conflict: Option<TeamFragmentConflictState>,
-    team_fragment_versions: FragmentVersionsState,
-    team_fragment_shares: FragmentSharesState,
     team_settings_dialog: TeamSettingsState,
-    team_fragment_selected_id: Option<String>,
-    fragment_list_scope: FragmentListScope,
-    show_fragment_analytics_dialog: bool,
     show_audit_timeline_dialog: bool,
     show_agent_install_dialog: bool,
     agent_install_copied: bool,
@@ -418,34 +394,14 @@ pub struct MistTermApp {
     /// 拦截无命中时预填给 AI 的问题
     pending_ask_fallback_question: Option<String>,
     /// 待用户确认写入个人库的候选
-    pending_fragment_candidate: Option<FragmentCandidate>,
     /// 最近一次已提示的候选命令(防刷屏)
     last_candidate_offer_command: String,
     /// 历史记录后待弹出的成功路径候选(下一帧有 ctx 时弹出)
     deferred_candidate_toast: Option<FragmentCandidate>,
-    fragment_analytics_snapshot: crate::core::FragmentAnalyticsDashboard,
-    fragment_analytics_range: crate::core::FragmentAnalyticsTimeRange,
-    fragment_usage_log: crate::core::FragmentUsageLog,
-    fragment_recommendations: Vec<crate::core::FragmentRecommendation>,
-    market_catalog: crate::core::MarketCatalogState,
-    market_catalog_refresh_pending: bool,
-    market_catalog_refresh_rx: Option<std::sync::mpsc::Receiver<crate::core::MarketCatalogState>>,
-    market_catalog_query_fingerprint: (String, String),
-    market_catalog_debounce_deadline: Option<std::time::Instant>,
 
-    pending_fragment_id: Option<String>,
-    pending_fragment_name: String,
-    pending_fragment_command: String,
     /// 「填写片段变量」模态里用户可编辑的完整命令行
-    pending_fragment_command_edit: String,
-    pending_fragment_vars: Vec<(String, String)>,
-    show_fragment_vars_dialog: bool,
-    fragment_filter_category: String,
-    fragment_filter_status: String,
     /// 连接就绪后要插入的片段(标签索引、片段 id、命令)
-    pending_fragment_insert: Option<(usize, Option<String>, String)>,
     /// 下一次片段插入是否只放进输入行(「用到终端」)，不执行。
-    fragment_insert_only: bool,
 
     /// 主题管理器
     theme_manager: ThemeManager,
@@ -466,8 +422,6 @@ pub struct MistTermApp {
 
     command_history: CommandHistory,
     command_history_overlay: CommandHistoryOverlay,
-    paste_history: PasteHistory,
-    paste_history_overlay: PasteHistoryOverlay,
     ssh_import_dialog: SshConfigImportDialog,
     foreign_import_dialog: ForeignImportDialog,
     ssh_config_candidates: Vec<SshConfigCandidate>,
@@ -507,7 +461,6 @@ pub struct MistTermApp {
     /// AI「用到终端」危险命令红框确认（issue #249）。
     ai_danger_confirm: Option<AiDangerConfirmState>,
     /// 审计拦截后待插入的合规片段(配合 `ToastAction::InsertSuggestedSnippet`)
-    pending_suggested_snippet: Option<(usize, FragmentStats)>,
     /// 命令审计 Agent 列表(用于终端降级横幅)
     cmd_audit_agents: Vec<crate::core::team::CmdAuditAgent>,
     cmd_audit_agents_at: Option<Instant>,
@@ -621,7 +574,7 @@ impl MistTermApp {
         body: String,
     ) {
         let team = self.team_service.team_fragments_as_stats();
-        let personal = self.fragment_manager.list().to_vec();
+        let personal = self.fragment_state.fragment_manager.list().to_vec();
         let env = self.suggestion_env_for_tab(tab_idx);
         let suggestion = suggest_compliant_after_block_with_env(
             blocked_command,
@@ -644,7 +597,7 @@ impl MistTermApp {
             let (secondary, secondary_label) =
                 if let Some(cand) = candidate_from_failed_command(blocked_command, &personal) {
                     self.last_candidate_offer_command = cand.command.clone();
-                    self.pending_fragment_candidate = Some(cand);
+                    self.fragment_state.pending_fragment_candidate = Some(cand);
                     (
                         Some(ToastAction::ConfirmSaveCandidate),
                         Some(crate::i18n::tr(ctx, "Save as snippet", "保存为片段")),
@@ -674,7 +627,7 @@ impl MistTermApp {
         } else {
             format!("{body} · {source_label}「{frag_title}」 · {anchor}")
         };
-        self.pending_suggested_snippet = Some((tab_idx, suggestion.fragment));
+        self.fragment_state.pending_suggested_snippet = Some((tab_idx, suggestion.fragment));
         // 团队片段：次要「存到个人库」沉底；个人命中已在库中，不再提供沉底。
         let (secondary, secondary_label) = if suggestion.source == "team" {
             (
@@ -732,7 +685,7 @@ impl MistTermApp {
             }
         };
         let preview = command_preview(&cand.command, 80);
-        self.pending_fragment_candidate = Some(cand);
+        self.fragment_state.pending_fragment_candidate = Some(cand);
         self.push_action_toast_titled(
             ToastKind::Info,
             crate::i18n::tr(ctx, "Save as snippet?", "保存为片段?"),
@@ -743,7 +696,7 @@ impl MistTermApp {
     }
 
     fn save_fragment_candidate(&mut self, ctx: &egui::Context, cand: &FragmentCandidate) {
-        let personal = self.fragment_manager.list().to_vec();
+        let personal = self.fragment_state.fragment_manager.list().to_vec();
         let covered = personal.iter().any(|f| {
             let a: String = f.command.split_whitespace().collect::<Vec<_>>().join(" ");
             let b: String = cand.command.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -757,13 +710,13 @@ impl MistTermApp {
             return;
         }
         let title = history_command_snippet_title(ctx, &cand.command);
-        self.fragment_manager.add_fragment(
+        self.fragment_state.fragment_manager.add_fragment(
             title.clone(),
             cand.command.clone(),
             history_fragment_category_label(ctx),
         );
         let _ = self
-            .fragment_manager
+            .fragment_state.fragment_manager
             .save(&FragmentManager::default_config_path());
         self.refresh_fragment_analytics_dashboard();
         self.notify_auto(format!(
@@ -797,7 +750,7 @@ impl MistTermApp {
             return;
         }
         let body = lines.join("\n");
-        let personal = self.fragment_manager.list().to_vec();
+        let personal = self.fragment_state.fragment_manager.list().to_vec();
         let covered = personal.iter().any(|f| {
             let a: String = f.command.split_whitespace().collect::<Vec<_>>().join(" ");
             let b: String = body.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -822,13 +775,13 @@ impl MistTermApp {
                 t.to_string()
             }
         };
-        self.fragment_manager.add_fragment(
+        self.fragment_state.fragment_manager.add_fragment(
             title.clone(),
             body,
             history_fragment_category_label(ctx),
         );
         let _ = self
-            .fragment_manager
+            .fragment_state.fragment_manager
             .save(&FragmentManager::default_config_path());
         self.refresh_fragment_analytics_dashboard();
         self.notify_auto(format!(
@@ -842,8 +795,8 @@ impl MistTermApp {
     pub(crate) fn open_ask_knowledge_dialog(&mut self) {
         self.ask_knowledge_searched = false;
         self.ask_knowledge_hits.clear();
-        if self.ask_knowledge_query.is_empty() && !self.fragment_search_query.is_empty() {
-            self.ask_knowledge_query = self.fragment_search_query.clone();
+        if self.ask_knowledge_query.is_empty() && !self.fragment_state.fragment_search_query.is_empty() {
+            self.ask_knowledge_query = self.fragment_state.fragment_search_query.clone();
         }
         self.show_ask_knowledge_dialog = true;
     }
@@ -851,7 +804,7 @@ impl MistTermApp {
     fn run_ask_knowledge_search(&mut self) {
         let q = self.ask_knowledge_query.clone();
         let team = self.team_service.team_fragments_as_stats();
-        let personal = self.fragment_manager.list().to_vec();
+        let personal = self.fragment_state.fragment_manager.list().to_vec();
         let env = self
             .active_tab
             .map(|i| self.suggestion_env_for_tab(i))
@@ -969,7 +922,7 @@ impl MistTermApp {
             .split_whitespace()
             .collect::<Vec<_>>()
             .join(" ");
-        let already = self.fragment_manager.get_all().iter().any(|f| {
+        let already = self.fragment_state.fragment_manager.get_all().iter().any(|f| {
             let fc: String = f.command.split_whitespace().collect::<Vec<_>>().join(" ");
             fc == norm
         });
@@ -986,7 +939,7 @@ impl MistTermApp {
             fragment.category.clone()
         };
         let title = fragment.title.clone();
-        self.fragment_manager.add_fragment_with_all(
+        self.fragment_state.fragment_manager.add_fragment_with_all(
             title.clone(),
             fragment.command.clone(),
             category,
@@ -994,7 +947,7 @@ impl MistTermApp {
             fragment.variables.clone(),
         );
         let _ = self
-            .fragment_manager
+            .fragment_state.fragment_manager
             .save(&FragmentManager::default_config_path());
         self.audit_logger.record(
             AuditEvent::new(
@@ -1201,13 +1154,7 @@ impl MistTermApp {
 
         let mut app = Self {
             session_manager,
-            fragment_manager: FragmentManager::load(&FragmentManager::default_config_path())
-                .unwrap_or_else(|_| {
-                    FragmentManager::init_from_market_or_defaults(Some(&_market_cache))
-                }),
-            fragment_shortcut_store: FragmentShortcutStore::load(),
-            send_sequences: crate::core::SendSequenceStore::load(),
-            send_sequence_dialog: crate::ui::send_sequence_dialog::SendSequenceDialog::default(),
+            fragment_state: crate::ui::fragment_state::FragmentState::new(&_market_cache),
             send_replay: None,
             pending_terminal_copy: None,
             selected_session_id,
@@ -1238,9 +1185,6 @@ impl MistTermApp {
             show_preferences_dialog: false,
             pref_vault_token_draft: String::new(),
             pref_local_dir_draft: None,
-            show_fragments_dialog: false,
-            show_fragment_panel: false,
-            fragment_panel_slot_rect: None,
             right_dock_outer_left_x: None,
             show_monitor_panel: false,
             show_ai_panel: false,
@@ -1260,19 +1204,11 @@ impl MistTermApp {
             ai_panel: AiPanel::new(),
             sftp_panel: SftpPanel::new(),
             port_forward_panel: PortForwardPanel::new(),
-            fragment_library: FragmentLibraryState::new(),
             credential_panel: CredentialPanel::new(),
             cloud_sync_panel: CloudSyncPanel::new(),
             team_service,
             team_login_form: TeamLoginForm::default(),
-            team_fragment_editor: TeamFragmentEditorState::default(),
-            team_fragment_conflict: None,
-            team_fragment_versions: FragmentVersionsState::default(),
-            team_fragment_shares: FragmentSharesState::default(),
             team_settings_dialog: TeamSettingsState::default(),
-            team_fragment_selected_id: None,
-            fragment_list_scope: FragmentListScope::Personal,
-            show_fragment_analytics_dialog: false,
             show_audit_timeline_dialog: false,
             show_agent_install_dialog: false,
             agent_install_copied: false,
@@ -1284,39 +1220,13 @@ impl MistTermApp {
             ask_knowledge_hits: Vec::new(),
             ask_knowledge_searched: false,
             pending_ask_fallback_question: None,
-            pending_fragment_candidate: None,
             last_candidate_offer_command: String::new(),
             deferred_candidate_toast: None,
-            fragment_analytics_snapshot: crate::core::FragmentAnalyticsDashboard::default(),
-            fragment_analytics_range: crate::core::FragmentAnalyticsTimeRange::default(),
-            fragment_usage_log: crate::core::FragmentUsageLog::load(),
-            fragment_recommendations: Vec::new(),
-            market_catalog: crate::core::MarketCatalogState::load(),
-            market_catalog_refresh_pending: false,
-            market_catalog_refresh_rx: None,
-            market_catalog_query_fingerprint: (String::new(), String::new()),
-            market_catalog_debounce_deadline: None,
-            pending_fragment_id: None,
-            pending_fragment_name: String::new(),
-            pending_fragment_command: String::new(),
-            pending_fragment_command_edit: String::new(),
-            pending_fragment_vars: Vec::new(),
-            show_fragment_vars_dialog: false,
-            fragment_filter_category: "all".to_string(),
-            fragment_filter_status: "all".to_string(),
-            pending_fragment_insert: None,
-            fragment_insert_only: false,
             new_session_form: crate::ui::session_form::NewSessionForm::new(boot_loc),
             edit_session_form: crate::ui::session_form::EditSessionForm::new(boot_loc),
             sidebar_search_query: String::new(),
             sidebar_filter: "all".to_string(),
             session_sort_by: SessionSortBy::default(),
-            fragment_search_query: String::new(),
-            fragment_sort_by: SortBy::UsageCount,
-            variable_dialog: FragmentVariableDialog::default(),
-            fragment_vars_completion: FragmentVarsCompletion::default(),
-            quick_selector: FragmentQuickSelector::default(),
-            command_palette: crate::ui::command_palette::CommandPalette::default(),
             theme_manager: ThemeManager::load(),
             app_settings,
             audit_logger,
@@ -1325,7 +1235,6 @@ impl MistTermApp {
             cmd_audit_engine,
             cmd_audit_confirm: None,
             ai_danger_confirm: None,
-            pending_suggested_snippet: None,
             cmd_audit_agents: Vec::new(),
             cmd_audit_agents_at: None,
             cmd_audit_agents_error: String::new(),
@@ -1346,8 +1255,6 @@ impl MistTermApp {
             large_upload_pending_path: None,
             command_history: CommandHistory::new(),
             command_history_overlay: CommandHistoryOverlay::default(),
-            paste_history: PasteHistory::new(),
-            paste_history_overlay: PasteHistoryOverlay::default(),
             ssh_import_dialog: SshConfigImportDialog::default(),
             foreign_import_dialog: ForeignImportDialog::default(),
             ssh_config_candidates: Vec::new(),
@@ -1369,9 +1276,9 @@ impl MistTermApp {
         };
         // 片段已经不在了（本机删掉的个人片段，或任一团队缓存里都找不到的团队片段），快捷键一并清掉。
         {
-            let personal = &app.fragment_manager;
+            let personal = &app.fragment_state.fragment_manager;
             let team_cache = &app.team_service.cache;
-            let removed = app.fragment_shortcut_store.prune_missing(|id| {
+            let removed = app.fragment_state.fragment_shortcut_store.prune_missing(|id| {
                 personal.get_by_id(id).is_some()
                     || team_cache
                         .by_team
@@ -1379,7 +1286,7 @@ impl MistTermApp {
                         .any(|list| list.iter().any(|f| f.id == id))
             });
             if removed > 0 {
-                let _ = app.fragment_shortcut_store.save();
+                let _ = app.fragment_state.fragment_shortcut_store.save();
             }
         }
 
@@ -2242,7 +2149,7 @@ impl MistTermApp {
     }
 
     fn start_send_sequence(&mut self, ctx: &egui::Context, id: &str) {
-        let Some(seq) = self.send_sequences.get(id).cloned() else {
+        let Some(seq) = self.fragment_state.send_sequences.get(id).cloned() else {
             self.notify_info(
                 crate::i18n::tr(ctx, "Sequence was deleted", "这条发送序列已删除").to_string(),
             );
@@ -3910,15 +3817,15 @@ impl MistTermApp {
             || self.show_licenses_dialog
             || self.update_ui.dialog_open()
             || self.show_preferences_dialog
-            || self.show_fragments_dialog
-            || self.show_fragment_vars_dialog
-            || self.show_fragment_analytics_dialog
+            || self.fragment_state.show_fragments_dialog
+            || self.fragment_state.show_fragment_vars_dialog
+            || self.fragment_state.show_fragment_analytics_dialog
             || self.show_audit_timeline_dialog
             || self.show_agent_install_dialog
             || self.show_ask_knowledge_dialog
-            || self.variable_dialog.open
-            || self.fragment_library.open
-            || self.send_sequence_dialog.open
+            || self.fragment_state.variable_dialog.open
+            || self.fragment_state.fragment_library.open
+            || self.fragment_state.send_sequence_dialog.open
             || self.rule_manager_dialog.open
             || self.show_terminal_search
             || self.delete_session_confirm.is_some()
@@ -3926,25 +3833,25 @@ impl MistTermApp {
             || self.cmd_audit_confirm.is_some()
             || self.ai_danger_confirm.is_some()
             || self.batch_exec_dialog.open
-            || self.quick_selector.open
-            || self.command_palette.open
+            || self.fragment_state.quick_selector.open
+            || self.fragment_state.command_palette.open
             || self.large_upload_pending_path.is_some()
             || self.ssh_import_dialog.open
             || self.foreign_import_dialog.open
             || self.command_history_overlay.open
-            || self.paste_history_overlay.open
+            || self.fragment_state.paste_history_overlay.open
             || self.session_log_dialog.open
             || self.team_members_dialog.open
             || self.help_docs_dialog.open
             || self.show_ai_settings_dialog
-            || self.team_fragment_versions.open
-            || self.team_fragment_shares.open
+            || self.fragment_state.team_fragment_versions.open
+            || self.fragment_state.team_fragment_shares.open
             || self.team_settings_dialog.open
     }
 
     /// 右侧 dock 都是终端的辅助面板；只打开/查看时不应让终端失去键盘。
     fn auxiliary_dock_open(&self) -> bool {
-        self.show_fragment_panel
+        self.fragment_state.show_fragment_panel
             || self.show_monitor_panel
             || self.show_ai_panel
             || self.show_sftp_panel
@@ -4141,7 +4048,7 @@ impl MistTermApp {
                 pane.terminal.release_keyboard_for_ui_input(ctx);
             }
         }
-        self.command_palette.open_fresh();
+        self.fragment_state.command_palette.open_fresh();
         ctx.memory_mut(|m| {
             m.request_focus(crate::ui::command_palette::CommandPalette::search_id())
         });
@@ -4155,17 +4062,17 @@ impl MistTermApp {
 
     /// 命令面板画在工作区最后，打开时 [`global_shortcuts_blocked`] 为真，终端不再收键。
     fn show_command_palette(&mut self, ctx: &egui::Context, theme: &crate::ui::theme::Theme) {
-        if !self.command_palette.open {
+        if !self.fragment_state.command_palette.open {
             return;
         }
         let items = self.command_palette_items(ctx);
-        match self.command_palette.show(ctx, theme, &items) {
+        match self.fragment_state.command_palette.show(ctx, theme, &items) {
             crate::ui::command_palette::PaletteOutcome::Idle => {}
             crate::ui::command_palette::PaletteOutcome::Close => {
-                self.command_palette.open = false;
+                self.fragment_state.command_palette.open = false;
             }
             crate::ui::command_palette::PaletteOutcome::Run(id) => {
-                self.command_palette.open = false;
+                self.fragment_state.command_palette.open = false;
                 self.run_command_palette(ctx, id);
             }
         }
@@ -4207,7 +4114,7 @@ impl MistTermApp {
                 ),
             });
         }
-        for fragment in self.fragment_manager.list() {
+        for fragment in self.fragment_state.fragment_manager.list() {
             let title = crate::i18n::fragment_display_title(ctx, fragment);
             let tags = fragment.tags.join(" ");
             items.push(PaletteItem {
@@ -4227,7 +4134,7 @@ impl MistTermApp {
                 ),
             });
         }
-        for seq in self.send_sequences.list() {
+        for seq in self.fragment_state.send_sequences.list() {
             let preview = crate::core::sequence_lines(&seq.body)
                 .into_iter()
                 .find(|line| !line.is_empty())
@@ -4477,7 +4384,7 @@ impl MistTermApp {
                 self.focus_active_terminal();
             }
             PaletteId::Snippet(fid) => {
-                if let Some(frag) = self.fragment_manager.get(&fid).cloned() {
+                if let Some(frag) = self.fragment_state.fragment_manager.get(&fid).cloned() {
                     // 与快速片段选择器相同：直接执行；有变量则先填写。
                     self.execute_fragment(ctx, &frag);
                 } else {
@@ -4541,7 +4448,7 @@ impl MistTermApp {
             PaletteAction::CommandHistory => self.menu_open_command_history(ctx),
             PaletteAction::SnippetLibrary => self.open_snippet_library_dialog(),
             PaletteAction::SnippetPanel => self.toggle_fragment_sidebar(ctx),
-            PaletteAction::QuickSnippets => self.quick_selector.open = true,
+            PaletteAction::QuickSnippets => self.fragment_state.quick_selector.open = true,
             PaletteAction::FindInTerminal => self.toggle_terminal_search(),
             PaletteAction::About => self.show_about_dialog = true,
             PaletteAction::Immersive => self.toggle_activity_rail(),
@@ -4557,7 +4464,7 @@ impl MistTermApp {
             PaletteAction::Reconnect => self.reconnect_active_tab(ctx),
             PaletteAction::BatchExec => self.menu_open_batch_exec(ctx),
             PaletteAction::SendSequences => {
-                self.send_sequence_dialog.open_manager(&self.send_sequences);
+                self.fragment_state.send_sequence_dialog.open_manager(&self.fragment_state.send_sequences);
             }
             PaletteAction::RuleManager => {
                 self.open_rule_manager_dialog();
@@ -4896,10 +4803,10 @@ impl MistTermApp {
     fn suppress_right_dock_foreground(&self) -> bool {
         self.show_new_session_dialog
             || self.show_edit_session_dialog
-            || self.show_fragments_dialog
-            || self.show_fragment_vars_dialog
+            || self.fragment_state.show_fragments_dialog
+            || self.fragment_state.show_fragment_vars_dialog
             || self.show_ai_settings_dialog
-            || self.variable_dialog.open
+            || self.fragment_state.variable_dialog.open
             || self.ssh_import_dialog.open
             || self.foreign_import_dialog.open
             || self.delete_session_confirm.is_some()
@@ -4907,12 +4814,12 @@ impl MistTermApp {
             || self.cmd_audit_confirm.is_some()
             || self.ai_danger_confirm.is_some()
             || self.batch_exec_dialog.open
-            || self.send_sequence_dialog.open
+            || self.fragment_state.send_sequence_dialog.open
             || self.rule_manager_dialog.open
-            || self.quick_selector.open
-            || self.command_palette.open
-            || self.team_fragment_editor.open
-            || self.team_fragment_conflict.is_some()
+            || self.fragment_state.quick_selector.open
+            || self.fragment_state.command_palette.open
+            || self.fragment_state.team_fragment_editor.open
+            || self.fragment_state.team_fragment_conflict.is_some()
     }
 
     /// 合并 `<占位符>` 替换与 `{{ … }}` 得到「填写片段变量」弹窗中的初值。
@@ -4921,10 +4828,10 @@ impl MistTermApp {
             .selected_session_id
             .as_deref()
             .and_then(|sid| self.session_manager.get_session(sid));
-        let m: HashMap<String, String> = self.pending_fragment_vars.iter().cloned().collect();
-        self.pending_fragment_command_edit =
-            expand_fragment_command_stages(&self.pending_fragment_command, session, &m)
-                .unwrap_or_else(|_| self.pending_fragment_command.clone());
+        let m: HashMap<String, String> = self.fragment_state.pending_fragment_vars.iter().cloned().collect();
+        self.fragment_state.pending_fragment_command_edit =
+            expand_fragment_command_stages(&self.fragment_state.pending_fragment_command, session, &m)
+                .unwrap_or_else(|_| self.fragment_state.pending_fragment_command.clone());
     }
 
     fn build_fragment_command_preview(
@@ -4952,8 +4859,8 @@ impl MistTermApp {
     }
 
     fn finalize_pending_fragment_send(&self) -> Result<String, String> {
-        let m: HashMap<String, String> = self.pending_fragment_vars.iter().cloned().collect();
-        self.finalize_fragment_command_text(&self.pending_fragment_command_edit, &m)
+        let m: HashMap<String, String> = self.fragment_state.pending_fragment_vars.iter().cloned().collect();
+        self.finalize_fragment_command_text(&self.fragment_state.pending_fragment_command_edit, &m)
     }
 
     fn current_terminal_mut(&mut self) -> Option<&mut TerminalView> {
@@ -5411,7 +5318,7 @@ impl MistTermApp {
                 u.email.clone()
             }
         });
-        self.fragment_usage_log
+        self.fragment_state.fragment_usage_log
             .append(crate::core::FragmentUsageEvent {
                 ts,
                 fragment_id: fragment_id.to_string(),
@@ -5422,13 +5329,13 @@ impl MistTermApp {
                 success,
                 duration_ms: dur_ms,
             });
-        let _ = self.fragment_usage_log.save_if_dirty();
+        let _ = self.fragment_state.fragment_usage_log.save_if_dirty();
 
-        if self.fragment_manager.get_by_id(fragment_id).is_some() {
-            self.fragment_manager
+        if self.fragment_state.fragment_manager.get_by_id(fragment_id).is_some() {
+            self.fragment_state.fragment_manager
                 .record_execution(fragment_id, success, dur_ms);
             let _ = self
-                .fragment_manager
+                .fragment_state.fragment_manager
                 .save(&FragmentManager::default_config_path());
         } else if self.team_service.find_team_fragment(fragment_id).is_some() {
             self.team_service
@@ -5442,7 +5349,7 @@ impl MistTermApp {
 
     fn market_item_for_stats(&self, frag: &FragmentStats) -> Option<crate::core::MarketFragment> {
         let id = frag.tags.iter().find_map(|t| t.strip_prefix("mkt:"))?;
-        self.market_catalog
+        self.fragment_state.market_catalog
             .fragments()
             .iter()
             .find(|f| f.id == id)
@@ -5450,40 +5357,40 @@ impl MistTermApp {
     }
 
     fn poll_market_catalog_refresh(&mut self, ctx: &egui::Context) {
-        let Some(rx) = &self.market_catalog_refresh_rx else {
+        let Some(rx) = &self.fragment_state.market_catalog_refresh_rx else {
             return;
         };
         match rx.try_recv() {
             Ok(state) => {
-                self.market_catalog = state;
-                self.market_catalog_refresh_rx = None;
-                self.market_catalog_refresh_pending = false;
+                self.fragment_state.market_catalog = state;
+                self.fragment_state.market_catalog_refresh_rx = None;
+                self.fragment_state.market_catalog_refresh_pending = false;
                 ctx.request_repaint();
             }
             Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                self.market_catalog_refresh_rx = None;
-                self.market_catalog_refresh_pending = false;
+                self.fragment_state.market_catalog_refresh_rx = None;
+                self.fragment_state.market_catalog_refresh_pending = false;
             }
             Err(std::sync::mpsc::TryRecvError::Empty) => {}
         }
     }
 
     fn start_market_catalog_refresh(&mut self) {
-        if self.market_catalog_refresh_rx.is_some() {
+        if self.fragment_state.market_catalog_refresh_rx.is_some() {
             return;
         }
         let api_base = self.app_settings.team.normalized_api_base();
         let token = self.team_service.current_access_token();
         let query = crate::core::MarketCatalogQuery {
-            category: self.fragment_filter_category.clone(),
-            search: self.fragment_search_query.clone(),
+            category: self.fragment_state.fragment_filter_category.clone(),
+            search: self.fragment_state.fragment_search_query.clone(),
             limit: 200,
             cursor: String::new(),
         };
         let (tx, rx) = std::sync::mpsc::channel();
-        self.market_catalog_refresh_rx = Some(rx);
-        self.market_catalog_refresh_pending = true;
-        let mut state = self.market_catalog.clone();
+        self.fragment_state.market_catalog_refresh_rx = Some(rx);
+        self.fragment_state.market_catalog_refresh_pending = true;
+        let mut state = self.fragment_state.market_catalog.clone();
         std::thread::spawn(move || {
             state.refresh_blocking(&api_base, token.as_deref(), &query);
             let _ = tx.send(state);
@@ -5491,20 +5398,20 @@ impl MistTermApp {
     }
 
     fn start_market_catalog_load_more(&mut self) {
-        if self.market_catalog_refresh_rx.is_some() || !self.market_catalog.has_more() {
+        if self.fragment_state.market_catalog_refresh_rx.is_some() || !self.fragment_state.market_catalog.has_more() {
             return;
         }
         let api_base = self.app_settings.team.normalized_api_base();
         let token = self.team_service.current_access_token();
         let query = crate::core::MarketCatalogQuery {
-            category: self.fragment_filter_category.clone(),
-            search: self.fragment_search_query.clone(),
+            category: self.fragment_state.fragment_filter_category.clone(),
+            search: self.fragment_state.fragment_search_query.clone(),
             limit: 200,
-            cursor: self.market_catalog.cache.cursor.clone(),
+            cursor: self.fragment_state.market_catalog.cache.cursor.clone(),
         };
         let (tx, rx) = std::sync::mpsc::channel();
-        self.market_catalog_refresh_rx = Some(rx);
-        let mut state = self.market_catalog.clone();
+        self.fragment_state.market_catalog_refresh_rx = Some(rx);
+        let mut state = self.fragment_state.market_catalog.clone();
         std::thread::spawn(move || {
             state.load_more_blocking(&api_base, token.as_deref(), &query);
             let _ = tx.send(state);
@@ -5514,12 +5421,12 @@ impl MistTermApp {
     fn install_market_fragment(&mut self, ctx: &egui::Context, item: &crate::core::MarketFragment) {
         let api_base = self.app_settings.team.normalized_api_base();
         let token = self.team_service.current_access_token();
-        match crate::core::install_into_personal_library(&mut self.fragment_manager, item) {
+        match crate::core::install_into_personal_library(&mut self.fragment_state.fragment_manager, item) {
             Ok(()) => {
-                self.market_catalog
+                self.fragment_state.market_catalog
                     .report_install_blocking(&api_base, token.as_deref(), &item.id);
                 let _ = self
-                    .fragment_manager
+                    .fragment_state.fragment_manager
                     .save(&FragmentManager::default_config_path());
                 self.notify_auto(format!(
                     "{} {}",
@@ -5548,22 +5455,22 @@ impl MistTermApp {
     }
 
     fn refresh_fragment_analytics_dashboard(&mut self) {
-        let personal: Vec<_> = self.fragment_manager.get_all().to_vec();
-        self.fragment_analytics_snapshot = self.team_service.build_fragment_analytics_dashboard(
+        let personal: Vec<_> = self.fragment_state.fragment_manager.get_all().to_vec();
+        self.fragment_state.fragment_analytics_snapshot = self.team_service.build_fragment_analytics_dashboard(
             &personal,
-            self.fragment_analytics_range,
-            &self.fragment_usage_log,
+            self.fragment_state.fragment_analytics_range,
+            &self.fragment_state.fragment_usage_log,
         );
-        let cutoff = self.fragment_analytics_range.cutoff_unix();
-        self.fragment_recommendations =
+        let cutoff = self.fragment_state.fragment_analytics_range.cutoff_unix();
+        self.fragment_state.fragment_recommendations =
             crate::core::recommend_from_history(&self.command_history, &personal, cutoff, 8);
     }
 
     fn export_efficiency_report(&mut self, ctx: &egui::Context) {
         let md = crate::core::build_efficiency_report_markdown(
-            &self.fragment_analytics_snapshot,
-            self.fragment_analytics_range,
-            &self.fragment_recommendations,
+            &self.fragment_state.fragment_analytics_snapshot,
+            self.fragment_state.fragment_analytics_range,
+            &self.fragment_state.fragment_recommendations,
         );
         if let Ok(mut clip) = arboard::Clipboard::new() {
             if clip.set_text(&md).is_ok() {
@@ -5586,9 +5493,9 @@ impl MistTermApp {
 
     fn export_efficiency_report_pdf(&mut self, ctx: &egui::Context) {
         let pdf = match crate::core::build_efficiency_report_pdf(
-            &self.fragment_analytics_snapshot,
-            self.fragment_analytics_range,
-            &self.fragment_recommendations,
+            &self.fragment_state.fragment_analytics_snapshot,
+            self.fragment_state.fragment_analytics_range,
+            &self.fragment_state.fragment_recommendations,
         ) {
             Ok(bytes) => bytes,
             Err(e) => {
@@ -5630,7 +5537,7 @@ impl MistTermApp {
     }
 
     fn add_fragment_from_recommendation(&mut self, ctx: &egui::Context, index: usize) {
-        let Some(rec) = self.fragment_recommendations.get(index).cloned() else {
+        let Some(rec) = self.fragment_state.fragment_recommendations.get(index).cloned() else {
             return;
         };
         let cand = candidate_from_success_recommendation(&rec);
@@ -5642,13 +5549,13 @@ impl MistTermApp {
             self.team_service.spawn_list_team_members();
         }
         self.refresh_fragment_analytics_dashboard();
-        self.show_fragment_analytics_dialog = true;
+        self.fragment_state.show_fragment_analytics_dialog = true;
     }
 
     fn export_fragment_analytics_json(&mut self, ctx: &egui::Context) {
         let json = match crate::core::export_dashboard_json(
-            &self.fragment_analytics_snapshot,
-            self.fragment_analytics_range,
+            &self.fragment_state.fragment_analytics_snapshot,
+            self.fragment_state.fragment_analytics_range,
         ) {
             Ok(j) => j,
             Err(e) => {
@@ -5706,36 +5613,36 @@ impl MistTermApp {
     }
 
     fn schedule_market_catalog_debounce(&mut self) {
-        if self.fragment_list_scope != FragmentListScope::Market {
+        if self.fragment_state.fragment_list_scope != FragmentListScope::Market {
             return;
         }
-        self.market_catalog_debounce_deadline =
+        self.fragment_state.market_catalog_debounce_deadline =
             Some(std::time::Instant::now() + std::time::Duration::from_millis(450));
     }
 
     fn poll_market_catalog_debounce(&mut self) {
-        let Some(deadline) = self.market_catalog_debounce_deadline else {
+        let Some(deadline) = self.fragment_state.market_catalog_debounce_deadline else {
             return;
         };
         if std::time::Instant::now() < deadline {
             return;
         }
-        self.market_catalog_debounce_deadline = None;
-        if self.fragment_list_scope == FragmentListScope::Market {
+        self.fragment_state.market_catalog_debounce_deadline = None;
+        if self.fragment_state.fragment_list_scope == FragmentListScope::Market {
             self.start_market_catalog_refresh();
         }
     }
 
     fn sync_market_catalog_query_fingerprint(&mut self) {
-        if self.fragment_list_scope != FragmentListScope::Market {
+        if self.fragment_state.fragment_list_scope != FragmentListScope::Market {
             return;
         }
         let fp = (
-            self.fragment_filter_category.clone(),
-            self.fragment_search_query.clone(),
+            self.fragment_state.fragment_filter_category.clone(),
+            self.fragment_state.fragment_search_query.clone(),
         );
-        if fp != self.market_catalog_query_fingerprint {
-            self.market_catalog_query_fingerprint = fp;
+        if fp != self.fragment_state.market_catalog_query_fingerprint {
+            self.fragment_state.market_catalog_query_fingerprint = fp;
             self.schedule_market_catalog_debounce();
         }
     }
@@ -6149,7 +6056,7 @@ impl MistTermApp {
 
     /// 切换右侧命令片段侧栏。
     pub(crate) fn toggle_fragment_sidebar(&mut self, ctx: &egui::Context) {
-        if self.show_fragment_panel {
+        if self.fragment_state.show_fragment_panel {
             self.close_all_right_dock_panels();
         } else if self.ensure_right_dock_allowed_or_warn(ctx) {
             self.open_right_dock_panel(ActiveRightDock::Fragment);
@@ -6680,7 +6587,7 @@ impl MistTermApp {
                     self.show_new_session_dialog = true;
                 }
                 AppAction::OpenSnippetsDialog => {
-                    self.show_fragments_dialog = true;
+                    self.fragment_state.show_fragments_dialog = true;
                 }
             }
         }
@@ -7110,19 +7017,19 @@ impl MistTermApp {
             self.show_preferences_dialog = false;
         }
         if target != BusinessDialog::SnippetLibrary {
-            self.fragment_library.open = false;
+            self.fragment_state.fragment_library.open = false;
         }
         if target != BusinessDialog::CommandHistory {
             self.command_history_overlay.open = false;
         }
         if target != BusinessDialog::PasteHistory {
-            self.paste_history_overlay.open = false;
+            self.fragment_state.paste_history_overlay.open = false;
         }
         if target != BusinessDialog::RuleManager {
             self.rule_manager_dialog.open = false;
         }
         if target != BusinessDialog::TeamFragmentEditor {
-            self.team_fragment_editor.open = false;
+            self.fragment_state.team_fragment_editor.open = false;
         }
         if target != BusinessDialog::CredentialEditor {
             self.credential_panel.close_form();
@@ -7136,7 +7043,7 @@ impl MistTermApp {
 
     pub(crate) fn open_snippet_library_dialog(&mut self) {
         self.close_competing_business_dialogs_for(BusinessDialog::SnippetLibrary);
-        self.fragment_library.open = true;
+        self.fragment_state.fragment_library.open = true;
     }
 
     pub(crate) fn open_rule_manager_dialog(&mut self) {
@@ -7147,7 +7054,7 @@ impl MistTermApp {
 
     pub(crate) fn menu_open_paste_history(&mut self, ctx: &egui::Context) {
         self.close_competing_business_dialogs_for(BusinessDialog::PasteHistory);
-        self.paste_history_overlay.open_new();
+        self.fragment_state.paste_history_overlay.open_new();
         if let Some(idx) = self.active_tab {
             if let Some(pane) = self.tabs.get_mut(idx).and_then(|t| t.active_pane_mut()) {
                 pane.terminal.release_keyboard_for_overlay();
@@ -7181,7 +7088,7 @@ impl MistTermApp {
             return;
         }
         for note in notes {
-            self.paste_history.record_note(note);
+            self.fragment_state.paste_history.record_note(note);
         }
     }
 
@@ -7961,7 +7868,7 @@ impl MistTermApp {
         };
         if let Some(slot) = slot {
             crate::ui::chrome::paint_right_dock_slot_gap(ctx, theme, slot);
-            self.fragment_panel_slot_rect = Some(slot);
+            self.fragment_state.fragment_panel_slot_rect = Some(slot);
             layout_util::record_right_dock_panel_rect(&slot, &mut self.right_dock_outer_left_x);
         }
         let _ = theme;
@@ -7973,13 +7880,13 @@ impl MistTermApp {
         ctx: &egui::Context,
         theme: &crate::ui::theme::Theme,
     ) {
-        if !self.show_fragment_panel {
+        if !self.fragment_state.show_fragment_panel {
             return;
         }
         let screen = ctx.content_rect();
         let dock_inset = theme.spacing_right_dock_screen_inset();
         let Some(slot) = layout_util::right_dock_foreground_slot(
-            self.fragment_panel_slot_rect,
+            self.fragment_state.fragment_panel_slot_rect,
             ctx,
             layout_util::FRAGMENT_PANEL_ID,
             layout_util::SidePanelProfile::Fragment,
@@ -8010,7 +7917,7 @@ impl MistTermApp {
         theme: &crate::ui::theme::Theme,
         panel_w: f32,
     ) {
-        self.fragment_filter_category = match self.fragment_filter_category.as_str() {
+        self.fragment_state.fragment_filter_category = match self.fragment_state.fragment_filter_category.as_str() {
             "常用" | "frequent" => "frequent".to_string(),
             "全部" | "all" => "all".to_string(),
             "Docker" => "Docker".to_string(),
@@ -8034,7 +7941,7 @@ impl MistTermApp {
                     "关闭命令片段侧栏",
                 ),
             ) {
-                self.show_fragment_panel = false;
+                self.fragment_state.show_fragment_panel = false;
             }
         });
         crate::ui::chrome::right_dock_header_divider(ui, theme);
@@ -8047,7 +7954,7 @@ impl MistTermApp {
             ui,
             theme,
             Self::id_fragment_panel_search(),
-            &mut self.fragment_search_query,
+            &mut self.fragment_state.fragment_search_query,
             crate::i18n::tr(ui.ctx(), "Search snippets…", "搜索片段 / 我们怎么…"),
             panel_w,
             false,
@@ -8097,7 +8004,7 @@ impl MistTermApp {
             let personal_lbl = crate::i18n::tr(&ctx_scope, "Personal", "个人");
             let team_lbl = crate::i18n::tr(&ctx_scope, "Team", "团队");
             let market_lbl = crate::i18n::tr(&ctx_scope, "Market", "市场");
-            let scope_key = match self.fragment_list_scope {
+            let scope_key = match self.fragment_state.fragment_list_scope {
                 FragmentListScope::Personal => "personal",
                 FragmentListScope::Team => "team",
                 FragmentListScope::Market => "market",
@@ -8117,12 +8024,12 @@ impl MistTermApp {
                 scope_key,
                 Some(row_w),
             ) {
-                self.fragment_list_scope = match picked.as_str() {
+                self.fragment_state.fragment_list_scope = match picked.as_str() {
                     "team" => FragmentListScope::Team,
                     "market" => {
-                        self.market_catalog_query_fingerprint = (
-                            self.fragment_filter_category.clone(),
-                            self.fragment_search_query.clone(),
+                        self.fragment_state.market_catalog_query_fingerprint = (
+                            self.fragment_state.fragment_filter_category.clone(),
+                            self.fragment_state.fragment_search_query.clone(),
                         );
                         self.start_market_catalog_refresh();
                         FragmentListScope::Market
@@ -8139,12 +8046,12 @@ impl MistTermApp {
                         )
                         .clicked()
                         {
-                            self.fragment_list_scope = match *key {
+                            self.fragment_state.fragment_list_scope = match *key {
                                 "team" => FragmentListScope::Team,
                                 "market" => {
-                                    self.market_catalog_query_fingerprint = (
-                                        self.fragment_filter_category.clone(),
-                                        self.fragment_search_query.clone(),
+                                    self.fragment_state.market_catalog_query_fingerprint = (
+                                        self.fragment_state.fragment_filter_category.clone(),
+                                        self.fragment_state.fragment_search_query.clone(),
                                     );
                                     self.start_market_catalog_refresh();
                                     FragmentListScope::Market
@@ -8158,7 +8065,7 @@ impl MistTermApp {
             ui.add_space(theme.spacing_dock_control_gap());
         }
 
-        if self.fragment_list_scope == FragmentListScope::Market {
+        if self.fragment_state.fragment_list_scope == FragmentListScope::Market {
             ui.horizontal(|ui| {
                 if crate::ui::chrome::panel_action_icon_button(
                     ui,
@@ -8171,7 +8078,7 @@ impl MistTermApp {
                     self.start_market_catalog_refresh();
                 }
             });
-            if self.market_catalog_refresh_rx.is_some() {
+            if self.fragment_state.market_catalog_refresh_rx.is_some() {
                 ui.label(
                     egui::RichText::new(crate::i18n::tr(
                         ui.ctx(),
@@ -8181,7 +8088,7 @@ impl MistTermApp {
                     .size(theme.font_size_caption())
                     .color(theme.text_tertiary()),
                 );
-            } else if let Some(err) = &self.market_catalog.last_error {
+            } else if let Some(err) = &self.fragment_state.market_catalog.last_error {
                 let hint = if err.starts_with("catalog_not_deployed") {
                     crate::i18n::tr(
                         ui.ctx(),
@@ -8197,7 +8104,7 @@ impl MistTermApp {
                         .size(theme.font_size_caption())
                         .color(theme.text_tertiary()),
                 );
-            } else if self.market_catalog.api_available {
+            } else if self.fragment_state.market_catalog.api_available {
                 ui.label(
                     egui::RichText::new(crate::i18n::tr(
                         ui.ctx(),
@@ -8208,9 +8115,9 @@ impl MistTermApp {
                     .color(theme.text_tertiary()),
                 );
             }
-            if self.market_catalog.has_more() {
+            if self.fragment_state.market_catalog.has_more() {
                 let loading =
-                    self.market_catalog_refresh_rx.is_some() || self.market_catalog.loading_more;
+                    self.fragment_state.market_catalog_refresh_rx.is_some() || self.fragment_state.market_catalog.loading_more;
                 ui.horizontal(|ui| {
                     if crate::ui::chrome::panel_action_button_ex(
                         ui,
@@ -8230,7 +8137,7 @@ impl MistTermApp {
             ui.add_space(theme.spacing_dock_control_gap());
         }
 
-        if self.fragment_list_scope == FragmentListScope::Team && self.team_service.is_logged_in() {
+        if self.fragment_state.fragment_list_scope == FragmentListScope::Team && self.team_service.is_logged_in() {
             let role = self.team_service.state.current_role();
             let role_name = self
                 .team_service
@@ -8257,10 +8164,10 @@ impl MistTermApp {
                     )
                     .clicked()
                 {
-                    open_create_editor(&mut self.team_fragment_editor);
+                    open_create_editor(&mut self.fragment_state.team_fragment_editor);
                 }
                 if can_edit
-                    && self.team_fragment_selected_id.is_some()
+                    && self.fragment_state.team_fragment_selected_id.is_some()
                     && crate::ui::chrome::panel_action_icon_button(
                         ui,
                         theme,
@@ -8269,18 +8176,18 @@ impl MistTermApp {
                     )
                     .clicked()
                 {
-                    if let Some(id) = self.team_fragment_selected_id.clone() {
+                    if let Some(id) = self.fragment_state.team_fragment_selected_id.clone() {
                         if let Some(frag) = self.team_service.find_team_fragment(&id) {
                             open_edit_editor(
-                                &mut self.team_fragment_editor,
+                                &mut self.fragment_state.team_fragment_editor,
                                 &frag,
-                                &self.fragment_shortcut_store,
+                                &self.fragment_state.fragment_shortcut_store,
                             );
                         }
                     }
                 }
                 if can_delete
-                    && self.team_fragment_selected_id.is_some()
+                    && self.fragment_state.team_fragment_selected_id.is_some()
                     && crate::ui::chrome::panel_action_icon_button(
                         ui,
                         theme,
@@ -8289,14 +8196,14 @@ impl MistTermApp {
                     )
                     .clicked()
                 {
-                    if let Some(id) = self.team_fragment_selected_id.take() {
+                    if let Some(id) = self.fragment_state.team_fragment_selected_id.take() {
                         match crate::core::team::delete_team_fragment_blocking(
                             &mut self.team_service,
                             &id,
                         ) {
                             Ok(()) => {
-                                if self.fragment_shortcut_store.clear(&id) {
-                                    let _ = self.fragment_shortcut_store.save();
+                                if self.fragment_state.fragment_shortcut_store.clear(&id) {
+                                    let _ = self.fragment_state.fragment_shortcut_store.save();
                                 }
                                 self.audit_logger.record(
                                     AuditEvent::new(
@@ -8320,13 +8227,13 @@ impl MistTermApp {
                     }
                 }
                 let selected_locked = self
-                    .team_fragment_selected_id
+                    .fragment_state.team_fragment_selected_id
                     .as_deref()
                     .and_then(|id| self.team_service.find_team_fragment(id))
                     .map(|f| !f.locked_by.is_empty())
                     .unwrap_or(false);
                 if can_edit
-                    && self.team_fragment_selected_id.is_some()
+                    && self.fragment_state.team_fragment_selected_id.is_some()
                     && crate::ui::chrome::panel_action_icon_button(
                         ui,
                         theme,
@@ -8339,7 +8246,7 @@ impl MistTermApp {
                     )
                     .clicked()
                 {
-                    if let Some(id) = self.team_fragment_selected_id.clone() {
+                    if let Some(id) = self.fragment_state.team_fragment_selected_id.clone() {
                         let res = if selected_locked {
                             crate::core::team::unlock_team_fragment_blocking(
                                 &mut self.team_service,
@@ -8366,7 +8273,7 @@ impl MistTermApp {
                         }
                     }
                 }
-                if self.team_fragment_selected_id.is_some()
+                if self.fragment_state.team_fragment_selected_id.is_some()
                     && crate::ui::chrome::panel_action_icon_button(
                         ui,
                         theme,
@@ -8375,17 +8282,17 @@ impl MistTermApp {
                     )
                     .clicked()
                 {
-                    if let Some(id) = self.team_fragment_selected_id.clone() {
+                    if let Some(id) = self.fragment_state.team_fragment_selected_id.clone() {
                         let title = self
                             .team_service
                             .find_team_fragment(&id)
                             .map(|f| f.title)
                             .unwrap_or_default();
-                        open_versions(&mut self.team_fragment_versions, &id, &title);
+                        open_versions(&mut self.fragment_state.team_fragment_versions, &id, &title);
                     }
                 }
                 if can_edit
-                    && self.team_fragment_selected_id.is_some()
+                    && self.fragment_state.team_fragment_selected_id.is_some()
                     && crate::ui::chrome::panel_action_icon_button(
                         ui,
                         theme,
@@ -8394,13 +8301,13 @@ impl MistTermApp {
                     )
                     .clicked()
                 {
-                    if let Some(id) = self.team_fragment_selected_id.clone() {
+                    if let Some(id) = self.fragment_state.team_fragment_selected_id.clone() {
                         let title = self
                             .team_service
                             .find_team_fragment(&id)
                             .map(|f| f.title)
                             .unwrap_or_default();
-                        open_shares(&mut self.team_fragment_shares, &id, &title);
+                        open_shares(&mut self.fragment_state.team_fragment_shares, &id, &title);
                     }
                 }
                 if can_delete
@@ -8430,23 +8337,23 @@ impl MistTermApp {
 
         self.sync_market_catalog_query_fingerprint();
 
-        let search_lower = self.fragment_search_query.to_lowercase();
+        let search_lower = self.fragment_state.fragment_search_query.to_lowercase();
         let search_ctx = ui.ctx().clone();
         let search_match = |f: &FragmentStats| {
             crate::i18n::fragment_matches_search(&search_ctx, f, &search_lower)
         };
 
-        let source: Vec<FragmentStats> = match self.fragment_list_scope {
-            FragmentListScope::Personal => self.fragment_manager.get_all().to_vec(),
+        let source: Vec<FragmentStats> = match self.fragment_state.fragment_list_scope {
+            FragmentListScope::Personal => self.fragment_state.fragment_manager.get_all().to_vec(),
             FragmentListScope::Team => self.team_service.team_fragments_as_stats(),
             FragmentListScope::Market => {
-                if self.market_catalog_refresh_pending && self.market_catalog_refresh_rx.is_none() {
+                if self.fragment_state.market_catalog_refresh_pending && self.fragment_state.market_catalog_refresh_rx.is_none() {
                     self.start_market_catalog_refresh();
                 }
-                let mut list = self.market_catalog.to_fragment_stats_list();
+                let mut list = self.fragment_state.market_catalog.to_fragment_stats_list();
                 if list.is_empty() {
                     list = self
-                        .fragment_manager
+                        .fragment_state.fragment_manager
                         .get_all()
                         .iter()
                         .filter(|f| f.tags.iter().any(|t| t.eq_ignore_ascii_case("market")))
@@ -8461,10 +8368,10 @@ impl MistTermApp {
         let ctx_owned = ui.ctx().clone();
         let has_docker = source.iter().any(|f| f.category == "Docker");
         let has_k8s = source.iter().any(|f| f.category == "K8s");
-        if (self.fragment_filter_category == "Docker" && !has_docker)
-            || (self.fragment_filter_category == "K8s" && !has_k8s)
+        if (self.fragment_state.fragment_filter_category == "Docker" && !has_docker)
+            || (self.fragment_state.fragment_filter_category == "K8s" && !has_k8s)
         {
-            self.fragment_filter_category = "all".into();
+            self.fragment_state.fragment_filter_category = "all".into();
         }
         let mut chip_owned: Vec<(String, String)> = Vec::with_capacity(4);
         chip_owned.push((
@@ -8485,22 +8392,22 @@ impl MistTermApp {
             .iter()
             .map(|(k, v)| (k.as_str(), v.as_str()))
             .collect();
-        let sort_lbl = crate::i18n::fragment_sort_chip_short(&ctx_owned, self.fragment_sort_by);
+        let sort_lbl = crate::i18n::fragment_sort_chip_short(&ctx_owned, self.fragment_state.fragment_sort_by);
         let sort_hover = crate::i18n::filter_sort_cycle_hint_fragments(&ctx_owned);
         let chip_row = crate::ui::chrome::filter_chip_row_with_sort(
             ui,
             theme,
             &chip_defs,
-            self.fragment_filter_category.as_str(),
-            crate::ui::icons::fragment_sort_icon(self.fragment_sort_by),
+            self.fragment_state.fragment_filter_category.as_str(),
+            crate::ui::icons::fragment_sort_icon(self.fragment_state.fragment_sort_by),
             sort_lbl,
             sort_hover,
         );
         if let Some(picked) = chip_row.picked {
-            self.fragment_filter_category = picked;
+            self.fragment_state.fragment_filter_category = picked;
         }
         if chip_row.cycle_sort {
-            self.fragment_sort_by = match self.fragment_sort_by {
+            self.fragment_state.fragment_sort_by = match self.fragment_state.fragment_sort_by {
                 SortBy::UsageCount => SortBy::SuccessRate,
                 SortBy::SuccessRate => SortBy::LastUsed,
                 SortBy::LastUsed => SortBy::Name,
@@ -8509,7 +8416,7 @@ impl MistTermApp {
         }
 
         // Status filter chip row (Team scope only)
-        if self.fragment_list_scope == FragmentListScope::Team {
+        if self.fragment_state.fragment_list_scope == FragmentListScope::Team {
             let ctx_owned2 = ui.ctx().clone();
             let status_chips: [(&str, &str); 4] = [
                 ("all", crate::i18n::tr(&ctx_owned2, "All", "全部")),
@@ -8527,11 +8434,11 @@ impl MistTermApp {
                 ui,
                 theme,
                 &status_chips,
-                self.fragment_filter_status.as_str(),
+                self.fragment_state.fragment_filter_status.as_str(),
                 Some(panel_w),
             );
             if let Some(picked) = status_row {
-                self.fragment_filter_status = picked;
+                self.fragment_state.fragment_filter_status = picked;
             }
         }
         ui.add_space(theme.spacing_dock_control_gap());
@@ -8539,7 +8446,7 @@ impl MistTermApp {
         let mut work: Vec<FragmentStats> =
             source.iter().filter(|f| search_match(f)).cloned().collect();
 
-        match self.fragment_filter_category.as_str() {
+        match self.fragment_state.fragment_filter_category.as_str() {
             "Docker" => work.retain(|f| f.category == "Docker"),
             "K8s" => work.retain(|f| f.category == "K8s"),
             "frequent" => {
@@ -8555,22 +8462,22 @@ impl MistTermApp {
             }
             _ => {
                 // §5.3：已归档片段恒置底（稳定排序，不影响组内相对次序）。
-                crate::core::sort_fragments_with_archived_last(&mut work, self.fragment_sort_by);
+                crate::core::sort_fragments_with_archived_last(&mut work, self.fragment_state.fragment_sort_by);
             }
         }
 
         // Status filter (Team scope only)
-        match self.fragment_filter_status.as_str() {
+        match self.fragment_state.fragment_filter_status.as_str() {
             "published" | "draft" | "archived" => {
-                let s = self.fragment_filter_status.clone();
+                let s = self.fragment_state.fragment_filter_status.clone();
                 work.retain(|f| f.source_status == s);
             }
             _ => {}
         }
 
         let scroll_h = ui.available_height().max(80.0);
-        let is_team_scope = self.fragment_list_scope == FragmentListScope::Team;
-        let is_market_scope = self.fragment_list_scope == FragmentListScope::Market;
+        let is_team_scope = self.fragment_state.fragment_list_scope == FragmentListScope::Team;
+        let is_market_scope = self.fragment_state.fragment_list_scope == FragmentListScope::Market;
         let prev_extreme = ui.visuals().extreme_bg_color;
         ui.visuals_mut().extreme_bg_color = theme.color_scroll_extreme_bg();
         egui::ScrollArea::vertical()
@@ -8581,7 +8488,7 @@ impl MistTermApp {
             .show(ui, |ui| {
                 ui.set_max_width(panel_w);
                 if work.is_empty() {
-                    let cat = self.fragment_filter_category.as_str();
+                    let cat = self.fragment_state.fragment_filter_category.as_str();
                     let empty = if source.is_empty() {
                         crate::i18n::tr(
                             ui.ctx(),
@@ -8630,7 +8537,7 @@ impl MistTermApp {
                         },
                     );
                     let selected =
-                        self.team_fragment_selected_id.as_deref() == Some(frag.id.as_str());
+                        self.fragment_state.team_fragment_selected_id.as_deref() == Some(frag.id.as_str());
                     if is_team_scope && selected {
                         ui.painter().rect_stroke(
                             row_resp.row.rect,
@@ -8642,7 +8549,7 @@ impl MistTermApp {
                     if row_resp.title.clicked() {
                         self.begin_fragment_insert(ui.ctx(), frag, false);
                     } else if is_team_scope && row_resp.row.clicked() {
-                        self.team_fragment_selected_id = Some(frag.id.clone());
+                        self.fragment_state.team_fragment_selected_id = Some(frag.id.clone());
                     }
                     if is_market_scope {
                         let frag_clone = frag.clone();
@@ -8672,7 +8579,7 @@ impl MistTermApp {
     }
 
     fn resolve_fragment_stats_by_id(&self, id: &str) -> Option<FragmentStats> {
-        if let Some(f) = self.fragment_manager.get_by_id(id) {
+        if let Some(f) = self.fragment_state.fragment_manager.get_by_id(id) {
             return Some(f.clone());
         }
         if let Some(tf) = self.team_service.find_team_fragment(id) {
@@ -8695,7 +8602,7 @@ impl MistTermApp {
                 } = ev
                 {
                     let name = format!("{:?}", key);
-                    if let Some(fid) = self.fragment_shortcut_store.find_matching_fragment_id(
+                    if let Some(fid) = self.fragment_state.fragment_shortcut_store.find_matching_fragment_id(
                         &name,
                         modifiers.ctrl,
                         modifiers.shift,
@@ -8738,7 +8645,7 @@ impl MistTermApp {
         fragment: &FragmentStats,
         insert_only: bool,
     ) {
-        self.fragment_insert_only = insert_only;
+        self.fragment_state.fragment_insert_only = insert_only;
         if self.active_tab.is_none() {
             self.notify_auto(
                 crate::i18n::tr(egui_ctx, "Open a terminal tab first", "请先打开终端标签")
@@ -8757,15 +8664,15 @@ impl MistTermApp {
         );
 
         if fragment.has_variables() {
-            self.variable_dialog.open = true;
-            self.variable_dialog.fragment_id = Some(fragment.id.clone());
-            self.variable_dialog.fragment_title =
+            self.fragment_state.variable_dialog.open = true;
+            self.fragment_state.variable_dialog.fragment_id = Some(fragment.id.clone());
+            self.fragment_state.variable_dialog.fragment_title =
                 crate::i18n::fragment_display_title(egui_ctx, fragment);
-            self.variable_dialog.values = fragment.variable_defaults();
-            self.variable_dialog.command_edit =
-                self.build_fragment_command_preview(fragment, &self.variable_dialog.values);
-            self.variable_dialog.paste_after_fill = true;
-            self.variable_dialog.last_finalize_error = None;
+            self.fragment_state.variable_dialog.values = fragment.variable_defaults();
+            self.fragment_state.variable_dialog.command_edit =
+                self.build_fragment_command_preview(fragment, &self.fragment_state.variable_dialog.values);
+            self.fragment_state.variable_dialog.paste_after_fill = true;
+            self.fragment_state.variable_dialog.last_finalize_error = None;
             return;
         }
 
@@ -8792,15 +8699,15 @@ impl MistTermApp {
         if needs_user.is_empty() {
             self.insert_expanded_fragment_with_stats(egui_ctx, &fragment.id, &expanded);
         } else {
-            self.pending_fragment_id = Some(fragment.id.clone());
-            self.pending_fragment_name =
+            self.fragment_state.pending_fragment_id = Some(fragment.id.clone());
+            self.fragment_state.pending_fragment_name =
                 crate::i18n::fragment_display_title(egui_ctx, fragment);
-            self.pending_fragment_command = expanded;
-            self.pending_fragment_vars =
+            self.fragment_state.pending_fragment_command = expanded;
+            self.fragment_state.pending_fragment_vars =
                 needs_user.into_iter().map(|k| (k, String::new())).collect();
             self.sync_pending_fragment_command_edit();
-            self.fragment_vars_completion = FragmentVarsCompletion::PasteInsertStats;
-            self.show_fragment_vars_dialog = true;
+            self.fragment_state.fragment_vars_completion = FragmentVarsCompletion::PasteInsertStats;
+            self.fragment_state.show_fragment_vars_dialog = true;
         }
     }
 
@@ -8822,7 +8729,7 @@ impl MistTermApp {
         let Some(pane) = tab.active_pane_mut() else {
             return;
         };
-        let insert_only = self.fragment_insert_only;
+        let insert_only = self.fragment_state.fragment_insert_only;
         let connecting = pane.terminal.is_connecting();
         // 片段也先过命令审计：拦截 / 确认和从命令库执行一样；「用到终端」通过后只放进输入行。
         if pane.terminal.is_connected() {
@@ -8851,7 +8758,7 @@ impl MistTermApp {
             return;
         }
         if connecting {
-            self.pending_fragment_insert = Some((
+            self.fragment_state.pending_fragment_insert = Some((
                 tab_idx,
                 fragment_id.map(|id| id.to_string()),
                 command.to_string(),
@@ -8881,7 +8788,7 @@ impl MistTermApp {
     }
 
     fn try_flush_pending_fragment_insert(&mut self, ctx: &egui::Context) {
-        let Some((idx, fid_opt, cmd)) = self.pending_fragment_insert.take() else {
+        let Some((idx, fid_opt, cmd)) = self.fragment_state.pending_fragment_insert.take() else {
             return;
         };
         let Some(tab) = self.tabs.get(idx) else {
@@ -8892,7 +8799,7 @@ impl MistTermApp {
             .map(|t| t.is_connected())
             .unwrap_or(false)
         {
-            self.pending_fragment_insert = Some((idx, fid_opt, cmd));
+            self.fragment_state.pending_fragment_insert = Some((idx, fid_opt, cmd));
             return;
         }
         self.insert_fragment_at_tab_index(ctx, idx, fid_opt.as_deref(), &cmd);
@@ -8969,7 +8876,7 @@ impl MistTermApp {
                         ui,
                         theme,
                         crate::ui::icons::IconId::Fragment,
-                        self.show_fragment_panel,
+                        self.fragment_state.show_fragment_panel,
                         &tip(menu.fragment_panel, Some(crate::platform::accel("K"))),
                         crate::i18n::tr(ctx, "Snips", "片段"),
                     )
@@ -9121,7 +9028,7 @@ impl MistTermApp {
                 self.activity_rail_collapsed,
                 ctx.input(|i| i.viewport().maximized.unwrap_or(false)),
                 self.show_sftp_panel,
-                self.show_fragment_panel,
+                self.fragment_state.show_fragment_panel,
                 self.show_monitor_panel,
                 self.theme_manager.current,
             );
@@ -9217,12 +9124,12 @@ impl MistTermApp {
             }
             MacMenuAction::FragmentLibrary => self.open_snippet_library_dialog(),
             MacMenuAction::SendSequences => {
-                self.send_sequence_dialog.open_manager(&self.send_sequences);
+                self.fragment_state.send_sequence_dialog.open_manager(&self.fragment_state.send_sequences);
             }
             MacMenuAction::RuleManager => {
                 self.open_rule_manager_dialog();
             }
-            MacMenuAction::QuickFragmentSelector => self.quick_selector.open = true,
+            MacMenuAction::QuickFragmentSelector => self.fragment_state.quick_selector.open = true,
             MacMenuAction::CredentialPanel => {
                 if self.ensure_right_dock_allowed_or_warn(ctx) {
                     self.open_right_dock_panel(ActiveRightDock::Credential);
@@ -9356,8 +9263,8 @@ impl eframe::App for MistTermApp {
         };
         eframe::set_value(storage, MISTTERM_UI_STORAGE_KEY, &p);
         let _ = self.command_history.save();
-        let _ = self.paste_history.flush_blocking();
-        if let Err(e) = self.send_sequences.save() {
+        let _ = self.fragment_state.paste_history.flush_blocking();
+        if let Err(e) = self.fragment_state.send_sequences.save() {
             log::warn!("send sequences save: {e}");
         }
     }
@@ -9412,7 +9319,7 @@ impl eframe::App for MistTermApp {
             active_tab: self.active_tab,
             panel_state: format!(
                 "fragment={} monitor={} ai={} sftp={} pf={} search={} rail_hidden={}",
-                self.show_fragment_panel,
+                self.fragment_state.show_fragment_panel,
                 self.show_monitor_panel,
                 self.show_ai_panel,
                 self.show_sftp_panel,
@@ -9495,7 +9402,7 @@ impl eframe::App for MistTermApp {
                     && (i.modifiers.command || i.modifiers.ctrl)
             })
         {
-            self.quick_selector.open = true;
+            self.fragment_state.quick_selector.open = true;
         }
         if self.show_terminal_search {
             if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::F))
@@ -9530,30 +9437,30 @@ impl eframe::App for MistTermApp {
             ctx,
             &theme,
             &mut self.team_service,
-            &mut self.team_fragment_editor,
-            &mut self.team_fragment_conflict,
-            &mut self.fragment_shortcut_store,
+            &mut self.fragment_state.team_fragment_editor,
+            &mut self.fragment_state.team_fragment_conflict,
+            &mut self.fragment_state.fragment_shortcut_store,
             &self.audit_logger,
         );
         show_team_fragment_conflict_modal(
             ctx,
             &theme,
             &mut self.team_service,
-            &mut self.team_fragment_conflict,
+            &mut self.fragment_state.team_fragment_conflict,
             &self.audit_logger,
         );
         show_fragment_versions_modal(
             ctx,
             &theme,
             &mut self.team_service,
-            &mut self.team_fragment_versions,
+            &mut self.fragment_state.team_fragment_versions,
             &self.audit_logger,
         );
         show_fragment_shares_modal(
             ctx,
             &theme,
             &mut self.team_service,
-            &mut self.team_fragment_shares,
+            &mut self.fragment_state.team_fragment_shares,
             &self.audit_logger,
         );
         show_team_settings_modal(
@@ -9567,10 +9474,10 @@ impl eframe::App for MistTermApp {
         crate::ui::fragment_analytics_dialog::show_fragment_analytics_modal(
             ctx,
             &theme,
-            &mut self.show_fragment_analytics_dialog,
-            &mut self.fragment_analytics_range,
-            &self.fragment_analytics_snapshot,
-            &self.fragment_recommendations,
+            &mut self.fragment_state.show_fragment_analytics_dialog,
+            &mut self.fragment_state.fragment_analytics_range,
+            &self.fragment_state.fragment_analytics_snapshot,
+            &self.fragment_state.fragment_recommendations,
             &mut analytics_action,
         );
         match analytics_action {
@@ -9614,10 +9521,10 @@ impl eframe::App for MistTermApp {
             .as_ref()
             .map(|replay| replay.sequence_id.clone());
         let session_connected = self.active_connected_pane().is_some();
-        let seq_action = self.send_sequence_dialog.show(
+        let seq_action = self.fragment_state.send_sequence_dialog.show(
             ctx,
             &theme,
-            &mut self.send_sequences,
+            &mut self.fragment_state.send_sequences,
             session_connected,
             replaying_id.as_deref(),
         );
@@ -9634,7 +9541,7 @@ impl eframe::App for MistTermApp {
             .send_replay
             .as_ref()
             .map(|replay| replay.sequence_id.clone())
-            .is_some_and(|id| self.send_sequences.get(&id).is_none());
+            .is_some_and(|id| self.fragment_state.send_sequences.get(&id).is_none());
         if replay_deleted {
             self.stop_send_sequence(ctx, false);
         }
@@ -9648,10 +9555,10 @@ impl eframe::App for MistTermApp {
         if self.command_history.poll_background_load() {
             ctx.request_repaint();
         }
-        if self.paste_history.poll_background_load() {
+        if self.fragment_state.paste_history.poll_background_load() {
             ctx.request_repaint();
         }
-        self.paste_history.poll_save();
+        self.fragment_state.paste_history.poll_save();
         self.poll_command_history_from_active_tab();
         self.flush_deferred_candidate_toast(ctx);
         self.poll_connect_audit_from_tabs(ctx);
@@ -9948,22 +9855,22 @@ impl eframe::App for MistTermApp {
             if ctx.input_mut(|i| {
                 i.consume_key(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, egui::Key::F7)
             }) {
-                self.fragment_library.open_new_for_gui_automation();
+                self.fragment_state.fragment_library.open_new_for_gui_automation();
             }
             if ctx.input_mut(|i| {
                 i.consume_key(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, egui::Key::F8)
             }) {
-                self.fragment_library.begin_shortcut_capture_for_gui_automation();
+                self.fragment_state.fragment_library.begin_shortcut_capture_for_gui_automation();
             }
             if ctx.input_mut(|i| {
                 i.consume_key(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, egui::Key::F6)
             }) {
-                self.fragment_library.request_save_for_gui_automation();
+                self.fragment_state.fragment_library.request_save_for_gui_automation();
             }
             if ctx.input_mut(|i| {
                 i.consume_key(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, egui::Key::F5)
             }) {
-                self.fragment_library.close_for_gui_automation();
+                self.fragment_state.fragment_library.close_for_gui_automation();
             }
             let sftp_handle = self
                 .active_tab
@@ -10219,18 +10126,18 @@ impl eframe::App for MistTermApp {
 
         // 片段自定义快捷键：终端聚焦时也要生效，并吞掉按键避免进 PTY。
         if self.app_global_shortcuts_enabled()
-            && !self.fragment_library.open
-            && !self.send_sequence_dialog.open
+            && !self.fragment_state.fragment_library.open
+            && !self.fragment_state.send_sequence_dialog.open
             && !self.rule_manager_dialog.open
-            && !self.team_fragment_editor.open
-            && !self.team_fragment_editor.capturing_shortcut
+            && !self.fragment_state.team_fragment_editor.open
+            && !self.fragment_state.team_fragment_editor.capturing_shortcut
         {
             if let Some(fid) = self.poll_fragment_shortcut(ctx) {
                 if let Some(frag) = self.resolve_fragment_stats_by_id(&fid) {
                     self.begin_fragment_insert(ctx, &frag, false);
-                } else if self.fragment_shortcut_store.clear(&fid) {
+                } else if self.fragment_state.fragment_shortcut_store.clear(&fid) {
                     // 片段已被删掉（比如团队同步删了），顺手把快捷键也去掉。
-                    let _ = self.fragment_shortcut_store.save();
+                    let _ = self.fragment_state.fragment_shortcut_store.save();
                 }
             }
         }
@@ -10282,7 +10189,7 @@ impl eframe::App for MistTermApp {
 impl MistTermApp {
     /// 执行命令片段(⌘J 快速选择)：会话占位符展开；片段库变量与 `<自定义>` 占位符弹窗填写。
     fn execute_fragment(&mut self, ctx: &egui::Context, fragment: &FragmentStats) {
-        self.fragment_insert_only = false;
+        self.fragment_state.fragment_insert_only = false;
         if self.selected_session_id.is_none() {
             self.notify_auto(
                 crate::i18n::tr(
@@ -10305,15 +10212,15 @@ impl MistTermApp {
         );
 
         if fragment.has_variables() {
-            self.variable_dialog.open = true;
-            self.variable_dialog.fragment_id = Some(fragment.id.clone());
-            self.variable_dialog.fragment_title =
+            self.fragment_state.variable_dialog.open = true;
+            self.fragment_state.variable_dialog.fragment_id = Some(fragment.id.clone());
+            self.fragment_state.variable_dialog.fragment_title =
                 crate::i18n::fragment_display_title(ctx, fragment);
-            self.variable_dialog.values = fragment.variable_defaults();
-            self.variable_dialog.command_edit =
-                self.build_fragment_command_preview(fragment, &self.variable_dialog.values);
-            self.variable_dialog.paste_after_fill = false;
-            self.variable_dialog.last_finalize_error = None;
+            self.fragment_state.variable_dialog.values = fragment.variable_defaults();
+            self.fragment_state.variable_dialog.command_edit =
+                self.build_fragment_command_preview(fragment, &self.fragment_state.variable_dialog.values);
+            self.fragment_state.variable_dialog.paste_after_fill = false;
+            self.fragment_state.variable_dialog.last_finalize_error = None;
             return;
         }
 
@@ -10386,17 +10293,17 @@ impl MistTermApp {
                     );
                 }
             }
-            self.quick_selector.open = false;
+            self.fragment_state.quick_selector.open = false;
             return;
         }
 
-        self.pending_fragment_id = Some(fragment.id.clone());
-        self.pending_fragment_name = crate::i18n::fragment_display_title(ctx, fragment);
-        self.pending_fragment_command = expanded;
-        self.pending_fragment_vars = needs.into_iter().map(|k| (k, String::new())).collect();
+        self.fragment_state.pending_fragment_id = Some(fragment.id.clone());
+        self.fragment_state.pending_fragment_name = crate::i18n::fragment_display_title(ctx, fragment);
+        self.fragment_state.pending_fragment_command = expanded;
+        self.fragment_state.pending_fragment_vars = needs.into_iter().map(|k| (k, String::new())).collect();
         self.sync_pending_fragment_command_edit();
-        self.fragment_vars_completion = FragmentVarsCompletion::QuickExecuteSend;
-        self.show_fragment_vars_dialog = true;
+        self.fragment_state.fragment_vars_completion = FragmentVarsCompletion::QuickExecuteSend;
+        self.fragment_state.show_fragment_vars_dialog = true;
     }
 
     /// 空标签时的起点：两个能点的动作，不再用会被裁掉的居中说明。

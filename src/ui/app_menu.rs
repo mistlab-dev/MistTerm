@@ -291,10 +291,10 @@ impl MistTermApp {
             if crate::ui::chrome::popup_menu_button_accel_shift(ui, theme, l.quick_fragments, "j")
                 .clicked()
             {
-                self.quick_selector.open = true;
+                self.fragment_state.quick_selector.open = true;
             }
             if crate::ui::chrome::popup_menu_button(ui, theme, l.send_sequences).clicked() {
-                self.send_sequence_dialog.open_manager(&self.send_sequences);
+                self.fragment_state.send_sequence_dialog.open_manager(&self.fragment_state.send_sequences);
             }
             ui.separator();
             // 2. 历史
