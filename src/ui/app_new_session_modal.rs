@@ -20,7 +20,7 @@ impl MistTermApp {
                 .fixed_size(modal_sz)
                 .show(ctx, |ui| {
                     let required_missing =
-                        self.new_session_name.trim().is_empty() || self.new_session_host.trim().is_empty();
+                        self.new_session_form.name.trim().is_empty() || self.new_session_form.host.trim().is_empty();
                     let form_w = layout_util::finite_content_width_inset(ui, 4.0, 300.0, 340.0);
 
                     crate::ui::chrome::modal_content_frame(theme).show(ui, |ui| {
@@ -49,7 +49,7 @@ impl MistTermApp {
                                 ui,
                                 theme,
                                 "new_session_name",
-                                &mut self.new_session_name,
+                                &mut self.new_session_form.name,
                                 crate::i18n::tr(ctx, "e.g. prod-server-01", "例：生产服务器-01"),
                                 form_w,
                                 false,
@@ -70,7 +70,7 @@ impl MistTermApp {
                                         ui,
                                         theme,
                                         "new_session_host",
-                                        &mut self.new_session_host,
+                                        &mut self.new_session_form.host,
                                         crate::i18n::tr(ctx, "IP or hostname", "IP 或域名"),
                                         host_w,
                                         false,
@@ -87,8 +87,8 @@ impl MistTermApp {
                                         ui,
                                         theme,
                                         "new_session_port",
-                                        &mut self.new_session_port_str,
-                                        &mut self.new_session_port,
+                                        &mut self.new_session_form.port_str,
+                                        &mut self.new_session_form.port,
                                         88.0,
                                     );
                                 });
@@ -109,7 +109,7 @@ impl MistTermApp {
                                         ui,
                                         theme,
                                         "new_session_username",
-                                        &mut self.new_session_username,
+                                        &mut self.new_session_form.username,
                                         crate::i18n::tr(ctx, "e.g. root", "如 root"),
                                         half,
                                         false,
@@ -126,7 +126,7 @@ impl MistTermApp {
                                         ui,
                                         theme,
                                         "new_session_password",
-                                        &mut self.new_session_password,
+                                        &mut self.new_session_form.password,
                                         crate::i18n::tr(ctx, "Optional", "可留空"),
                                         half,
                                         true,
@@ -140,9 +140,9 @@ impl MistTermApp {
                                 theme,
                                 "new_session",
                                 form_w,
-                                &mut self.new_session_auth_mode,
-                                &mut self.new_session_use_ssh_agent,
-                                &mut self.new_session_private_key_path,
+                                &mut self.new_session_form.auth_mode,
+                                &mut self.new_session_form.use_ssh_agent,
+                                &mut self.new_session_form.private_key_path,
                             );
 
                             Self::ui_field_label(
@@ -158,16 +158,16 @@ impl MistTermApp {
                                     ctx,
                                     SESSION_COLOR_TAGS
                                         .iter()
-                                        .find(|(v, _)| *v == self.new_session_color_tag.as_str())
+                                        .find(|(v, _)| *v == self.new_session_form.color_tag.as_str())
                                         .map(|(v, _)| *v)
-                                        .unwrap_or_else(|| self.new_session_color_tag.as_str()),
+                                        .unwrap_or_else(|| self.new_session_form.color_tag.as_str()),
                                 ),
                                 form_w,
                                 |ui| {
                                     for (value, _) in SESSION_COLOR_TAGS {
                                         let label = crate::i18n::session_color_tag(ctx, value);
                                         ui.selectable_value(
-                                            &mut self.new_session_color_tag,
+                                            &mut self.new_session_form.color_tag,
                                             value.to_string(),
                                             label,
                                         );
@@ -175,7 +175,7 @@ impl MistTermApp {
                                 },
                             );
 
-                            if required_missing && self.new_session_validation_attempted {
+                            if required_missing && self.new_session_form.validation_attempted {
                                 ui.add_space(theme.spacing_sm());
                                 ui.label(
                                     egui::RichText::new(crate::i18n::tr(
@@ -220,7 +220,7 @@ impl MistTermApp {
                                             self.create_and_connect_session(ui.ctx());
                                             should_close = true;
                                         } else {
-                                            self.new_session_validation_attempted = true;
+                                            self.new_session_form.validation_attempted = true;
                                         }
                                     }
                                     if crate::ui::chrome::modal_secondary_icon_button(
@@ -243,7 +243,7 @@ impl MistTermApp {
                             self.create_and_connect_session(ui.ctx());
                             should_close = true;
                         } else {
-                            self.new_session_validation_attempted = true;
+                            self.new_session_form.validation_attempted = true;
                         }
                     }
                     if ui.input(|i| i.key_pressed(egui::Key::Escape)) {

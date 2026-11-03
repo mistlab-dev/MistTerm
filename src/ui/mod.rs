@@ -58,6 +58,7 @@ pub mod command_palette;
 pub mod paste_history_overlay;
 pub mod session_log_dialog;
 pub mod postmortem_dialog;
+pub mod session_form;
 pub mod vault_form;
 pub mod help_docs_dialog;
 
