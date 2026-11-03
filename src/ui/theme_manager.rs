@@ -248,7 +248,13 @@ impl ThemeManager {
             ui_font(theme.font_size_caption()),
         );
 
-        ctx.set_style_of(egui::Theme::Dark, style);
+        // #327：egui 0.37 菜单/弹窗按 ThemePreference（默认 System）从 dark/light
+        // 两份预设取样式。只写 Dark 份时，浅色系统偏好（如 macOS 浅色模式）的
+        // 右键菜单会落到出厂浅色 light_style → 白底浅字不可读。
+        // 修法：两份预设都写我们的主题——菜单配色永远跟随 MistTerm 主题，
+        // 与系统偏好解耦（主题切换本就是应用内功能，不受系统影响）。
+        ctx.set_style_of(egui::Theme::Dark, style.clone());
+        ctx.set_style_of(egui::Theme::Light, style);
         self.applied_ctx_index = Some(self.current);
         // 勿在此 request_repaint：每帧 apply 时再立即重绘会形成无限帧循环。
         // 切换主题时由偏好/菜单等调用方自行 request_repaint。
