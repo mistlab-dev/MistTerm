@@ -35,6 +35,16 @@ impl MistTermApp {
         } else {
             theme.top_chrome_total_height()
         };
+        // #324/#325：eframe 0.37 文档要求配合 fullsize content view **每帧**调用
+        // set_traffic_lights_position——AppKit 在窗口布局/缩放时会重置红绿灯位置，
+        // 不钉住就会压住自绘标签行（首行被挡 + 标签栏「消失」）。
+        // 钉进标签行：垂直居中于 top_chrome_height，左缘留出红绿灯宽度（约 70pt）再画 tab。
+        #[cfg(target_os = "macos")]
+        if top_chrome_height > 0.0 {
+            let y_range = egui::Rangef::new(0.0, top_chrome_height);
+            frame.set_traffic_lights_position(ctx, y_range, 12.0);
+        }
+
         if top_chrome_height > 0.0 {
             egui::Panel::top("top_chrome")
                 .exact_size(top_chrome_height)
