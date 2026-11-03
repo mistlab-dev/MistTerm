@@ -7946,13 +7946,13 @@ impl MistTermApp {
         );
         ui.add_space(theme.spacing_dock_control_gap());
 
-        self.fragment_panel_search_and_actions(ui, theme);
+        self.fragment_panel_actions(ui, theme);
         self.fragment_panel_scope_and_filters(ui, theme);
         self.fragment_panel_list(ui, theme, panel_w);
     }
 
-    /// 搜索框 + 新建/导入/市场动作按钮行（P2 自 show_fragment_panel_contents 抽出，纯搬家）。
-    fn fragment_panel_search_and_actions(
+    /// 动作按钮行：新建/导入/AI 问知识（P2 自 show_fragment_panel_contents 抽出，纯搬家；搜索框留在主函数）。
+    fn fragment_panel_actions(
         &mut self,
         ui: &mut egui::Ui,
         theme: &crate::ui::theme::Theme,
@@ -8002,8 +8002,6 @@ impl MistTermApp {
         ui: &mut egui::Ui,
         theme: &crate::ui::theme::Theme,
     ) {
-        ui.add_space(theme.spacing_dock_control_gap());
-
         if self.team_service.is_configured() && self.team_service.is_logged_in() {
             let ctx_scope = ui.ctx().clone();
             let personal_lbl = crate::i18n::tr(&ctx_scope, "Personal", "个人");
@@ -8351,7 +8349,6 @@ impl MistTermApp {
         theme: &crate::ui::theme::Theme,
         panel_w: f32,
     ) {
-        let scroll_h = ui.available_height().max(80.0);
         let search_lower = self.fragment_state.fragment_search_query.to_lowercase();
         let search_ctx = ui.ctx().clone();
         let search_match = |f: &FragmentStats| {
@@ -8493,6 +8490,7 @@ impl MistTermApp {
         let is_market_scope = self.fragment_state.fragment_list_scope == FragmentListScope::Market;
         let prev_extreme = ui.visuals().extreme_bg_color;
         ui.visuals_mut().extreme_bg_color = theme.color_scroll_extreme_bg();
+        let scroll_h = ui.available_height().max(80.0);
         egui::ScrollArea::vertical()
             .id_salt("mistterm_fragment_list_scroll")
             .auto_shrink([false, false])
