@@ -6189,6 +6189,11 @@ impl MistTermApp {
         self.session_manager.get_session(&sid).cloned()
     }
 
+    // P3（#301）核实结论：面板→宿主的 take_pending_* 通道已按面板分组住在各自的
+    // poll_* 方法（本方法 / dispatch_monitor_alert_notifications / poll_connect_audit_from_tabs /
+    // poll_ai_agent_ops / poll_postmortem_save / append_terminal_output_logs 等），
+    // drain 时序与登录/渲染顺序耦合，纯搬家无位移可做；勿在此统一队列（会改处理顺序）。
+
     fn poll_port_forward_panel(&mut self) {
         if let Some(save) = self.port_forward_panel.take_pending_save() {
             self.apply_port_forward_save(save);
