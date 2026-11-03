@@ -678,6 +678,9 @@ pub fn log_text_for_display(raw: &str) -> String {
 }
 
 /// #313：中文 UI 下把历史英文注解（含裸 skipped）译成中文。
+///
+/// 注意：此处清单须与 `log_marker!` 写入侧保持同步——新增日志注解时若落盘为英文，
+/// 必须在此补对应翻译，否则中文 UI 下历史日志会残留英文（审查跟进项）。
 fn localize_log_markers_for_display(text: &str) -> String {
     if crate::i18n::current_language() != crate::i18n::UiLanguage::Zh {
         return text.to_string();

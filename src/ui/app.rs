@@ -1192,7 +1192,7 @@ impl MistTermApp {
             monitor_last_tab: None,
             monitor_panel: MonitorPanel::new(),
             ai_panel: AiPanel::new(),
-            sftp_panel: SftpPanel::new(),
+            sftp_panel: SftpPanel::new(app_settings.sftp_drag_hint_dismissed),
             port_forward_panel: PortForwardPanel::new(),
             credential_panel: CredentialPanel::new(),
             cloud_sync_panel: CloudSyncPanel::new(),
@@ -6013,7 +6013,7 @@ impl MistTermApp {
         } else if self.ensure_right_dock_allowed_or_warn(ctx) {
             self.open_right_dock_panel(ActiveRightDock::Sftp);
             self.sftp_last_tab = None;
-            self.sftp_panel.request_list_on_open();
+            self.sftp_panel.request_list_on_open(self.app_settings.sftp_drag_hint_dismissed);
         }
     }
 
@@ -6038,7 +6038,7 @@ impl MistTermApp {
             self.sftp_last_tab = None;
         }
         self.sftp_panel.jump_to_remote_dir(std::path::PathBuf::from(dir));
-        self.sftp_panel.request_list_on_open();
+        self.sftp_panel.request_list_on_open(self.app_settings.sftp_drag_hint_dismissed);
     }
 
     /// 切换右侧命令片段侧栏。
