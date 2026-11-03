@@ -821,8 +821,8 @@ impl RuleManagerDialog {
         ui.add_space(theme.spacing_sm());
         egui::CollapsingHeader::new(crate::i18n::tr(
             ctx,
-            "How a toast shows up",
-            "怎样看到 Toast",
+            "How to see notifications",
+            "怎样看到通知",
         ))
         .id_salt("output_trigger_toast_help")
         .default_open(true)
@@ -831,7 +831,7 @@ impl RuleManagerDialog {
                 egui::RichText::new(crate::i18n::tr(
                     ctx,
                     "Save a rule whose pattern is HELLO_MIST, severity Info, action Notify. In a connected terminal run: sleep 2; echo HELLO_MIST. Switch to another tab before it prints. The toast title is Output notice. The same rule will not toast again for 5 seconds. The tab you are looking at does not toast (same as the built-in rules).",
-                    "保存一条模式为 HELLO_MIST, 严重级别为「提示」, 动作为「通知」的规则。在已连接的终端执行 sleep 2; echo HELLO_MIST, 打印前先切到另一个标签. Toast 标题是「输出提示」. 同一条规则 5 秒内不会再弹。你正在看的标签不弹 Toast（和内置规则一样）.",
+                    "保存一条模式为 HELLO_MIST，严重级别为「提示」，动作为「弹出通知」的规则。在已连接的终端执行 sleep 2; echo HELLO_MIST，打印前先切到另一个标签。通知标题是「输出提示」。同一条规则 5 秒内不会再弹。你正在看的标签不弹通知（和内置规则一样）。",
                 ))
                 .size(theme.font_size_caption())
                 .color(theme.text_tertiary()),
@@ -839,8 +839,8 @@ impl RuleManagerDialog {
         });
         egui::CollapsingHeader::new(crate::i18n::tr(
             ctx,
-            "Advanced: import / export JSON",
-            "高级: 导入 / 导出 JSON",
+            "Import / export rules (JSON)",
+            "导入 / 导出规则文件（JSON）",
         ))
         .id_salt("output_trigger_import_export")
         .default_open(false)
@@ -1747,8 +1747,8 @@ impl RuleManagerDialog {
         }
         egui::CollapsingHeader::new(crate::i18n::tr(
             ctx,
-            "Advanced: import / export JSON",
-            "高级: 导入 / 导出 JSON",
+            "Import / export rules (JSON)",
+            "导入 / 导出规则文件（JSON）",
         ))
         .id_salt("cmd_personal_import_export")
         .default_open(false)
@@ -2474,8 +2474,8 @@ impl RuleManagerDialog {
         });
         egui::CollapsingHeader::new(crate::i18n::tr(
             ctx,
-            "Advanced: import / export JSON",
-            "高级: 导入 / 导出 JSON",
+            "Import / export rules (JSON)",
+            "导入 / 导出规则文件（JSON）",
         ))
         .id_salt("display_link_import_export")
         .default_open(false)
@@ -2745,7 +2745,7 @@ fn link_action_label(ctx: &egui::Context, action: &str) -> String {
             crate::i18n::tr(ctx, "Open in SFTP", "在 SFTP 打开").to_string()
         }
         "runbook-recall" => {
-            crate::i18n::tr(ctx, "Recall runbook", "召回 Runbook").to_string()
+            crate::i18n::tr(ctx, "Recall runbook", "打开错误路径说明").to_string()
         }
         "copy-or-connect" => {
             crate::i18n::tr(ctx, "Copy / connect", "复制 / 连接").to_string()
@@ -3054,7 +3054,7 @@ fn severity_label(ctx: &egui::Context, severity: TriggerSeverity) -> &'static st
 
 fn action_label(ctx: &egui::Context, action: TriggerAction) -> &'static str {
     match action {
-        TriggerAction::Notify => crate::i18n::tr(ctx, "Notify (toast)", "通知 (Toast)"),
+        TriggerAction::Notify => crate::i18n::tr(ctx, "Notification (toast)", "弹出通知"),
     }
 }
 
