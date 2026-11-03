@@ -180,7 +180,7 @@ impl MistTermApp {
             if self.sftp_last_tab != self.active_tab {
                 self.sftp_last_tab = self.active_tab;
                 self.sftp_panel.reset();
-                self.sftp_panel.request_list_on_open();
+                self.sftp_panel.request_list_on_open(self.app_settings.sftp_drag_hint_dismissed);
             }
             self.sftp_panel.show_side_panel(
                 ctx,
