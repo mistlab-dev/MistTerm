@@ -312,12 +312,13 @@ impl TeamService {
             provider,
             cancel,
         });
+        // #351：分行列出步骤，避免窄栏把「登录成功」拆字；UI 侧另整词保活。
         self.status_line = match provider {
             OAuthProvider::Google => {
-                "① 已在浏览器打开 Google 授权；② 完成后应看到「登录成功」页；③ 若只进了控制台，请点「取消」后重试。"
+                "① 已在浏览器打开 Google 授权；\n② 完成后应看到「登录成功」页；\n③ 若只进了控制台，请点「取消」后重试。"
             }
             OAuthProvider::Github => {
-                "① 已在浏览器打开 GitHub 授权；② 完成后应看到「登录成功」页；③ 若只进了控制台，请点「取消」后重试。"
+                "① 已在浏览器打开 GitHub 授权；\n② 完成后应看到「登录成功」页；\n③ 若只进了控制台，请点「取消」后重试。"
             }
         }
         .into();
