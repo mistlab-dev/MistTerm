@@ -15,6 +15,8 @@ pub enum SendSequenceUiAction {
 pub struct SendSequenceDialog {
     pub open: bool,
     selected_id: Option<String>,
+    /// #347：空库不摊半残表单；点「新建」或选中条目后才展开编辑区。
+    drafting_new: bool,
     name: String,
     body: String,
     delay_ms: u32,
@@ -26,6 +28,7 @@ impl Default for SendSequenceDialog {
         Self {
             open: false,
             selected_id: None,
+            drafting_new: false,
             name: String::new(),
             body: String::new(),
             delay_ms: 0,
@@ -102,16 +105,32 @@ impl SendSequenceDialog {
                     ui.horizontal(|ui| {
                         self.paint_list(ui, theme, ctx, store, content_w * 0.34);
                         ui.separator();
-                        self.paint_editor(
-                            ui,
-                            theme,
-                            ctx,
-                            store,
-                            content_w * 0.62,
-                            session_connected,
-                            replaying_id,
-                            &mut action,
-                        );
+                        // #347 / #215：无选中且未点新建时不摊半残编辑表单。
+                        if self.selected_id.is_some() || self.drafting_new {
+                            self.paint_editor(
+                                ui,
+                                theme,
+                                ctx,
+                                store,
+                                content_w * 0.62,
+                                session_connected,
+                                replaying_id,
+                                &mut action,
+                            );
+                        } else {
+                            ui.vertical(|ui| {
+                                ui.set_width((content_w * 0.62).max(280.0));
+                                ui.label(
+                                    egui::RichText::new(crate::i18n::tr(
+                                        ctx,
+                                        "Select a sequence on the left, or create one with New.",
+                                        "在左侧选一条，或点「新建」开始编辑。",
+                                    ))
+                                    .size(theme.font_size_caption())
+                                    .color(theme.text_tertiary()),
+                                );
+                            });
+                        }
                     });
                     if !self.error.is_empty() {
                         ui.add_space(theme.spacing_sm());
@@ -124,8 +143,8 @@ impl SendSequenceDialog {
                     ui.add_space(theme.spacing_sm());
                     egui::CollapsingHeader::new(crate::i18n::tr(
                         ctx,
-                        "Snippets, mist exec, AI batch, or this",
-                        "片段, mist exec, AI 批量，还是发送序列",
+                        "Command snippets, CLI batch, assistant batch, or send sequences",
+                        "命令片段、命令行批量、助手批量，还是发送序列",
                     ))
                     .id_salt("send_sequence_compare")
                     .default_open(false)
@@ -159,6 +178,7 @@ impl SendSequenceDialog {
             .clicked()
             {
                 self.clear_form();
+                self.drafting_new = true;
             }
             ui.add_space(theme.spacing_xs());
             egui::ScrollArea::vertical()
@@ -215,7 +235,7 @@ impl SendSequenceDialog {
                 theme,
                 egui::Id::unique("send_sequence_name"),
                 &mut self.name,
-                crate::i18n::tr(ctx, "After login", "登录后"),
+                crate::i18n::tr(ctx, "e.g. After login", "例如：登录后"),
                 width,
                 false,
             );
@@ -380,6 +400,7 @@ impl SendSequenceDialog {
 
     fn load_sequence(&mut self, seq: &SendSequence) {
         self.selected_id = Some(seq.id.clone());
+        self.drafting_new = false;
         self.name = seq.name.clone();
         self.body = seq.body.clone();
         self.delay_ms = seq.delay_ms;
@@ -388,6 +409,7 @@ impl SendSequenceDialog {
 
     fn clear_form(&mut self) {
         self.selected_id = None;
+        self.drafting_new = false;
         self.name.clear();
         self.body.clear();
         self.delay_ms = 0;
@@ -431,17 +453,17 @@ fn paint_difference(ui: &mut egui::Ui, theme: &Theme, ctx: &egui::Context) {
             "Command snippets",
             "命令片段",
             "One searchable command, often with <placeholders>. Fill them in, then send to the current terminal.",
-            "一条可检索的命令，常带 <占位符>. 填完再发到当前终端。",
+            "一条可检索的命令，常带 <占位符>。填完再发到当前终端。",
         ),
         (
-            "mist exec",
-            "mist exec",
+            "CLI batch",
+            "命令行批量",
             "CLI: run on one or many hosts over a separate SSH connection and collect output. Does not type into an open terminal.",
             "命令行对一台或多台主机另开连接执行，并收回输出。不往已打开的终端里敲。",
         ),
         (
-            "AI batch",
-            "AI 批量",
+            "Assistant batch",
+            "助手批量",
             "Describe a task in words. After you confirm, it runs on the hosts in the plan. Not a fixed key sequence.",
             "用自然语言描述任务，确认后按计划在多台主机执行。不是写死的按键顺序。",
         ),
