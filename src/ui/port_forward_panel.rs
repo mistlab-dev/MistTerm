@@ -83,6 +83,8 @@ pub struct PortForwardPanel {
     pending_remove: Option<PortForwardRemoveRequest>,
     pending_audits: Vec<PortForwardAuditRequest>,
     last_panel_slot_rect: Option<egui::Rect>,
+    /// #350：本机/无 SSH 空态 CTA。
+    pending_ssh_cta: Option<crate::ui::chrome::RightDockSshGateAction>,
 }
 
 impl Default for PortForwardPanel {
@@ -104,6 +106,7 @@ impl PortForwardPanel {
             pending_remove: None,
             pending_audits: Vec::new(),
             last_panel_slot_rect: None,
+            pending_ssh_cta: None,
         }
     }
 
@@ -117,6 +120,12 @@ impl PortForwardPanel {
 
     pub fn take_pending_audits(&mut self) -> Vec<PortForwardAuditRequest> {
         std::mem::take(&mut self.pending_audits)
+    }
+
+    pub fn take_pending_ssh_cta(
+        &mut self,
+    ) -> Option<crate::ui::chrome::RightDockSshGateAction> {
+        self.pending_ssh_cta.take()
     }
 
     /// 当前仍运行的转发数(不含已停止的运行时转发)。
@@ -308,14 +317,18 @@ impl PortForwardPanel {
         ui.spacing_mut().item_spacing.y = prev_gap;
         ui.add_space(theme.spacing_dock_section_gap());
 
-        if !crate::ui::chrome::show_right_dock_ssh_gate(
+        let (ssh_ready, ssh_cta) = crate::ui::chrome::show_right_dock_ssh_gate(
             ui,
             theme,
             ctx,
             terminal,
-            "Connect a session before using port forwarding.",
-            "请打开会话并连接后可使用端口转发。",
-        ) {
+            "Open a remote host session to manage port forwarding.",
+            "请先打开一台远端主机会话，才能管理端口转发。",
+        );
+        if ssh_cta != crate::ui::chrome::RightDockSshGateAction::None {
+            self.pending_ssh_cta = Some(ssh_cta);
+        }
+        if !ssh_ready {
             return;
         }
         let Some(t) = terminal else {

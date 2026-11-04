@@ -86,6 +86,9 @@ impl MistTermApp {
                 &self.audit_logger,
                 &mut close_sftp_panel,
             );
+            if let Some(cta) = self.sftp_panel.take_pending_ssh_cta() {
+                self.apply_right_dock_ssh_cta(cta);
+            }
             if let Some(w) = self.sftp_panel.take_pending_warning() {
                 self.notify_warn(w);
             }
@@ -134,6 +137,9 @@ impl MistTermApp {
                 session_profile.as_ref(),
                 &mut close_port_forward,
             );
+            if let Some(cta) = self.port_forward_panel.take_pending_ssh_cta() {
+                self.apply_right_dock_ssh_cta(cta);
+            }
             if close_port_forward {
                 self.show_port_forward_panel = false;
                 self.port_forward_last_tab = None;

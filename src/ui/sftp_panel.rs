@@ -206,6 +206,8 @@ pub struct SftpPanel {
     remote_sort: FileSortState,
     local_path_editing: bool,
     remote_path_editing: bool,
+    /// #350：本机/无 SSH 空态 CTA。
+    pending_ssh_cta: Option<crate::ui::chrome::RightDockSshGateAction>,
     pending_terminal_cmd: Option<String>,
     flux_details_open: bool,
     diff: DirDiffUi,
@@ -2125,6 +2127,7 @@ impl SftpPanel {
             remote_sort: FileSortState::default(),
             local_path_editing: false,
             remote_path_editing: false,
+            pending_ssh_cta: None,
             pending_terminal_cmd: None,
             flux_details_open: false,
             diff: DirDiffUi::default(),
@@ -3768,6 +3771,12 @@ impl SftpPanel {
         self.pending_terminal_cmd.take()
     }
 
+    pub fn take_pending_ssh_cta(
+        &mut self,
+    ) -> Option<crate::ui::chrome::RightDockSshGateAction> {
+        self.pending_ssh_cta.take()
+    }
+
     fn shell_cd_command(path: &Path) -> String {
         let raw = path.to_string_lossy().replace('\\', "/");
         let quoted = raw.replace('\'', "'\\''");
@@ -3897,14 +3906,18 @@ impl SftpPanel {
         ui.spacing_mut().item_spacing.y = prev_gap_y;
         ui.add_space(theme.spacing_dock_section_gap());
 
-        if !crate::ui::chrome::show_right_dock_ssh_gate(
+        let (ssh_ready, ssh_cta) = crate::ui::chrome::show_right_dock_ssh_gate(
             ui,
             theme,
             ctx,
             terminal,
-            "Connect a session before using SFTP.",
-            "请打开会话并连接后可使用 SFTP。",
-        ) {
+            "Open a remote host session to browse remote files.",
+            "请先打开一台远端主机会话，才能浏览远端文件。",
+        );
+        if ssh_cta != crate::ui::chrome::RightDockSshGateAction::None {
+            self.pending_ssh_cta = Some(ssh_cta);
+        }
+        if !ssh_ready {
             self.on_session_unavailable(crate::i18n::language(ctx));
             return;
         }
