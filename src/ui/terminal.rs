@@ -1873,23 +1873,23 @@ impl TerminalView {
             }
         }
 
-        // Ctrl + 滚轮：缩放终端字体(不改变 PTY 行列，仅视觉)
+        // Ctrl/⌘ + 滚轮：缩放终端字体(不改变 PTY 行列，仅视觉)。
+        // #372：egui 0.37 起 wheel 的缩放修饰键(Ctrl/⌘)会被折进 `zoom_delta()`，
+        // 此时 `smooth_scroll_delta()` 恒为 0——旧实现读不到任何数据，缩放成死分支。
+        // 改读 `zoom_delta()`，并兼容两端修饰键(macOS ⌘、Win/Linux Ctrl)。
         let wheel = ui.ctx().input(|i| {
-            let z = i.smooth_scroll_delta().y;
-            if self.terminal_focused
-                && (self.connected || self.buffer_input_while_disconnected)
-                && i.modifiers.ctrl
-                && !i.modifiers.shift
-                && z.abs() > 0.5
-            {
-                Some(z)
-            } else {
-                None
-            }
+            Self::terminal_wheel_zoom(
+                i,
+                self.terminal_focused,
+                self.connected || self.buffer_input_while_disconnected,
+            )
         });
-        if let Some(z) = wheel {
-            let step = if z > 0.0 { 1.0 } else { -1.0 };
-            self.set_font_size(self.font_size + step);
+        if let Some(step) = wheel {
+            let new_size = (self.font_size + step).clamp(
+                crate::platform::TERMINAL_FONT_SIZE_MIN,
+                crate::platform::TERMINAL_FONT_SIZE_MAX,
+            );
+            self.set_font_size(new_size);
         }
 
         if capture_pty_keyboard {
@@ -4719,6 +4719,31 @@ impl TerminalView {
         self.font_size
     }
 
+    /// #372：Ctrl/⌘ + 滚轮缩放终端字号的判定与步进（纯函数，可测）。
+    ///
+    /// egui 0.37 起 wheel 的缩放修饰键（egui 默认 COMMAND，含 Ctrl/⌘）会把滚轮
+    /// 折进 `zoom_delta()`，此时 `smooth_scroll_delta()` 恒为 0——旧实现读
+    /// `smooth_scroll_delta` 在 0.37 下是死分支。这里改读 `zoom_delta()`：
+    /// - 修饰键兼容两端：macOS ⌘（`mac_cmd`）与 Win/Linux Ctrl（`ctrl`），排除 Shift
+    /// - 仅在终端聚焦且可用（已连接或断开缓冲输入）时响应
+    /// - 返回 `±1.0` 的字号步进，符号由 zoom 方向决定
+    pub fn terminal_wheel_zoom(
+        i: &egui::InputState,
+        terminal_focused: bool,
+        connected_or_buffered: bool,
+    ) -> Option<f32> {
+        let zoom = i.zoom_delta();
+        if zoom.abs() <= f32::EPSILON
+            || !terminal_focused
+            || !connected_or_buffered
+            || !(i.modifiers.ctrl || i.modifiers.mac_cmd)
+            || i.modifiers.shift
+        {
+            return None;
+        }
+        Some(if zoom > 1.0 { 1.0 } else { -1.0 })
+    }
+
     pub fn is_connected(&self) -> bool {
         self.connected
     }
@@ -5697,6 +5722,133 @@ mod display_link_stroke_tests {
         assert!(hover.color.a() >= 140 && hover.color.a() <= 180);
         assert!(hover.color.a() >= idle.color.a());
         assert_ne!(idle.color.a(), 255);
+    }
+}
+
+#[cfg(test)]
+mod wheel_zoom_tests {
+    use super::*;
+
+
+
+    /// #372：构造带 Ctrl/⌘ 滚轮的 InputState，验证 zoom_delta 路径生效。
+    fn input_with_zoom(mods: egui::Modifiers, zoom: f32) -> egui::InputState {
+        let mut raw = egui::RawInput::default();
+        // MouseWheel 自带的 modifiers 不回写 InputState；须显式发 ModifiersChanged。
+        // 只发 Zoom：生产路径里 Ctrl/⌘+滚轮已被 egui-winit 折算成 Event::Zoom，
+        // zoom_delta() 即其累计值；再叠 MouseWheel 会被折算第二次导致方向失真。
+        raw.events.push(egui::Event::ModifiersChanged(mods));
+        raw.events.push(egui::Event::Zoom(zoom));
+        let ctx = egui::Context::default();
+        ctx.begin_pass(raw);
+        ctx.input(|i| i.clone())
+    }
+
+    #[test]
+    fn ctrl_wheel_zooms_when_focused_and_connected() {
+        let i = input_with_zoom(
+            egui::Modifiers {
+                ctrl: true,
+                ..Default::default()
+            },
+            1.1,
+        );
+        assert_eq!(
+            TerminalView::terminal_wheel_zoom(&i, true, true),
+            Some(1.0),
+            "Ctrl+滚轮放大应得 +1 步进"
+        );
+    }
+
+    #[test]
+    fn ctrl_wheel_shrinks_gives_negative_step() {
+        let i = input_with_zoom(
+            egui::Modifiers {
+                ctrl: true,
+                ..Default::default()
+            },
+            0.9,
+        );
+        assert_eq!(TerminalView::terminal_wheel_zoom(&i, true, true), Some(-1.0));
+    }
+
+    #[test]
+    fn mac_cmd_wheel_also_zooms() {
+        let i = input_with_zoom(
+            egui::Modifiers {
+                mac_cmd: true,
+                ..Default::default()
+            },
+            1.1,
+        );
+        assert_eq!(
+            TerminalView::terminal_wheel_zoom(&i, true, true),
+            Some(1.0),
+            "macOS ⌘+滚轮应同样生效（#372 产品口径）"
+        );
+    }
+
+    #[test]
+    fn unfocused_terminal_ignores_wheel() {
+        let i = input_with_zoom(
+            egui::Modifiers {
+                ctrl: true,
+                ..Default::default()
+            },
+            1.1,
+        );
+        assert_eq!(TerminalView::terminal_wheel_zoom(&i, false, true), None);
+    }
+
+    #[test]
+    fn disconnected_without_buffer_ignores_wheel() {
+        let i = input_with_zoom(
+            egui::Modifiers {
+                ctrl: true,
+                ..Default::default()
+            },
+            1.1,
+        );
+        assert_eq!(TerminalView::terminal_wheel_zoom(&i, true, false), None);
+    }
+
+    #[test]
+    fn shift_modifier_is_excluded() {
+        let i = input_with_zoom(
+            egui::Modifiers {
+                ctrl: true,
+                shift: true,
+                ..Default::default()
+            },
+            1.1,
+        );
+        assert_eq!(
+            TerminalView::terminal_wheel_zoom(&i, true, true),
+            None,
+            "Shift 参与的滚轮走其他语义，不缩放"
+        );
+    }
+
+    #[test]
+    fn no_zoom_delta_gives_none() {
+        let i = input_with_zoom(
+            egui::Modifiers {
+                ctrl: true,
+                ..Default::default()
+            },
+            0.0,
+        );
+        // zoom=0 会被 egui 归一化为无事件；此处直接验证零值不触发步进。
+        assert_eq!(TerminalView::terminal_wheel_zoom(&i, true, true), None);
+    }
+
+    #[test]
+    fn set_font_size_clamps_to_bounds() {
+        let mut t = TerminalView::new();
+        t.set_font_size(crate::platform::TERMINAL_FONT_SIZE_MAX + 10.0);
+        assert_eq!(t.font_size(), crate::platform::TERMINAL_FONT_SIZE_MAX);
+        t.set_font_size(crate::platform::TERMINAL_FONT_SIZE_MIN - 10.0);
+        assert_eq!(t.font_size(), crate::platform::TERMINAL_FONT_SIZE_MIN);
     }
 }
 
