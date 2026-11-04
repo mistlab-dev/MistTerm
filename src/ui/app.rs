@@ -545,7 +545,7 @@ fn server_audit_body(cmd_preview: &str, detail: &str) -> String {
 
 /// `(匹配 Agent 用的主机名, JSONL 里的目标主机)`。本机 shell 记为 `local`。
 fn session_exec_endpoint(manager: &crate::core::SessionManager, session_id: &str) -> (String, String) {
-    if session_id.starts_with("local:") {
+    if crate::core::session::is_local_session_id(session_id) {
         return ("local".to_string(), "local".to_string());
     }
     let Some(session) = manager.get_session(session_id) else {
@@ -3384,7 +3384,7 @@ impl MistTermApp {
                         .get(tab_idx)
                         .map(|t| t.primary_session_id())
                         .unwrap_or_default();
-                    if !sid.is_empty() && !sid.starts_with("local:") {
+                    if !sid.is_empty() && !crate::core::session::is_local_session_id(&sid) {
                         self.open_edit_session_dialog(&sid);
                     } else {
                         self.notify_warn(crate::i18n::tr(
@@ -3606,7 +3606,7 @@ impl MistTermApp {
 
     fn tab_auto_reconnect_enabled(&self, session_id: &str) -> bool {
         // 本机终端不入侧栏会话，也不走 SSH 自动重连。
-        if session_id.starts_with("local:") {
+        if crate::core::session::is_local_session_id(session_id) {
             return false;
         }
         self.session_manager
@@ -4628,7 +4628,8 @@ impl MistTermApp {
                 pane.ssh_auto_reconnect_attempts = 0;
             }
             pane.session_id = format!(
-                "local:{}",
+                "{}{}",
+                crate::core::session::LOCAL_SESSION_ID_PREFIX,
                 terminal.ssh_session_id().unwrap_or(0)
             );
             pane.terminal = terminal;
@@ -5656,7 +5657,11 @@ impl MistTermApp {
                 });
                 return;
             }
-            let session_id = format!("local:{}", terminal.ssh_session_id().unwrap_or(0));
+            let session_id = format!(
+                "{}{}",
+                crate::core::session::LOCAL_SESSION_ID_PREFIX,
+                terminal.ssh_session_id().unwrap_or(0)
+            );
             let n = self.tabs[idx].panes.len() + 1;
             let title2 = format!(
                 "{} ({n})",
@@ -5813,7 +5818,8 @@ impl MistTermApp {
             format!("{} #{}", base, dup + 1)
         };
         let session_id = format!(
-            "local:{}",
+            "{}{}",
+            crate::core::session::LOCAL_SESSION_ID_PREFIX,
             terminal.ssh_session_id().unwrap_or(0)
         );
         self.tabs.push(TerminalTab::single(TerminalPane::new(
@@ -7435,7 +7441,7 @@ impl MistTermApp {
                 })
             })
             .unwrap_or_else(|| {
-                if session_id.starts_with("local:") {
+                if crate::core::session::is_local_session_id(&session_id.clone()) {
                     crate::i18n::tr(ctx, "Local Shell", "本机终端").to_string()
                 } else {
                     session_id.clone()

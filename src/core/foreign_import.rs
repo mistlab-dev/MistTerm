@@ -63,7 +63,7 @@ impl ForeignCandidate {
         } else {
             format!("{}@", self.username)
         };
-        if self.port == 22 {
+        if self.port == crate::core::session::DEFAULT_SSH_PORT {
             format!("{user}{}", self.host)
         } else {
             format!("{user}{}:{}", self.host, self.port)

@@ -115,7 +115,7 @@ fn is_terminal_outcome(outcome: &str) -> bool {
 
 /// 与 GUI `session_exec_endpoint` 相同：22 端口只写主机，否则 `host:port`。
 pub fn exec_target_label(host: &str, port: u16) -> String {
-    if port == 22 {
+    if port == crate::core::session::DEFAULT_SSH_PORT {
         host.to_string()
     } else {
         format!("{host}:{port}")
