@@ -552,7 +552,7 @@ fn session_exec_endpoint(manager: &crate::core::SessionManager, session_id: &str
         return (String::new(), String::new());
     };
     let host = session.host.clone();
-    let target = if session.port == 22 {
+    let target = if session.port == crate::core::session::DEFAULT_SSH_PORT {
         host.clone()
     } else {
         format!("{}:{}", host, session.port)
@@ -1577,7 +1577,7 @@ impl MistTermApp {
             .map(|tab| tab.primary_session_id())
             .and_then(|sid| self.session_manager.get_session(&sid))
             .map(|session| {
-                if session.port == 22 {
+                if session.port == crate::core::session::DEFAULT_SSH_PORT {
                     session.host.clone()
                 } else {
                     format!("{}:{}", session.host, session.port)
@@ -7441,7 +7441,7 @@ impl MistTermApp {
                 })
             })
             .unwrap_or_else(|| {
-                if crate::core::session::is_local_session_id(&session_id.clone()) {
+                if crate::core::session::is_local_session_id(&session_id) {
                     crate::i18n::tr(ctx, "Local Shell", "本机终端").to_string()
                 } else {
                     session_id.clone()
