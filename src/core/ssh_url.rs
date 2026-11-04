@@ -17,7 +17,7 @@ impl SshUrl {
     pub fn display(&self) -> String {
         let host = if self.host.contains(':') { format!("[{}]", self.host) } else { self.host.clone() };
         let user = self.user.as_deref().map(|u| format!("{u}@")).unwrap_or_default();
-        if self.port == 22 {
+        if self.port == crate::core::session::DEFAULT_SSH_PORT {
             format!("{user}{host}")
         } else {
             format!("{user}{host}:{}", self.port)

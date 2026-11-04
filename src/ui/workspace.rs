@@ -2259,7 +2259,7 @@ impl MistTermApp {
                     .map(|s| theme.session_tab_accent_color(s))
                     .or_else(|| {
                         // 本机终端不入 sessions.json，仍按 id 给强调底色，避免现代主题下「空心」标签。
-                        if sid.starts_with("local:")
+                        if crate::core::session::is_local_session_id(&sid)
                             || tab.panes.iter().any(|p| p.terminal.is_local_shell())
                         {
                             Some(theme.session_tab_accent_from_id(&sid))
@@ -2301,7 +2301,7 @@ impl MistTermApp {
                     crate::ui::chrome::apply_context_menu_style(
                         ui, theme,
                     );
-                    let is_local = sid.starts_with("local:")
+                    let is_local = crate::core::session::is_local_session_id(&sid)
                         || tab.panes.iter().any(|p| p.terminal.is_local_shell());
                     let can_open_another = is_local
                         || self.session_manager.get_session(&sid).is_some();
