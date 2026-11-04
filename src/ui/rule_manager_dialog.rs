@@ -198,9 +198,16 @@ impl RuleManagerDialog {
         }
         let mut keep_open = self.open;
         let mut should_close = false;
-        let modal_sz = egui::vec2(860.0, 620.0);
+        // #346：避开自绘顶栏菜单，避免压住「终端/编辑/…」半截字。
+        let (modal_sz, modal_pos) = crate::ui::layout_util::modal_manager_size_and_pos(
+            ctx,
+            theme,
+            egui::vec2(860.0, 620.0),
+        );
         crate::ui::chrome::modal_window("rule_manager_dialog", theme, ctx)
+            .constrain_to(crate::ui::layout_util::modal_safe_constrain_rect(ctx, theme))
             .open(&mut keep_open)
+            .default_pos(modal_pos)
             .movable(true)
             .resizable(false)
             .fixed_size(modal_sz)

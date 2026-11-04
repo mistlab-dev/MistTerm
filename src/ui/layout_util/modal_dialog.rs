@@ -80,6 +80,52 @@ pub fn modal_center_pos_clamped(
     egui::pos2(x, y)
 }
 
+/// 非 macOS 自绘顶栏菜单高度；macOS 用系统菜单栏，内容区已在菜单之下。
+#[inline]
+pub fn modal_top_chrome_inset(theme: &crate::ui::theme::Theme) -> f32 {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = theme;
+        0.0
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        theme.top_chrome_total_height()
+    }
+}
+
+/// 弹窗约束矩形：避开自绘顶栏菜单，打开期间菜单仍可读可点（#346）。
+#[inline]
+pub fn modal_safe_constrain_rect(
+    ctx: &egui::Context,
+    theme: &crate::ui::theme::Theme,
+) -> egui::Rect {
+    let mut r = ctx.content_rect();
+    let inset = modal_top_chrome_inset(theme);
+    if inset > 0.0 {
+        r.min.y = (r.min.y + inset).min(r.max.y);
+    }
+    r
+}
+
+/// 大尺寸管理弹窗：理想尺寸夹在「顶栏以下」可用高度内，并给出居中 default_pos。
+#[inline]
+pub fn modal_manager_size_and_pos(
+    ctx: &egui::Context,
+    theme: &crate::ui::theme::Theme,
+    ideal: egui::Vec2,
+) -> (egui::Vec2, egui::Pos2) {
+    let margin = 16.0;
+    let top_inset = modal_top_chrome_inset(theme) + margin;
+    let bottom_inset = margin;
+    let r = ctx.content_rect();
+    let max_h = (r.height() - top_inset - bottom_inset).max(280.0);
+    let max_w = (r.width() - 2.0 * margin).max(320.0);
+    let size = egui::vec2(ideal.x.min(max_w), ideal.y.min(max_h));
+    let pos = modal_center_pos_clamped(ctx, size, top_inset, bottom_inset);
+    (size, pos)
+}
+
 /// 快速选择器 / 变量对话框等居中窗口的默认尺寸。
 #[inline]
 pub fn centered_window_default_size(ctx: &egui::Context, w_frac: f32, h_frac: f32) -> [f32; 2] {
