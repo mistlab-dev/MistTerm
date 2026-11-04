@@ -16,4 +16,6 @@ pub struct DialogFlags {
     pub audit_timeline: bool,
     pub agent_install: bool,
     pub ask_knowledge: bool,
+    /// #335：空态「打开已有连接」主机选择弹层。
+    pub open_existing_connection: bool,
 }

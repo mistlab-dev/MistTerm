@@ -3834,6 +3834,7 @@ impl MistTermApp {
             || self.fragment_state.team_fragment_versions.open
             || self.fragment_state.team_fragment_shares.open
             || self.team_settings_dialog.open
+            || self.dialog_flags.open_existing_connection
     }
 
     /// 右侧 dock 都是终端的辅助面板；只打开/查看时不应让终端失去键盘。
@@ -10339,7 +10340,8 @@ impl MistTermApp {
         let theme = self.theme_manager.current_theme().clone();
         let s = ui.available_size();
         let card_w = 420.0_f32.min((s.x - 32.0).max(220.0));
-        let card_h = 210.0_f32.min(s.y.max(1.0));
+        let has_saved_hosts = !self.session_manager.list_sessions().is_empty();
+        let card_h = (if has_saved_hosts { 258.0_f32 } else { 210.0 }).min(s.y.max(1.0));
         let origin = egui::pos2(
             ui.cursor().min.x + ((s.x - card_w).max(0.0) * 0.5),
             ui.cursor().min.y + ((s.y - card_h).max(0.0) * 0.32),
@@ -10404,6 +10406,19 @@ impl MistTermApp {
                         },
                     );
                 });
+                // #335：已有至少一台保存的主机时，空态增加「打开已有连接」第三入口。
+                if has_saved_hosts {
+                    ui.add_space(10.0);
+                    if crate::ui::chrome::panel_action_button(
+                        ui,
+                        &theme,
+                        crate::i18n::tr(&ctx, "Open existing connection", "打开已有连接"),
+                    )
+                    .clicked()
+                    {
+                        self.dialog_flags.open_existing_connection = true;
+                    }
+                }
             },
         );
         card.add_space(12.0);
@@ -10452,6 +10467,10 @@ mod menu;
 /// 唯一的启动崩溃提示窗（#190 的报告摘要 + 没有新 crash-*.log 的异常退出）。
 #[path = "app_crash_notice.rs"]
 mod crash_notice;
+
+/// #335：空态「打开已有连接」主机选择弹层。
+#[path = "app_open_existing_connection.rs"]
+mod open_existing_connection;
 
 /// 右 dock Foreground pass(gutter → 面板 → resize grip)
 #[path = "app_workspace_foreground.rs"]

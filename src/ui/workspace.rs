@@ -788,6 +788,7 @@ impl MistTermApp {
         }
 
         self.render_new_session_modal(ctx, theme);
+        self.render_open_existing_connection_modal(ctx, theme);
 
         let mut open_paste_history = false;
         for tab in &mut self.tabs {
