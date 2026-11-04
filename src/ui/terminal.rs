@@ -4122,7 +4122,7 @@ impl TerminalView {
 
     /// 粘贴文本到终端：不自动补回车；远端开了 bracketed paste 时包上 200~/201~；
     /// 一律进分片队列发送(FUNCTIONAL_SPEC §2.4)，写失败不丢片。
-    fn paste_text(&mut self, text: &str, ctx: &egui::Context) {
+    pub(crate) fn paste_text(&mut self, text: &str, ctx: &egui::Context) {
         use crate::terminal::paste::{
             build_paste_payload, exceeds_canon_line_limit, normalize_paste_newlines, TTY_CANON_LINE_MAX,
         };
@@ -4210,9 +4210,9 @@ impl TerminalView {
         Some(text)
     }
 
-    /// 菜单「复制」：优先选区，否则复制当前屏格式化输出。
-    pub(crate) fn menu_copy_to_clipboard(&self, ctx: &egui::Context) -> bool {
-        self.copy_to_clipboard(ctx, true).is_some()
+    /// 菜单「复制」：优先选区，否则复制当前屏格式化输出。返回复制的文本供 Toast 计行数。
+    pub(crate) fn menu_copy_to_clipboard(&self, ctx: &egui::Context) -> Option<String> {
+        self.copy_to_clipboard(ctx, true)
     }
 
     /// 终端聚焦时：上一条 / 下一条命令块，以及复制当前块。
@@ -4306,10 +4306,18 @@ impl TerminalView {
 
     /// 菜单「粘贴」：从系统剪贴板粘贴到 PTY。
     pub(crate) fn menu_paste_from_clipboard(&mut self, ctx: &egui::Context) {
-        if let Ok(mut clip) = Clipboard::new() {
-            if let Ok(text) = clip.get_text() {
-                self.paste_text(&text, ctx);
-            }
+        let text = self.menu_paste_text_from_clipboard();
+        if !text.is_empty() {
+            self.paste_text(&text, ctx);
+        }
+    }
+
+    /// #376 P2：读系统剪贴板文本但不粘贴；空串表示无内容。供调用方先取文本计行数、
+    /// 再决定是否走 [`Self::paste_text`]（Toast 行数文案与粘贴动作同帧一致）。
+    pub(crate) fn menu_paste_text_from_clipboard(&mut self) -> String {
+        match Clipboard::new().and_then(|mut clip| clip.get_text()) {
+            Ok(text) => text,
+            Err(_) => String::new(),
         }
     }
 
@@ -4318,6 +4326,46 @@ impl TerminalView {
         !self.selection.is_empty()
     }
 
+    /// #376 P2：复制 Toast 文案——多行（N≥2）显示行数，单行保留短文案。纯函数可测。
+    pub(crate) fn copy_toast_label(ctx: &egui::Context, text: &str) -> String {
+        Self::clipboard_toast_label(
+            ctx,
+            text,
+            "Copied {n} lines to clipboard",
+            "已复制 {n} 行到剪贴板",
+            "Copied to clipboard",
+            "已复制到剪贴板",
+        )
+    }
+
+    /// #376 P2：粘贴 Toast 文案——与复制同一套行数规则。纯函数可测。
+    pub(crate) fn paste_toast_label(ctx: &egui::Context, text: &str) -> String {
+        Self::clipboard_toast_label(
+            ctx,
+            text,
+            "Pasted {n} lines",
+            "已粘贴 {n} 行",
+            "Pasted to terminal",
+            "已粘贴到终端",
+        )
+    }
+
+    fn clipboard_toast_label(
+        ctx: &egui::Context,
+        text: &str,
+        en_multi: &'static str,
+        zh_multi: &'static str,
+        en_single: &'static str,
+        zh_single: &'static str,
+    ) -> String {
+        let lines = text.lines().count();
+        if lines >= 2 {
+            crate::i18n::tr(ctx, en_multi, zh_multi)
+                .replace("{n}", &lines.to_string())
+        } else {
+            crate::i18n::tr(ctx, en_single, zh_single).to_string()
+        }
+    }
     /// 菜单「全选」：选中当前视口全部内容。
     pub(crate) fn menu_select_all(&mut self) {
         let offset = self.terminal.display_offset();

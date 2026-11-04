@@ -179,6 +179,7 @@ impl RuleManagerDialog {
         module_enabled: bool,
         link_module_enabled: bool,
         cmd_module_enabled: bool,
+        cmd_module_registry: Option<&std::sync::Arc<crate::capability::ModuleRegistry>>,
         app_settings: &mut crate::core::app_settings::AppSettings,
     ) {
         if !self.open {
@@ -298,7 +299,7 @@ impl RuleManagerDialog {
                             self.paint_display_link(ui, theme, ctx, link_store, link_module_enabled);
                         }
                         RuleManagerTab::CommandChecks => {
-                            self.paint_command_checks(ui, theme, ctx, cmd_personal, cmd_engine, cmd_module_enabled);
+                            self.paint_command_checks(ui, theme, ctx, cmd_personal, cmd_engine, cmd_module_enabled, cmd_module_registry);
                         }
                     }
                 });
@@ -1145,19 +1146,68 @@ impl RuleManagerDialog {
         personal: &CmdAuditPersonalStore,
         engine: &std::sync::Arc<std::sync::Mutex<crate::core::cmd_audit::CmdAuditEngine>>,
         module_enabled: bool,
+        module_registry: Option<&std::sync::Arc<crate::capability::ModuleRegistry>>,
     ) {
+        // #376 P1：模块关闭时只读——顶部说明 + 主 CTA，列表不可编辑；开启后走完整流程。
         if !module_enabled {
-            ui.label(
-                egui::RichText::new(crate::i18n::tr(
-                    ctx,
-                    "This module is off (Preferences or an advanced override). You can still edit rules; they apply only after you turn the module on.",
-                    "此模块当前已关闭（偏好或高级覆盖）。规则仍可编辑；打开模块后才会生效。",
-                ))
-                .size(theme.font_size_caption())
-                .color(theme.accent_color()),
-            );
+            rule_section_frame(theme, theme.surface_elevated()).show(ui, |ui| {
+                let inner_w = crate::ui::layout_util::finite_content_width(ui);
+                ui.set_min_width(inner_w);
+                ui.label(
+                    egui::RichText::new(crate::i18n::tr(
+                        ctx,
+                        "Local command check is off. Rules below are read-only; enable the module to create or edit rules. Commands are not checked while it is off.",
+                        "本地命令检查未开启。下方规则只读；启用模块后才能新建或编辑规则。未开启时命令不做检查。",
+                    ))
+                    .size(theme.font_size_body()),
+                );
+                ui.add_space(theme.spacing_xs());
+                ui.horizontal(|ui| {
+                    if crate::ui::chrome::panel_action_primary_button(
+                        ui,
+                        theme,
+                        crate::i18n::tr(
+                            ctx,
+                            "Enable local command check",
+                            "在本机启用命令检查",
+                        ),
+                    )
+                    .clicked()
+                    {
+                        if let Some(reg) = module_registry {
+                            reg.set_enabled(crate::modules::cmd_audit_local::MODULE_ID, true);
+                            self.set_status(crate::i18n::tr(
+                                ctx,
+                                "Module enabled. You can now create and edit rules.",
+                                "已启用模块，现在可以新建和编辑规则了。",
+                            ));
+                        }
+                    }
+                });
+            });
             ui.add_space(theme.spacing_xs());
+            self.paint_cmd_readonly_lists(ui, theme, ctx, personal, engine);
+            if !self.error.is_empty() {
+                ui.add_space(theme.spacing_sm());
+                ui.label(
+                    egui::RichText::new(&self.error)
+                        .size(theme.font_size_caption())
+                        .color(theme.color_danger_emphasis()),
+                );
+            }
+            return;
         }
+
+        ui.label(
+            egui::RichText::new(crate::i18n::tr(
+                ctx,
+                "Local command check is on. Changes save immediately and take effect on the next command.",
+                "本地命令检查已开启。修改保存即生效，下一条命令起按新规则检查。",
+            ))
+            .size(theme.font_size_caption())
+            .color(theme.accent_color()),
+        );
+        ui.add_space(theme.spacing_xs());
 
         // #283：个人检查开关放到页签顶部，并配一句白话说明。
         let content_w = crate::ui::layout_util::finite_content_width(ui);
@@ -1208,24 +1258,6 @@ impl RuleManagerDialog {
                 "个人规则",
             ))
             .size(theme.font_size_section_title()));
-            let enable_label = if self.cmd_personal_enabled {
-                crate::i18n::tr(
-                    ctx,
-                    "Personal checks are ON: they run even without a team policy.",
-                    "个人检查已开启: 没有团队策略时也会生效。",
-                )
-            } else {
-                crate::i18n::tr(
-                    ctx,
-                    "Personal checks are OFF: they only run when a team policy is active.",
-                    "个人检查已关闭: 仅在团队策略激活时生效。",
-                )
-            };
-            ui.label(
-                egui::RichText::new(enable_label)
-                    .size(theme.font_size_caption())
-                    .color(theme.text_tertiary()),
-            );
             ui.add_space(theme.spacing_xs());
             ui.horizontal(|ui| {
                 self.paint_cmd_list(ui, theme, ctx, personal, engine, inner_w * 0.34);
@@ -1311,6 +1343,66 @@ impl RuleManagerDialog {
         }
         ui.add_space(theme.spacing_sm());
         self.paint_cmd_footer(ui, theme, ctx, personal, engine);
+    }
+
+    /// #376 P1：模块关闭时的只读展示——个人规则与内置规则并列，无任何编辑控件。
+    fn paint_cmd_readonly_lists(
+        &mut self,
+        ui: &mut egui::Ui,
+        theme: &Theme,
+        ctx: &egui::Context,
+        personal: &CmdAuditPersonalStore,
+        engine: &std::sync::Arc<std::sync::Mutex<crate::core::cmd_audit::CmdAuditEngine>>,
+    ) {
+        rule_section_frame(theme, theme.surface_elevated()).show(ui, |ui| {
+            let inner_w = crate::ui::layout_util::finite_content_width(ui);
+            ui.set_min_width(inner_w);
+            ui.heading(egui::RichText::new(crate::i18n::tr(
+                ctx,
+                "Personal rules (read-only while the module is off)",
+                "个人规则（模块关闭期间只读）",
+            ))
+            .size(theme.font_size_section_title()));
+            ui.add_space(theme.spacing_xs());
+            let mut rules = personal.rules();
+            rules.sort_by(|a, b| a.priority.cmp(&b.priority).then(a.id.cmp(&b.id)));
+            if rules.is_empty() {
+                ui.label(
+                    egui::RichText::new(crate::i18n::tr(
+                        ctx,
+                        "No personal rules yet.",
+                        "还没有个人规则。",
+                    ))
+                    .size(theme.font_size_caption())
+                    .color(theme.text_tertiary()),
+                );
+            }
+            egui::ScrollArea::vertical()
+                .id_salt("cmd_personal_rule_list_readonly")
+                .max_height(220.0)
+                .auto_shrink([false; 2])
+                .show(ui, |ui| {
+                    for rule in &rules {
+                        let mut text = egui::RichText::new(cmd_rule_list_label(ctx, rule));
+                        if !rule.enabled || rule.pattern.is_empty() {
+                            text = text.color(theme.text_tertiary());
+                        }
+                        ui.label(text);
+                    }
+                });
+        });
+        ui.add_space(theme.spacing_sm());
+        rule_section_frame(theme, theme.surface_body()).show(ui, |ui| {
+            let inner_w = crate::ui::layout_util::finite_content_width(ui);
+            ui.set_min_width(inner_w);
+            ui.heading(egui::RichText::new(crate::i18n::tr(
+                ctx,
+                "Built-in rules (read-only)",
+                "内置规则（只读）",
+            ))
+            .size(theme.font_size_section_title()));
+            self.paint_cmd_builtin(ui, theme, ctx, personal, engine);
+        });
     }
 
     fn paint_cmd_list(
