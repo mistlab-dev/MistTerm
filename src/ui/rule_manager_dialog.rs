@@ -299,7 +299,7 @@ impl RuleManagerDialog {
                             self.paint_display_link(ui, theme, ctx, link_store, link_module_enabled);
                         }
                         RuleManagerTab::CommandChecks => {
-                            self.paint_command_checks(ui, theme, ctx, cmd_personal, cmd_engine, cmd_module_enabled, cmd_module_registry);
+                            self.paint_command_checks(ui, theme, ctx, cmd_personal, cmd_engine, cmd_module_enabled, cmd_module_registry, app_settings);
                         }
                     }
                 });
@@ -1147,6 +1147,7 @@ impl RuleManagerDialog {
         engine: &std::sync::Arc<std::sync::Mutex<crate::core::cmd_audit::CmdAuditEngine>>,
         module_enabled: bool,
         module_registry: Option<&std::sync::Arc<crate::capability::ModuleRegistry>>,
+        app_settings: &mut crate::core::app_settings::AppSettings,
     ) {
         // #376 P1：模块关闭时只读——顶部说明 + 主 CTA，列表不可编辑；开启后走完整流程。
         if !module_enabled {
@@ -1176,6 +1177,13 @@ impl RuleManagerDialog {
                     {
                         if let Some(reg) = module_registry {
                             reg.set_enabled(crate::modules::cmd_audit_local::MODULE_ID, true);
+                            // #377 复审：与偏好页同款持久化链——registry + disabled_modules
+                            // 双写并落盘，否则重启后按配置再次禁用。
+                            app_settings
+                                .disabled_modules
+                                .retain(|id| id != crate::modules::cmd_audit_local::MODULE_ID);
+                            let _ = app_settings.save();
+                            reg.sync_effective_disabled(&app_settings.disabled_modules);
                             self.set_status(crate::i18n::tr(
                                 ctx,
                                 "Module enabled. You can now create and edit rules.",

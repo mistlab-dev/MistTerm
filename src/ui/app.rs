@@ -7191,6 +7191,7 @@ impl MistTermApp {
         if let Some(pane) = self.tabs.get_mut(idx).and_then(|t| t.active_pane_mut()) {
             let text = pane.terminal.menu_paste_text_from_clipboard();
             if !text.is_empty() {
+                pane.terminal.paste_text(&text, ctx);
                 self.notify_auto(crate::ui::terminal::TerminalView::paste_toast_label(ctx, &text));
             }
         }

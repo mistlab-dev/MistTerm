@@ -6355,6 +6355,51 @@ mod host_wiring_tests {
 }
 
 #[cfg(test)]
+mod clipboard_toast_tests {
+    use super::*;
+
+    /// #377 软注：Toast 行数文案边界——无换行 / 恰好 2 行 / 末尾换行。
+    fn count_ctx() -> egui::Context {
+        let ctx = egui::Context::default();
+        crate::i18n::set_process_language(crate::i18n::UiLanguage::En);
+        ctx
+    }
+
+    #[test]
+    fn single_line_uses_short_label() {
+        let ctx = count_ctx();
+        let label = TerminalView::copy_toast_label(&ctx, "ls -la");
+        assert_eq!(label, "Copied to clipboard");
+    }
+
+    #[test]
+    fn exactly_two_lines_shows_count() {
+        let ctx = count_ctx();
+        let label = TerminalView::paste_toast_label(&ctx, "echo a\necho b");
+        assert_eq!(label, "Pasted 2 lines");
+    }
+
+    #[test]
+    fn trailing_newline_counts_content_lines() {
+        let ctx = count_ctx();
+        // "a\n" 的 lines() 是 1 行（末尾换行不另计），应保留短文案。
+        let one = TerminalView::copy_toast_label(&ctx, "echo a\n");
+        assert_eq!(one, "Copied to clipboard");
+        // "a\nb\n" 是 2 行，显示计数。
+        let two = TerminalView::paste_toast_label(&ctx, "echo a\necho b\n");
+        assert_eq!(two, "Pasted 2 lines");
+    }
+
+    #[test]
+    fn many_lines_shows_count() {
+        let ctx = count_ctx();
+        let text = "l\n".repeat(10);
+        let label = TerminalView::copy_toast_label(&ctx, &text);
+        assert_eq!(label, "Copied 10 lines to clipboard");
+    }
+}
+
+#[cfg(test)]
 mod display_link_host_tests {
     use super::*;
     use crate::capability::{MenuCtx, ModuleRegistry};
