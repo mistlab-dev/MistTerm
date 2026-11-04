@@ -6001,20 +6001,35 @@ impl MistTermApp {
         close
     }
 
+
+    fn apply_right_dock_ssh_cta(
+        &mut self,
+        action: crate::ui::chrome::RightDockSshGateAction,
+    ) {
+        use crate::ui::chrome::RightDockSshGateAction;
+        match action {
+            RightDockSshGateAction::None => {}
+            RightDockSshGateAction::OpenExistingConnection => {
+                self.dialog_flags.open_existing_connection = true;
+            }
+            RightDockSshGateAction::NewSshSession => {
+                self.dialog_flags.new_session = true;
+            }
+        }
+    }
+
     /// 切换右侧 SFTP 文件浏览器。
     pub(crate) fn toggle_sftp_panel(&mut self, ctx: &egui::Context) {
         if self.show_sftp_panel {
             self.close_all_right_dock_panels();
-        } else if self.current_terminal().is_some_and(|t| t.is_local_shell()) {
-            self.notify_warn(crate::i18n::tr(
-                ctx,
-                "SFTP needs an SSH session — local shell tabs are unsupported.",
-                "SFTP 需要 SSH 会话，本机终端标签不支持。",
-            ));
         } else if self.ensure_right_dock_allowed_or_warn(ctx) {
+            // #350：本机标签也打开面板，由 SSH 门闩空态给出「打开已有 / 新建」下一步。
             self.open_right_dock_panel(ActiveRightDock::Sftp);
             self.sftp_last_tab = None;
-            self.sftp_panel.request_list_on_open(self.app_settings.sftp_drag_hint_dismissed);
+            if !self.current_terminal().is_some_and(|t| t.is_local_shell()) {
+                self.sftp_panel
+                    .request_list_on_open(self.app_settings.sftp_drag_hint_dismissed);
+            }
         }
     }
 
@@ -6024,8 +6039,8 @@ impl MistTermApp {
         if self.current_terminal().is_some_and(|t| t.is_local_shell()) {
             self.notify_warn(crate::i18n::tr(
                 ctx,
-                "SFTP needs an SSH session — local shell tabs are unsupported.",
-                "SFTP 需要 SSH 会话，本机终端标签不支持。",
+                "Remote file links need a remote host session.",
+                "远端文件链接需要先打开一台远端主机会话。",
             ));
             return;
         }
@@ -6173,13 +6188,8 @@ impl MistTermApp {
     pub(crate) fn toggle_port_forward_panel(&mut self, ctx: &egui::Context) {
         if self.show_port_forward_panel {
             self.close_all_right_dock_panels();
-        } else if self.current_terminal().is_some_and(|t| t.is_local_shell()) {
-            self.notify_warn(crate::i18n::tr(
-                ctx,
-                "Port forwarding needs an SSH session — local shell tabs are unsupported.",
-                "端口转发需要 SSH 会话，本机终端标签不支持。",
-            ));
         } else if self.ensure_right_dock_allowed_or_warn(ctx) {
+            // #350：本机标签也打开面板，空态可行动。
             self.open_right_dock_panel(ActiveRightDock::PortForward);
         }
     }
