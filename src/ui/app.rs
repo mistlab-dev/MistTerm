@@ -10365,10 +10365,10 @@ impl MistTermApp {
         let ctx = ui.ctx().clone();
         let theme = self.theme_manager.current_theme().clone();
         let s = ui.available_size();
-        let card_w = 420.0_f32.min((s.x - 32.0).max(220.0));
         let has_saved_hosts = !self.session_manager.list_sessions().is_empty();
-        // #363：主 CTA 一行 + 次入口另起一行，整块居中；勿再把第三钮塞进 left_to_right（会溢到右半屏）。
-        let card_h = (if has_saved_hosts { 280.0_f32 } else { 230.0 }).min(s.y.max(1.0));
+        // 有「打开已有连接」时略加宽，三钮仍落在居中卡片内（#363 紧凑布局，勿再对半切）。
+        let card_w = (if has_saved_hosts { 520.0_f32 } else { 420.0 }).min((s.x - 32.0).max(220.0));
+        let card_h = 230.0_f32.min(s.y.max(1.0));
         let origin = egui::pos2(
             ui.cursor().min.x + ((s.x - card_w).max(0.0) * 0.5),
             ui.cursor().min.y + ((s.y - card_h).max(0.0) * 0.32),
@@ -10401,10 +10401,26 @@ impl MistTermApp {
             .color(theme.text_secondary()),
         );
         card.add_space(18.0);
-        // 主 CTA 一行：两列向中线靠拢（与标题同轴）。第三入口绝不放进同一 left_to_right。
-        card.columns(2, |cols| {
-            cols[0].with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        // Tian UX：打开已有连接 → 本机终端 → +新建连接（主色仍是新建）。
+        let row_h = theme
+            .size_panel_header_row_h()
+            .max(theme.size_control_btn_h())
+            .max(36.0);
+        card.allocate_ui_with_layout(
+            egui::vec2(card.available_width(), row_h + 4.0),
+            egui::Layout::left_to_right(egui::Align::Center).with_main_align(egui::Align::Center),
+            |ui| {
                 ui.spacing_mut().item_spacing.x = 12.0;
+                if has_saved_hosts
+                    && crate::ui::chrome::panel_action_button(
+                        ui,
+                        &theme,
+                        crate::i18n::tr(&ctx, "Open existing connection", "打开已有连接"),
+                    )
+                    .clicked()
+                {
+                    self.dialog_flags.open_existing_connection = true;
+                }
                 if crate::ui::chrome::panel_action_button(
                     ui,
                     &theme,
@@ -10415,8 +10431,6 @@ impl MistTermApp {
                     self.open_local_shell_tab(&ctx);
                     self.collapse_connection_sidebar();
                 }
-            });
-            cols[1].with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                 if crate::ui::chrome::panel_header_new_button_with_label(
                     ui,
                     &theme,
@@ -10428,21 +10442,8 @@ impl MistTermApp {
                     self.sidebar_collapsed = false;
                     self.sidebar_user_dismissed_responsive = false;
                 }
-            });
-        });
-        // #335 / #363：次入口单独一行，落在 top_down 居中卡片里，不再溢到右半屏。
-        if has_saved_hosts {
-            card.add_space(12.0);
-            if crate::ui::chrome::panel_action_button(
-                &mut card,
-                &theme,
-                crate::i18n::tr(&ctx, "Open existing connection", "打开已有连接"),
-            )
-            .clicked()
-            {
-                self.dialog_flags.open_existing_connection = true;
-            }
-        }
+            },
+        );
         card.add_space(12.0);
         card.label(
             egui::RichText::new(crate::i18n::tr(
