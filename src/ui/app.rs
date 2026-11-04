@@ -7142,14 +7142,25 @@ impl MistTermApp {
         }
     }
 
-    /// 帧末核对键盘复制：若本帧别的输入框把 `copied_text` 改掉了(曾经的 ⌘C 失效原因)，
-    /// 重新写回选区再提示；提示只在真正交给剪贴板的内容是选区时出现。
+    /// 帧末核对键盘复制：若本帧别的输入框把剪贴板输出改掉了(曾经的 ⌘C 失效原因)，
+    /// 重新写回选区再提示。egui 0.37 起 `copied_text` 改为 `OutputCommand::CopyText` 队列，
+    /// 系统剪贴板取**最后**一条；0.37 迁移时曾误写成 `any(== text)`（条件反了，#336）。
     fn finish_terminal_copy_shortcut(&mut self, ctx: &egui::Context) {
         let Some(text) = self.pending_terminal_copy.take() else {
             return;
         };
-        if ctx.output(|o| o.commands.iter().any(|c| matches!(c, egui::OutputCommand::CopyText(t) if *t == text))) {
+        let effective = ctx.output(|o| {
+            o.commands.iter().rev().find_map(|c| match c {
+                egui::OutputCommand::CopyText(t) => Some(t.clone()),
+                _ => None,
+            })
+        });
+        if effective.as_ref() != Some(&text) {
             log::warn!("terminal copy: clipboard text was overwritten in the same frame; re-applying");
+            // arboard 直写，避开同帧再被其它 CopyText 盖掉（与右键「复制全部」同路径）。
+            if let Ok(mut clip) = arboard::Clipboard::new() {
+                let _ = clip.set_text(text.clone());
+            }
             ctx.copy_text(text);
         }
         self.notify_auto(

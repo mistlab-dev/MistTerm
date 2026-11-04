@@ -2669,10 +2669,8 @@ impl TerminalView {
                                     )
                                         .clicked()
                                     {
-                                        let text = self.get_selected_text();
-                                        if !text.is_empty() {
-                                            ui.ctx().copy_text(text);
-                                        }
+                                        // 与菜单「复制」同走 copy_to_clipboard（arboard + copy_text），#336
+                                        let _ = self.copy_to_clipboard(ui.ctx(), false);
                                     }
                                     if crate::ui::chrome::popup_menu_button(
                                         ui,
@@ -4117,8 +4115,11 @@ impl TerminalView {
 
     /// 复制到剪贴板。`fallback_all` 为 true 时无选区则复制整屏(菜单「复制」)；
     /// false 时仅复制选区(Ctrl+Shift+C，与 Windows Terminal 一致)。
-    /// 走 `ctx.copy_text`（eframe/winit 剪贴板），避免 UI 线程直调 arboard 与外部
-    /// PowerShell/自动化争用 OpenClipboard 时把整窗卡成「未响应」。
+    ///
+    /// 系统剪贴板以 arboard `set_text` 为准（与右键「复制全部」同路径）。
+    /// 仍附带 `ctx.copy_text`，让 egui 输出队列与其它依赖 CopyText 的路径一致。
+    /// #336：仅走 `ctx.copy_text` 时，同帧后续 OutputCommand 或平台侧未落地会导致
+    /// 菜单「复制」/「复制选中」失效，而 arboard 直写的「复制全部」仍可用。
     fn copy_to_clipboard(&self, ctx: &egui::Context, fallback_all: bool) -> Option<String> {
         let text = self.get_selected_text();
         let text = if text.is_empty() && fallback_all {
@@ -4128,6 +4129,11 @@ impl TerminalView {
         };
         if text.is_empty() {
             return None;
+        }
+        if let Ok(mut clip) = Clipboard::new() {
+            if let Err(err) = clip.set_text(text.clone()) {
+                log::warn!("terminal copy: arboard set_text failed: {err}");
+            }
         }
         ctx.copy_text(text.clone());
         Some(text)

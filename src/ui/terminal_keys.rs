@@ -207,14 +207,30 @@ pub fn drop_clipboard_events(i: &mut InputState) {
         .retain(|e| !matches!(e, Event::Copy | Event::Cut | Event::Paste(_)));
 }
 
+/// 终端剪贴板和弦是否为「仅主修饰键」(macOS ⌘C/⌘V)。
+/// Win/Linux 为 Ctrl+Shift+C/V，egui-winit 不会按 copy-command 早退，仍有 Key 事件。
+fn terminal_clipboard_is_command_only() -> bool {
+    !terminal_clipboard_modifiers().shift
+}
+
 /// 消费终端复制快捷键(macOS ⌘C，Win/Linux Ctrl+Shift+C)。
 ///
-/// egui-winit 在 ⌘C / Ctrl+C(含 Ctrl+Shift+C) 时除了 Key 事件还会再发一个 `Event::Copy`。
-/// 终端里那个透明的 IME 输入框(空字符串、持有焦点)收到 `Event::Copy` 会把「空串」写进
-/// `copied_text`，把我们刚放进去的选区覆盖掉：提示「已复制」，剪贴板却没变。
-/// 所以命中快捷键时把同一帧的 `Event::Copy` 一起吞掉。
+/// egui-winit 0.23：⌘C / Ctrl+C 会同时发 `Key` + `Event::Copy`。
+/// egui-winit ≥0.37：对 `command_only`+C/V（macOS 即 ⌘C/⌘V）**只**推 `Event::Copy`/`Paste`
+/// 并 `return`，不再附带 `Key` 事件。macOS 终端复制就是 ⌘C，必须认裸 `Event::Copy`，
+/// 否则 `consume_key(Key::C)` 永远 miss，快捷键全废（#336）。
+///
+/// 命中后仍吞掉同帧的 `Event::Copy`，避免终端透明 IME 框再处理一遍。
 pub fn consume_terminal_copy_shortcut(i: &mut InputState) -> bool {
     if consume_terminal_clipboard_key(i, Key::C) {
+        i.events.retain(|e| !matches!(e, Event::Copy));
+        return true;
+    }
+    // 裸 Event::Copy = egui-winit 对 command_only+C 的交付；仅当终端复制和弦本身是
+    // command_only（macOS）时认作终端复制。Win/Linux 的裸 Copy 是 Ctrl+C，应留给 PTY。
+    if terminal_clipboard_is_command_only()
+        && i.events.iter().any(|e| matches!(e, Event::Copy))
+    {
         i.events.retain(|e| !matches!(e, Event::Copy));
         return true;
     }
@@ -223,8 +239,15 @@ pub fn consume_terminal_copy_shortcut(i: &mut InputState) -> bool {
 
 /// 消费终端粘贴快捷键(macOS ⌘V，Win/Linux Ctrl+Shift+V)。
 /// 同理吞掉同帧的 `Event::Paste`：粘贴由我们自己读剪贴板写进 PTY，别再交给其它输入框。
+/// egui-winit ≥0.37 在 macOS 上 ⌘V 只发 `Event::Paste`，见 [`consume_terminal_copy_shortcut`]。
 pub fn consume_terminal_paste_shortcut(i: &mut InputState) -> bool {
     if consume_terminal_clipboard_key(i, Key::V) {
+        i.events.retain(|e| !matches!(e, Event::Paste(_)));
+        return true;
+    }
+    if terminal_clipboard_is_command_only()
+        && i.events.iter().any(|e| matches!(e, Event::Paste(_)))
+    {
         i.events.retain(|e| !matches!(e, Event::Paste(_)));
         return true;
     }
@@ -1290,6 +1313,50 @@ mod tests {
         assert_eq!(run(true), "selected text");
     }
 
+
+    /// egui-winit ≥0.37：command_only+C 只发 Event::Copy，无 Key。
+    /// 在「终端复制 = command_only」平台（macOS）上必须命中；Win/Linux 有 Shift，跳过裸事件。
+    #[test]
+    fn consume_copy_shortcut_accepts_bare_event_copy_when_command_only() {
+        egui::__run_test_ui(|ui| {
+            ui.input_mut(|i| {
+                i.events.push(Event::Copy);
+                let hit = consume_terminal_copy_shortcut(i);
+                if terminal_clipboard_is_command_only() {
+                    assert!(hit, "macOS ⌘C arrives as bare Event::Copy");
+                    assert!(
+                        !i.events.iter().any(|e| matches!(e, Event::Copy)),
+                        "Event::Copy must be consumed"
+                    );
+                } else {
+                    assert!(!hit, "Win/Linux must not treat bare Event::Copy as terminal copy");
+                    assert!(
+                        i.events.iter().any(|e| matches!(e, Event::Copy)),
+                        "bare Event::Copy left for Ctrl+C → PTY path"
+                    );
+                }
+            });
+        });
+    }
+
+    #[test]
+    fn consume_paste_shortcut_accepts_bare_event_paste_when_command_only() {
+        egui::__run_test_ui(|ui| {
+            ui.input_mut(|i| {
+                i.events.push(Event::Paste("hello from clipboard".into()));
+                let hit = consume_terminal_paste_shortcut(i);
+                if terminal_clipboard_is_command_only() {
+                    assert!(hit, "macOS ⌘V arrives as bare Event::Paste");
+                    assert!(
+                        !i.events.iter().any(|e| matches!(e, Event::Paste(_))),
+                        "Event::Paste must be consumed"
+                    );
+                } else {
+                    assert!(!hit, "Win/Linux must not treat bare Event::Paste as terminal paste");
+                }
+            });
+        });
+    }
 
     #[test]
     fn paste_shortcut_drops_paste_event() {
