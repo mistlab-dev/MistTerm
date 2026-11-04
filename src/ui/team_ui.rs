@@ -27,6 +27,45 @@ impl Default for TeamLoginForm {
     }
 }
 
+
+/// #351: egui/epaint 可在任意汉字后断行，窄栏会把「登录成功」拆成「登 / 录成功」。
+/// 逐行绘制；行内把关键词做成 `Extend` 整块，由 `horizontal_wrapped` 整词换行
+/// （不用行内 `Wrap`，否则会占满整行把关键词挤到下一行）。
+fn paint_caption_keep_phrase(
+    ui: &mut egui::Ui,
+    theme: &Theme,
+    text: &str,
+    keep: &str,
+    color: egui::Color32,
+) {
+    for line in text.split('\n') {
+        if keep.is_empty() {
+            ui.add(egui::Label::new(chrome::rich_caption(theme, line).color(color)).wrap());
+            continue;
+        }
+        let Some(idx) = line.find(keep) else {
+            ui.add(egui::Label::new(chrome::rich_caption(theme, line).color(color)).wrap());
+            continue;
+        };
+        let before = &line[..idx];
+        let after = &line[idx + keep.len()..];
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing.x = 0.0;
+            if !before.is_empty() {
+                ui.add(
+                    egui::Label::new(chrome::rich_caption(theme, before).color(color)).extend(),
+                );
+            }
+            ui.add(egui::Label::new(chrome::rich_caption(theme, keep).color(color)).extend());
+            if !after.is_empty() {
+                ui.add(
+                    egui::Label::new(chrome::rich_caption(theme, after).color(color)).extend(),
+                );
+            }
+        });
+    }
+}
+
 /// 绘制团队登录 / 团队选择 / 同步控件。
 ///
 /// `id_scope` 须在每处调用点唯一(如 `"preferences_team"` / `"cloud_sync_team"`)，
@@ -165,6 +204,8 @@ pub fn paint_team_controls(
             }
         } else {
             // #279：授权说明改步骤式（1/2/3），避免一整段说明。
+            // #351：中文「登录成功」整词不拆字。
+            const KEEP_LOGIN_OK: &str = "「登录成功」";
             for line in [
                 i18n::tr(
                     ctx,
@@ -174,7 +215,8 @@ pub fn paint_team_controls(
                 i18n::tr(
                     ctx,
                     "2. Finish the authorization in the browser tab MistTerm opens, until you see the success page.",
-                    "2. 在 MistTerm 打开的浏览器页完成授权，直到看见「登录成功」页面。",
+                    // #351：关键词单独一行，避免与长前缀挤在同一行时中腹拆字。
+                    "2. 在 MistTerm 打开的浏览器页完成授权，\n直到看见「登录成功」页面。",
                 ),
                 i18n::tr(
                     ctx,
@@ -182,8 +224,12 @@ pub fn paint_team_controls(
                     "3. 也可以直接用下方的邮箱/密码登录。",
                 ),
             ] {
-                ui.label(
-                    chrome::rich_caption(theme, line).color(theme.color_form_hint()),
+                paint_caption_keep_phrase(
+                    ui,
+                    theme,
+                    line,
+                    KEEP_LOGIN_OK,
+                    theme.color_form_hint(),
                 );
             }
             ui.add_space(theme.spacing_xs());
@@ -225,9 +271,12 @@ pub fn paint_team_controls(
 
             if oauth_busy {
                 if !service.status_line.is_empty() {
-                    ui.label(
-                        chrome::rich_caption(theme, &service.status_line)
-                            .color(theme.color_form_hint()),
+                    paint_caption_keep_phrase(
+                        ui,
+                        theme,
+                        &service.status_line,
+                        "「登录成功」",
+                        theme.color_form_hint(),
                     );
                 }
                 ui.horizontal(|ui| {
@@ -353,7 +402,13 @@ pub fn paint_team_controls(
                 );
             }
             if !oauth_busy && !service.status_line.is_empty() {
-                ui.label(chrome::rich_caption(theme, &service.status_line));
+                paint_caption_keep_phrase(
+                    ui,
+                    theme,
+                    &service.status_line,
+                    "「登录成功」",
+                    theme.color_body_text_muted(),
+                );
             }
 
             ui.add_space(theme.spacing_sm());
