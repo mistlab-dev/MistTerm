@@ -7,7 +7,8 @@ impl Theme {
             name: "暗夜".to_string(),
             bg_body: Color32Serializable::new(32, 32, 32), // #202020
             bg_window: Color32Serializable::new(37, 37, 37), // #252525
-            bg_terminal: Color32Serializable::new(32, 32, 32),
+            // Terminal pane one step darker than chrome (#202020 → #1a1a1a) for clearer light-gray text.
+            bg_terminal: Color32Serializable::new(26, 26, 26), // #1a1a1a
             bg_tab_bar: Color32Serializable::new(28, 28, 28), // #1c1c1c
             bg_hover: Color32Serializable::with_alpha(255, 255, 255, 10),
             bg_selected: Color32Serializable::with_alpha(255, 255, 255, 16),
