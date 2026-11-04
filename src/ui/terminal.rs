@@ -799,16 +799,27 @@ impl TerminalView {
                 egui::vec2(preedit_w.max(rect.width()), rect.height()),
             );
         }
-        // 不超出终端可视区，避免候选窗锚到屏外。
-        rect.intersect(clip)
+        // 不超出终端可视区；intersect 空集时钳回 clip，避免 IME 锚飞到行尾/屏缘。
+        crate::ui::terminal_keys::clamp_ime_rect_to_clip(
+            rect,
+            clip,
+            egui::vec2(cell_w.max(8.0), rect.height().max(12.0)),
+        )
     }
 
     /// 在 PTY 光标处放置透明单行框，供系统 IME 定位并启用 `set_ime_allowed`。
+    ///
+    /// egui 0.37 `TextEdit` 会把 preedit 写入缓冲区，并按**组字串内**光标上报
+    /// `IMEOutput.cursor_rect`。终端预编辑是自绘叠加，真正的插入点是 PTY 块光标；
+    /// 若把 TextEdit 内部光标交给 winit，候选窗/系统组字会漂到组字末尾甚至行尾
+    ///（#352 后续：Tian Mac 反馈汉字显示在行尾）。TextEdit 跑完后把
+    /// `cursor_rect`/`rect` 改回 `pty_cursor_rect`。
     fn show_terminal_ime_capture(
         &mut self,
         ui: &mut egui::Ui,
         ime_id: egui::Id,
         ime_rect: egui::Rect,
+        pty_cursor_rect: egui::Rect,
         cell_h: f32,
     ) {
         self.last_ime_id = Some(ime_id);
@@ -832,6 +843,18 @@ impl TerminalView {
                 ime_id,
                 crate::ui::terminal_keys::terminal_keyboard_event_filter(),
             );
+        });
+        // Anchor the system IME (candidate window / firstRect) at the PTY caret,
+        // not at TextEdit's end-of-preedit primary cursor.
+        let to_global = ui
+            .ctx()
+            .layer_transform_to_global(ui.layer_id())
+            .unwrap_or_default();
+        ui.output_mut(|o| {
+            if let Some(ime) = o.ime.as_mut() {
+                ime.rect = to_global * ime_rect;
+                ime.cursor_rect = to_global * pty_cursor_rect;
+            }
         });
         self.ime_capture.clear();
         if let Some(mut state) = egui::widgets::text_edit::TextEditState::load(ui.ctx(), ime_id) {
@@ -2442,7 +2465,13 @@ impl TerminalView {
                                     cell_w,
                                     text_rect,
                                 );
-                                self.show_terminal_ime_capture(ui, ime_id, ime_rect, cell_h);
+                                self.show_terminal_ime_capture(
+                                    ui,
+                                    ime_id,
+                                    ime_rect,
+                                    cursor_rect,
+                                    cell_h,
+                                );
                             }
                             if self.terminal_focused && !self.ime_preedit.is_empty() {
                                 if let Some(cur) = self.terminal.viewport_cursor() {
@@ -3539,6 +3568,11 @@ impl TerminalView {
                 }
             }
 
+            let composing_at_start = !self.ime_preedit.is_empty();
+            let suppress_text = crate::ui::terminal_keys::suppress_plain_text_for_ime(
+                &i.events,
+                composing_at_start,
+            );
             for event in &i.events {
                 self.ime_preedit.apply_event(event);
             }
@@ -3550,6 +3584,9 @@ impl TerminalView {
                         }
                     }
                     egui::Event::Text(text) => {
+                        if suppress_text {
+                            continue;
+                        }
                         if text == "\n" || text == "\r" {
                             continue;
                         }
@@ -3863,6 +3900,11 @@ impl TerminalView {
                 }
             }
 
+            let composing_at_start = !self.ime_preedit.is_empty();
+            let suppress_text = crate::ui::terminal_keys::suppress_plain_text_for_ime(
+                &i.events,
+                composing_at_start,
+            );
             for event in &i.events {
                 self.ime_preedit.apply_event(event);
                 match event {
@@ -3889,6 +3931,9 @@ impl TerminalView {
                         }
                     }
                     egui::Event::Text(text) => {
+                        if suppress_text {
+                            continue;
+                        }
                         // Enter：部分自动化(如 pywinauto)只发 Text(\r) 不发 Key::Enter。
                         if text == "\n" || text == "\r" {
                             if !enter_sent {
