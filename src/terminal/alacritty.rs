@@ -692,11 +692,17 @@ impl Terminal {
     /// 在终端密排下会压住下一行字形。调用方须在文本之下自绘 `cell_bgs`，再铺 galley。
     /// `selection`: 绝对网格选区 `(start_line, start_col, end_line, end_col)`（列 end 开区间）
     /// + 选区底色 + 选区字色。
+    ///
+    /// `wide_char_pad`: 宽字符字形 advance 不足 `2*cell_w` 时，补在尾随
+    /// `WIDE_CHAR_SPACER` 上的 `leading_space`（UI 按代表汉字测得
+    /// `(2.0 * cell_w - cjk_advance).max(0.0)`）。勿再对 `WIDE_CHAR` 设
+    /// `extra_letter_spacing = cell_w`——egui 0.37 会在段间注入，造成「公 有 云」空隙（#343）。
     pub fn get_layout_job(
         &self,
         font_size: f32,
         line_height: f32,
         cell_w: f32,
+        wide_char_pad: f32,
         shell: &TerminalShellStyle,
         highlight: Option<(usize, usize, usize)>,
         selection: Option<(i32, usize, i32, usize, Color32, Color32)>,
@@ -771,15 +777,21 @@ impl Terminal {
             .map(|row| row.iter().map(|(_, _, bg, _)| *bg).collect())
             .collect();
 
-        let wide_spacer = Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER;
+        // #343: 宽字符占两格。egui 0.37 的 `extra_letter_spacing` 会在「段内非首字」以及
+        // 「本段落已有字形后的新 section 首字」前注入间距；每个 WIDE_CHAR 因 spacer flush
+        // 自成一段，再设 `extra_letter_spacing = cell_w` 就会在「公」「有」之间多出一整格，
+        // 看起来像「公 有 云」。正确做法：字形段 spacing=0，不足的双宽用 spacer 的
+        // `leading_space` 补齐到 2×cell_w；折行 leading spacer 独占一格。
+        let wide_char_pad = wide_char_pad.max(0.0);
+        let cell_w = cell_w.max(0.0);
         let mut job = LayoutJob::default();
         // 字形层底色一律透明；ANSI/选区底由 UI 自绘，避免 egui background expand 压行。
-        let cell_fmt = |color: Color32, extra_spacing: f32| TextFormat {
+        let cell_fmt = |color: Color32| TextFormat {
             font_id: FontId::monospace(font_size),
             color,
             background: Color32::TRANSPARENT,
             line_height: Some(line_height),
-            extra_letter_spacing: extra_spacing,
+            extra_letter_spacing: 0.0,
             // 显式 BOTTOM：与 egui 默认一致；单字体时基线按行 ascent，勿改 Center/TOP 折腾 CJK。
             valign: egui::Align::BOTTOM,
             ..Default::default()
@@ -803,17 +815,19 @@ impl Terminal {
         let row_count = rows.len();
         for (row_i, row) in rows.into_iter().enumerate() {
             for (ch, color, _bg, flags) in row {
-                if flags.intersects(wide_spacer) {
+                if flags.contains(Flags::LEADING_WIDE_CHAR_SPACER) {
+                    // 折行前的占位格：独占一列，无字形。
                     flush_run(&mut job, &mut run_text, &mut run_fmt);
-                    job.append("\u{200b}", 0.0, cell_fmt(color, 0.0));
+                    job.append("\u{200b}", cell_w, cell_fmt(color));
                     continue;
                 }
-                let spacing = if flags.contains(Flags::WIDE_CHAR) {
-                    cell_w.max(0.0)
-                } else {
-                    0.0
-                };
-                let fmt = cell_fmt(color, spacing);
+                if flags.contains(Flags::WIDE_CHAR_SPACER) {
+                    // 尾随占位：补齐 (2*cell_w - glyph_advance)，零宽字符本身不占宽。
+                    flush_run(&mut job, &mut run_text, &mut run_fmt);
+                    job.append("\u{200b}", wide_char_pad, cell_fmt(color));
+                    continue;
+                }
+                let fmt = cell_fmt(color);
                 if let Some(ref cur) = run_fmt {
                     if same_run(cur, &fmt) {
                         run_text.push(ch);
@@ -827,7 +841,7 @@ impl Terminal {
             flush_run(&mut job, &mut run_text, &mut run_fmt);
             // 最后一行后勿再 append '\n'，否则 egui 会多出一行空 galley（底栏上方多一截空白）。
             if row_i + 1 < row_count {
-                job.append("\n", 0.0, cell_fmt(default_fg, 0.0));
+                job.append("\n", 0.0, cell_fmt(default_fg));
             }
         }
         flush_run(&mut job, &mut run_text, &mut run_fmt);
@@ -1424,6 +1438,78 @@ mod tests {
         assert_eq!(
             t.text_in_point_range(Point::new(line, Column(1)), Point::new(line, Column(4))),
             "好"
+        );
+    }
+
+    /// #343：宽字符 LayoutJob 不得再用 `extra_letter_spacing = cell_w`（egui 0.37 会在段间
+    /// 注入成「公 有 云」）；尾随 spacer 用 `leading_space = wide_char_pad` 补齐双宽。
+    #[test]
+    fn layout_job_wide_char_uses_spacer_pad_not_letter_spacing() {
+        use alacritty_terminal::term::cell::Flags;
+        use crate::terminal::style::TerminalShellStyle;
+        use egui::Color32;
+
+        let shell = TerminalShellStyle {
+            default_fg: Color32::WHITE,
+            terminal_bg: Color32::BLACK,
+            prompt_arrow: Color32::GREEN,
+            path_hint: Color32::BLUE,
+            user_error: Color32::RED,
+            user_info: Color32::WHITE,
+            user_success: Color32::GREEN,
+            user_warn: Color32::YELLOW,
+            command_dim_factor: 1.0,
+            output_dim_factor: 1.0,
+            search_match_fg: Color32::WHITE,
+            search_match_bg: Color32::DARK_BLUE,
+        };
+
+        let mut t = Terminal::new(20, 4);
+        t.feed("公有云\r\n".as_bytes());
+
+        let cell_w = 8.0_f32;
+        let wide_pad = 3.0_f32;
+        let (job, _) = t.get_layout_job(13.0, 16.0, cell_w, wide_pad, &shell, None, None);
+
+        assert!(
+            job.sections
+                .iter()
+                .all(|s| s.format.extra_letter_spacing == 0.0),
+            "WIDE_CHAR must not set extra_letter_spacing (egui injects it between sections)"
+        );
+
+        // 尾随 spacer 以 leading_space=wide_pad 起段；随后同 format 的字形可能被
+        // LayoutJob::append 合并进同一 section，故只断言 leading_space 次数。
+        let padded = job
+            .sections
+            .iter()
+            .filter(|s| (s.leading_space - wide_pad).abs() < f32::EPSILON)
+            .count();
+        assert!(
+            padded >= 3,
+            "expected >=3 sections with leading_space=wide_pad ({wide_pad}), got {padded}"
+        );
+        assert!(
+            job.sections.iter().all(|s| {
+                s.leading_space == 0.0
+                    || (s.leading_space - wide_pad).abs() < f32::EPSILON
+                    || (s.leading_space - cell_w).abs() < f32::EPSILON
+            }),
+            "unexpected leading_space values: {:?}",
+            job.sections.iter().map(|s| s.leading_space).collect::<Vec<_>>()
+        );
+
+        // 网格仍标记 WIDE_CHAR / spacer，复制路径不回退。
+        let line = t.search_all("公", false)[0].line;
+        use alacritty_terminal::index::{Column, Point};
+        assert!(
+            t.term.grid()[line][Column(0)]
+                .flags
+                .contains(Flags::WIDE_CHAR)
+        );
+        assert_eq!(
+            t.text_in_point_range(Point::new(line, Column(0)), Point::new(line, Column(t.width))),
+            "公有云"
         );
     }
 
