@@ -49,10 +49,11 @@ impl SessionLogDialog {
         if body.trim().is_empty() {
             return None;
         }
+        // 展示层人话标题；技术 id 进次要行，避免夹排。
         let header = if self.session_name.trim().is_empty() {
-            format!("Session ID: {}", self.session_id)
+            format!("id: {}", self.session_id)
         } else {
-            format!("Session: {}", self.session_name)
+            self.session_name.clone()
         };
         Some(format!("{header}\n\n{body}"))
     }
@@ -168,11 +169,16 @@ impl SessionLogDialog {
             r.min.x + (sw - modal_size.x) * 0.5,
             r.min.y + (sh - modal_size.y) * 0.5,
         );
-        let title = format!(
-            "{}{}",
-            crate::i18n::tr(ctx, "Session log — ", "会话日志 — "),
-            self.session_name
-        );
+        // #349：标题用人话会话名；技术 id（如 local:10000）放次要行。
+        let title = if self.session_name.trim().is_empty() {
+            crate::i18n::tr(ctx, "Session log", "会话日志").to_string()
+        } else {
+            format!(
+                "{}{}",
+                crate::i18n::tr(ctx, "Session log — ", "会话日志 — "),
+                self.session_name.trim()
+            )
+        };
         chrome::modal_window("session_log_viewer", theme, ctx)
             .id(egui::Id::unique("session_log_viewer_window"))
             .open(&mut self.open)
@@ -186,6 +192,19 @@ impl SessionLogDialog {
                     ui.set_width(content_w);
                     if chrome::modal_header(ui, theme, &title, chrome::modal_title_font_size(theme)) {
                         should_close = true;
+                    }
+                    if !self.session_id.is_empty()
+                        && self.session_name.trim() != self.session_id.as_str()
+                    {
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "{}{}",
+                                crate::i18n::tr(ctx, "Session id: ", "会话编号："),
+                                self.session_id
+                            ))
+                            .size(theme.font_size_caption())
+                            .color(theme.text_tertiary()),
+                        );
                     }
                     let search_w = content_w;
                     crate::ui::chrome::search_field(
@@ -306,12 +325,12 @@ impl SessionLogDialog {
                                     ui,
                                     theme,
                                     crate::ui::icons::IconId::Api,
-                                    crate::i18n::tr(ctx, "Send to AI", "发送到 AI"),
+                                    crate::i18n::tr(ctx, "Send to assistant", "发送到助手"),
                                 )
                                 .on_hover_text(crate::i18n::tr(
                                     ctx,
-                                    "Attach log content to the AI panel",
-                                    "将会话日志附带至 AI 面板",
+                                    "Attach log content to the assistant panel",
+                                    "将会话日志附带到助手面板",
                                 ))
                                 .clicked()
                                 {
