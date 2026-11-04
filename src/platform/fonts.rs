@@ -211,6 +211,7 @@ pub fn configure_terminal_font(ctx: &egui::Context, selection: &TerminalFontSele
             .entry(egui::FontFamily::Monospace)
             .or_default()
             .push(cjk_name.clone());
+        // Name 族稍后再补 Geist 拉丁兜底（见下）；此处先占位，保证 ui_font_id 可用。
         fonts.families.insert(
             egui::FontFamily::Name(CJK_UI_FONT_NAME.into()),
             vec![cjk_name],
@@ -222,6 +223,8 @@ pub fn configure_terminal_font(ctx: &egui::Context, selection: &TerminalFontSele
 
     // UI 拉丁字体：Geist（对齐设计稿的现代无衬线），置 Proportional 首位；
     // CJK 仍作缺字兜底（中文回退 NotoSansSC，英文/数字用 Geist）。
+    // #363：ui_font_id 的 Name 族保持 CJK 优先（整段中文不经 Geist 逐字回退），
+    // 再挂 Geist 作拉丁/数字字形；与 Proportional「Geist 优先」分工明确。
     {
         const GEIST_UI: &[u8] = include_bytes!("../../assets/fonts/Geist-Regular.ttf");
         let name = "geist-ui".to_string();
@@ -233,7 +236,19 @@ pub fn configure_terminal_font(ctx: &egui::Context, selection: &TerminalFontSele
             .entry(egui::FontFamily::Proportional)
             .or_default();
         entry.retain(|n| n != &name);
-        entry.insert(0, name);
+        entry.insert(0, name.clone());
+        if loaded {
+            if let Some(family) = fonts
+                .families
+                .get_mut(&egui::FontFamily::Name(CJK_UI_FONT_NAME.into()))
+            {
+                family.retain(|n| n != &name);
+                if !family.iter().any(|n| n == CJK_UI_FONT_NAME) {
+                    family.insert(0, CJK_UI_FONT_NAME.to_string());
+                }
+                family.push(name);
+            }
+        }
     }
 
     CJK_FONT_LOADED.store(loaded, Ordering::Relaxed);
