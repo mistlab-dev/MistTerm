@@ -1,26 +1,32 @@
-name: Disable auto_update in manifests
+name: Set auto_update in manifests
 
-# One-shot: set every platform auto_update=false on the live v* release
-# latest.json, re-sign, upload to GitHub Release, and rsync to mistlab mirror.
+# Set every platform auto_update on the live v* release latest.json
+# (true or false), re-sign, upload to GitHub Release, and rsync to
+# mistlab mirror when DEPLOY_* secrets are present (missing secrets
+# warn only — box can sync).
 on:
   workflow_dispatch:
     inputs:
       version:
         description: "Release version (no leading v)"
         required: true
-        default: "1.3.7"
         type: string
+      auto_update:
+        description: "Set platforms[].auto_update to this value"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
 
 concurrency:
-  group: disable-auto-update-${{ inputs.version }}
+  group: set-auto-update-${{ inputs.version }}-${{ inputs.auto_update }}
   cancel-in-progress: false
 
 jobs:
-  disable:
-    name: Disable auto_update
+  set-auto-update:
+    name: Set auto_update
     runs-on: ubuntu-24.04
     environment: release
     steps:
@@ -35,22 +41,25 @@ jobs:
       - name: Download and patch latest.json
         env:
           VERSION_INPUT: ${{ inputs.version }}
+          AUTO_UPDATE_INPUT: ${{ inputs.auto_update }}
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
           VERSION="${VERSION_INPUT#v}"
           echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
+          echo "AUTO_UPDATE=${AUTO_UPDATE_INPUT}" >> "$GITHUB_ENV"
           mkdir -p dist
           gh release download "v${VERSION}" --repo "$GITHUB_REPOSITORY" --pattern latest.json --dir dist --clobber
           python3 - <<'PY'
-          import json, pathlib
+          import json, os, pathlib
           p = pathlib.Path("dist/latest.json")
           m = json.loads(p.read_text())
+          flag = os.environ.get("AUTO_UPDATE_INPUT", "false").lower() in ("1", "true", "yes")
           for k, plat in m.get("platforms", {}).items():
-              plat["auto_update"] = False
+              plat["auto_update"] = flag
           p.write_text(json.dumps(m, indent=2, ensure_ascii=False) + "\n")
-          print("version", m["version"], "platforms", len(m["platforms"]))
+          print("version", m["version"], "auto_update", flag, "platforms", len(m["platforms"]))
           for k, plat in m["platforms"].items():
               print(k, plat.get("auto_update"))
           PY
@@ -91,8 +100,8 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "${DEPLOY_HOST:-}" ] || [ -z "${DEPLOY_SSH_KEY:-}" ]; then
-            echo "::error::DEPLOY_* secrets missing; signed files are on the GitHub Release only"
-            exit 1
+            echo "::warning::DEPLOY_* secrets missing; signed files are on the GitHub Release only — sync mistlab from box"
+            exit 0
           fi
           umask 077
           KEY="$RUNNER_TEMP/deploy.key"
@@ -119,7 +128,7 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: disabled-auto-update-manifest
+          name: set-auto-update-manifest
           path: |
             dist/latest.json
             dist/latest.json.minisig
