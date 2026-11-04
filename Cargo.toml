@@ -45,7 +45,7 @@ path = "src/bin/rz_upload_smoke.rs"
 name = "Mist"
 path = "src/main.rs"
 # 桌面版必须带文件选择框；`--no-default-features` 的静态 CLI 构建不会编它。
-# required-features = ["file-dialogs"]  # temp box pointcheck
+required-features = ["file-dialogs"]
 
 [[bin]]
 name = "mist"
