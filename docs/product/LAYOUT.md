@@ -7,8 +7,8 @@
 全平台同一套窗口 chrome（macOS 仍可用系统菜单栏，但**无常驻底栏**）。
 
 ```
-┌─ 系统窗口标题（macOS 原生 / Win·Linux 自绘）──────────────┐
-├─ [非 macOS] top_chrome 菜单行 ────────────────────────────┤
+┌─ 系统窗口标题（macOS：透明标题栏 + 会话 Tab / Win·Linux 自绘）─┐
+├─ top_chrome：macOS 画会话 Tab（红绿灯右侧）；非 macOS 为菜单行 ─┤
 ├─▮ activity_rail（可隐藏；隐藏时留窄恢复条）─┬─ 主工作区 ──┤
 │ 连接 / 片段 / 文件                           │ Tab + 终端   │
 │ 转发 / 监控 / AI                             │ [可选] 连接列表 │
@@ -23,7 +23,7 @@
 
 | 步骤 | 类型 | ID / 说明 |
 |------|------|-----------|
-| 1 | `TopBottomPanel::top` | `"top_chrome"`（macOS 通常高度 0） |
+| 1 | `TopBottomPanel::top` | `"top_chrome"`（macOS：透明标题栏行画会话 Tab，高度 ≈ `title_bar_height.max(tab_row)`；非 macOS：菜单行） |
 | 2 | `SidePanel::left` | `"activity_rail"`；隐藏时改为 `"activity_rail_reveal"`（窄条） |
 | 3 | `SidePanel::right` | **至多一个**右抽屉（片段 / 凭证 / 云同步 / SFTP / 监控 / 转发 / AI） |
 | 4 | `CentralPanel` | 连接列表（可关）+ Tab + 终端 |
@@ -39,7 +39,7 @@
 |------|------|--------|
 | Activity Rail | 导航：连接列表 + 各面板 + 偏好；可完全隐藏 | [`app.rs`](../../src/ui/app.rs) `show_activity_rail` / `show_activity_rail_reveal_strip` / `toggle_activity_rail` |
 | Toast | 瞬时提示与需确认提示 | `tick_status_toast` / `show_status_toast` + [`chrome.rs`](../../src/ui/chrome.rs) `paint_status_toast` |
-| 顶栏 | 非 macOS 菜单；连接信息在 Tab | [`chrome.rs`](../../src/ui/chrome.rs) `render_top_chrome_panel` |
+| 顶栏 | 非 macOS 菜单；macOS 经 fullsize + 透明标题栏在 top_chrome 画会话 Tab；连接信息在 Tab | [`chrome.rs`](../../src/ui/chrome.rs) / [`workspace.rs`](../../src/ui/workspace.rs) |
 | 工作区编排 | 注册顺序、三列 | [`workspace.rs`](../../src/ui/workspace.rs) |
 | 左连接列表 | 默认收起；rail「连接」展开 | [`sidebar.rs`](../../src/ui/sidebar.rs) |
 | 右单抽屉 | `open_right_dock_panel` 互斥 | [`app.rs`](../../src/ui/app.rs) |
@@ -77,4 +77,4 @@
    - 需确认：不自动消失，主按钮 + ×；不被瞬时 Toast 覆盖
    - SSH 待导入走需确认 Toast（菜单仍可导入）；侧栏横幅 / 顶栏 chip 已移除
    - 启动「就绪」不弹 Toast；诊断 / CJK 字体警告走 Warn
-5. **macOS**：系统 NSMenu 保留（含 Cmd+Q 退出、Cmd+B 切换活动栏）；窗口内与 Win/Linux 同为 Rail + 窄恢复条 + 无底栏。快捷键修饰键走平台 `accel*`，禁止写死 Ctrl。
+5. **macOS**：系统 NSMenu 保留（含 Cmd+Q 退出、Cmd+B 切换活动栏）；窗口内与 Win/Linux 同为 Rail + 窄恢复条 + 无底栏。普通窗用 `fullsize_content_view` + **透明标题栏**（`with_titlebar_shown(false)`），会话 Tab 画在 top_chrome 红绿灯右侧；不透明标题栏会盖住自绘 Tab（#325）。快捷键修饰键走平台 `accel*`，禁止写死 Ctrl。

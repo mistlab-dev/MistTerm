@@ -94,7 +94,9 @@ pub fn run_gui() {
         ..Default::default()
     };
 
-    // macOS：内容延伸到标题栏，标签和红绿灯同一行(透明标题栏)。
+    // macOS：fullsize content view + 透明标题栏，自绘会话标签才能露在红绿灯右侧。
+    // 必须 with_titlebar_shown(false)：egui-winit 默认 titlebar_shown=true →
+    // winit with_titlebar_transparent(false)，不透明系统标题栏会盖住 top_chrome 里的 tab（#325）。
     // Option 当作 Alt：winit 0.30 的扩展挂不上 egui ViewportBuilder → 已在 S2（#207）
     // 首帧经 `frame.winit_window()` 实装 `set_option_as_alt(Both)`，
     // 见 app.rs `apply_macos_option_as_alt_once`。
@@ -103,7 +105,8 @@ pub fn run_gui() {
         options.viewport = options
             .viewport
             .with_fullsize_content_view(true)
-            .with_title_shown(false);
+            .with_title_shown(false)
+            .with_titlebar_shown(false);
     }
 
     if let Err(e) = eframe::run_native(
