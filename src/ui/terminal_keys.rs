@@ -240,6 +240,10 @@ pub fn consume_terminal_copy_shortcut(i: &mut InputState) -> bool {
 /// 消费终端粘贴快捷键(macOS ⌘V，Win/Linux Ctrl+Shift+V)。
 /// 同理吞掉同帧的 `Event::Paste`：粘贴由我们自己读剪贴板写进 PTY，别再交给其它输入框。
 /// egui-winit ≥0.37 在 macOS 上 ⌘V 只发 `Event::Paste`，见 [`consume_terminal_copy_shortcut`]。
+///
+/// #367: egui-winit only pushes `Event::Paste` when its clipboard backend returns
+/// non-empty text. eframe must enable the `clipboard` feature (OS arboard); otherwise
+/// external ⌘V never produces Paste, while Edit/右键粘贴 (direct arboard) still work.
 pub fn consume_terminal_paste_shortcut(i: &mut InputState) -> bool {
     if consume_terminal_clipboard_key(i, Key::V) {
         i.events.retain(|e| !matches!(e, Event::Paste(_)));
@@ -252,6 +256,21 @@ pub fn consume_terminal_paste_shortcut(i: &mut InputState) -> bool {
         return true;
     }
     false
+}
+
+/// Take a leftover `Event::Paste` payload and remove it from the frame.
+///
+/// The focused terminal IME `TextEdit` reads Paste into `ime_capture` but does not
+/// remove the event; we then clear `ime_capture` (preedit must not reach the PTY).
+/// If an earlier shortcut route missed the paste (#367), drain it here so ⌘V still
+/// reaches the PTY instead of vanishing with the cleared capture buffer.
+pub fn take_leftover_paste_event(i: &mut InputState) -> Option<String> {
+    let text = i.events.iter().find_map(|e| match e {
+        Event::Paste(t) if !t.is_empty() => Some(t.clone()),
+        _ => None,
+    })?;
+    i.events.retain(|e| !matches!(e, Event::Paste(_)));
+    Some(text)
 }
 
 /// 消费 Ctrl(+Shift)+字母 Key 并编码为 C0 字节。
@@ -1529,6 +1548,28 @@ mod tests {
                 } else {
                     assert!(!hit, "Win/Linux must not treat bare Event::Paste as terminal paste");
                 }
+            });
+        });
+    }
+
+    /// #367: IME TextEdit may leave Event::Paste in the queue after inserting into
+    /// ime_capture; we must take that payload before clearing the capture buffer.
+    #[test]
+    fn take_leftover_paste_event_drains_non_empty_paste() {
+        egui::__run_test_ui(|ui| {
+            ui.input_mut(|i| {
+                i.events.push(Event::Paste("CLIP".into()));
+                i.events.push(Event::Text("x".into()));
+                assert_eq!(take_leftover_paste_event(i).as_deref(), Some("CLIP"));
+                assert!(
+                    !i.events.iter().any(|e| matches!(e, Event::Paste(_))),
+                    "Paste must be drained"
+                );
+                assert!(
+                    i.events.iter().any(|e| matches!(e, Event::Text(_))),
+                    "unrelated events must stay"
+                );
+                assert_eq!(take_leftover_paste_event(i), None);
             });
         });
     }

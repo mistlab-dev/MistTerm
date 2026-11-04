@@ -64,8 +64,14 @@ md5 = "0.7"
 # GUI - eframe 0.37（MSRV 1.95）。wgpu feature 编入但运行时显式 Renderer::Glow
 # （0.25+ 双开默认偏 wgpu、0.34+ wgpu 成默认；是否切 wgpu 另票拍板，见 #204）。
 # Linux：x11+wayland 自 0.30 起须显式开启。
+# #367: must keep "clipboard" when default-features=false. Without it egui-winit
+# has no OS clipboard; macOS ⌘V (command_only → bare Event::Paste only if
+# clipboard.get() is non-empty) never emits Paste for external content, while
+# Edit/右键粘贴 use our arboard path and still work. eframe 0.23 defaults had
+# clipboard; the 0.37 upgrade omitted it.
 eframe = { version = "0.37", default-features = false, features = [
     "accesskit",
+    "clipboard",
     "default_fonts",
     "glow",
     "persistence",
