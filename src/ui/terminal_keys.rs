@@ -537,6 +537,41 @@ pub fn ensure_terminal_ime_focus(memory: &mut egui::Memory, ime_id: egui::Id) {
     }
 }
 
+/// Whether plain `Event::Text` must be ignored this frame so IME does not leak into the PTY.
+///
+/// Terminals own composition: preedit is painted at the block cursor and only
+/// [`egui::ImeEvent::Commit`] is written to the PTY. egui 0.37 `TextEdit` still inserts
+/// preedit into the capture buffer, and some platforms may also emit `Event::Text` for
+/// the same keystrokes or the commit string. Feeding those bytes would leave Latin
+/// pinyin at the caret while Chinese commits afterward (Tian: 汉字在行尾 / 前面留下 ls).
+pub fn suppress_plain_text_for_ime(events: &[Event], composing_at_frame_start: bool) -> bool {
+    if composing_at_frame_start {
+        return true;
+    }
+    events.iter().any(|event| match event {
+        Event::Ime(egui::ImeEvent::Commit(_)) => true,
+        Event::Ime(egui::ImeEvent::Preedit { text, .. }) => !text.is_empty(),
+        _ => false,
+    })
+}
+
+/// Keep a non-inverted IME area inside `clip`.
+///
+/// [`egui::Rect::intersect`] yields min>max when the cursor sits outside the visible
+/// text clip; winit then gets a nonsense `set_ime_cursor_area` and macOS candidate
+/// UI can jump to the line/window edge (行尾).
+pub fn clamp_ime_rect_to_clip(rect: egui::Rect, clip: egui::Rect, min_size: egui::Vec2) -> egui::Rect {
+    let hit = rect.intersect(clip);
+    if hit.width() > 0.0 && hit.height() > 0.0 {
+        return hit;
+    }
+    let w = min_size.x.max(1.0).min(clip.width().max(1.0));
+    let h = min_size.y.max(1.0).min(clip.height().max(1.0));
+    let x = rect.min.x.clamp(clip.min.x, (clip.max.x - w).max(clip.min.x));
+    let y = rect.min.y.clamp(clip.min.y, (clip.max.y - h).max(clip.min.y));
+    egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(w, h))
+}
+
 /// 与 `vendor/winit` 里 X11 / macOS 补丁同一条策略：Control 已按下、键不是修饰键本身、
 /// 也不是 XIM 的 keycode 0 提交事件时，不把该键交给输入法。
 /// 字母、空格、退格、方向键仍走 IME。macOS 在 preedit 期间据此跳过
@@ -1154,6 +1189,65 @@ mod tests {
             "ensure_terminal_ime_focus must not interrupt an owned IME composition"
         );
         assert!(ctx.memory(|m| m.has_focus(ime_id)));
+    }
+
+    #[test]
+    fn suppress_plain_text_for_ime_while_composing_or_commit() {
+        let preedit = Event::Ime(egui::ImeEvent::Preedit {
+            text: "ls".into(),
+            active_range_chars: None,
+        });
+        let commit = Event::Ime(egui::ImeEvent::Commit("了".into()));
+        let empty_preedit = Event::Ime(egui::ImeEvent::Preedit {
+            text: String::new(),
+            active_range_chars: None,
+        });
+        let plain = Event::Text("ls".into());
+
+        assert!(
+            suppress_plain_text_for_ime(&[preedit.clone(), plain.clone()], false),
+            "non-empty preedit in the frame must suppress Text"
+        );
+        assert!(
+            suppress_plain_text_for_ime(&[commit.clone(), plain.clone()], false),
+            "commit in the frame must suppress Text (avoid double-insert)"
+        );
+        assert!(
+            suppress_plain_text_for_ime(&[plain.clone()], true),
+            "already composing at frame start must suppress Text"
+        );
+        assert!(
+            !suppress_plain_text_for_ime(&[empty_preedit, plain.clone()], false),
+            "empty preedit alone (IME idle/clear) must not block normal typing"
+        );
+        assert!(
+            !suppress_plain_text_for_ime(&[plain], false),
+            "plain Text with no IME must pass through"
+        );
+    }
+
+    #[test]
+    fn clamp_ime_rect_to_clip_avoids_inverted_intersect() {
+        let clip = egui::Rect::from_min_max(egui::pos2(10.0, 10.0), egui::pos2(200.0, 100.0));
+        let inside = egui::Rect::from_min_size(egui::pos2(40.0, 40.0), egui::vec2(16.0, 14.0));
+        let hit = clamp_ime_rect_to_clip(inside, clip, egui::vec2(8.0, 12.0));
+        assert!(hit.width() > 0.0 && hit.height() > 0.0);
+        assert!(clip.contains(hit.center()));
+
+        let outside = egui::Rect::from_min_size(egui::pos2(250.0, 40.0), egui::vec2(16.0, 14.0));
+        let clamped = clamp_ime_rect_to_clip(outside, clip, egui::vec2(8.0, 12.0));
+        assert!(
+            clamped.width() > 0.0 && clamped.height() > 0.0,
+            "clamped rect must stay positive, got {clamped:?}"
+        );
+        assert!(
+            clip.intersects(clamped),
+            "clamped IME area must sit on the clip, got {clamped:?} clip={clip:?}"
+        );
+        assert!(
+            clamped.max.x <= clip.max.x + 0.5,
+            "must not hang past the right edge: {clamped:?}"
+        );
     }
 
     #[test]
