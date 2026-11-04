@@ -4337,7 +4337,16 @@ pub fn status_icon_chip(ui: &mut Ui, theme: &Theme, id: IconId, text: &str) {
     });
 }
 
-/// 右 dock SSH 门闩：返回 `true` 表示已连接可继续绘制面板正文。
+/// #350：右 dock 在无 SSH / 本机标签时的可行动空态动作。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RightDockSshGateAction {
+    #[default]
+    None,
+    OpenExistingConnection,
+    NewSshSession,
+}
+
+/// 右 dock SSH 门闩：`(ready, action)`。`ready == true` 表示可继续绘制面板正文。
 pub fn show_right_dock_ssh_gate(
     ui: &mut Ui,
     theme: &Theme,
@@ -4345,35 +4354,38 @@ pub fn show_right_dock_ssh_gate(
     terminal: Option<&crate::ui::terminal::TerminalView>,
     no_session_en: &'static str,
     no_session_zh: &'static str,
-) -> bool {
+) -> (bool, RightDockSshGateAction) {
     use crate::ui::terminal::RightDockSshGate;
     let Some(t) = terminal else {
-        ui.label(
-            RichText::new(crate::i18n::tr(ctx, no_session_en, no_session_zh))
-                .color(theme.text_tertiary()),
+        let action = paint_right_dock_ssh_needed_empty(
+            ui,
+            theme,
+            ctx,
+            no_session_en,
+            no_session_zh,
         );
-        return false;
+        return (false, action);
     };
     match t.right_dock_ssh_gate() {
-        RightDockSshGate::Ready => true,
+        RightDockSshGate::Ready => (true, RightDockSshGateAction::None),
         RightDockSshGate::Connecting => {
             busy_row(
                 ui,
                 theme,
                 crate::i18n::tr(ctx, "Connecting…", "连接建立中…"),
             );
-            false
+            (false, RightDockSshGateAction::None)
         }
         RightDockSshGate::Disconnected => {
             ui.label(
                 RichText::new(crate::i18n::tr(
                     ctx,
-                    "SSH disconnected. Reconnect to use this panel.",
-                    "SSH 已断开。请重新连接后再使用此面板。",
+                    "Remote session disconnected. Reconnect to use this panel.",
+                    "远端会话已断开。请重新连接后再使用此面板。",
                 ))
                 .color(theme.amber_color()),
             );
-            false
+            (false, RightDockSshGateAction::None)
         }
         RightDockSshGate::Failed(err) => {
             ui.label(
@@ -4384,27 +4396,81 @@ pub fn show_right_dock_ssh_gate(
                 ))
                 .color(theme.red_color()),
             );
-            false
+            (false, RightDockSshGateAction::None)
         }
         RightDockSshGate::NoSession => {
-            ui.label(
-                RichText::new(crate::i18n::tr(ctx, no_session_en, no_session_zh))
-                    .color(theme.text_tertiary()),
+            let action = paint_right_dock_ssh_needed_empty(
+                ui,
+                theme,
+                ctx,
+                no_session_en,
+                no_session_zh,
             );
-            false
+            (false, action)
         }
         RightDockSshGate::LocalShell => {
-            ui.label(
-                RichText::new(crate::i18n::tr(
-                    ctx,
-                    "Local shell tab — SFTP and port forwarding need an SSH session.",
-                    "本机终端标签 — SFTP / 端口转发需连接 SSH 会话。",
-                ))
-                .color(theme.text_tertiary()),
+            // #350：本机标签不假装挂载远端；给出下一步 CTA。
+            let action = paint_right_dock_ssh_needed_empty(
+                ui,
+                theme,
+                ctx,
+                "This is a local terminal tab. Remote files and port forwarding need a remote SSH session.",
+                "当前是本机终端标签。远端文件和端口转发需要先打开一台远端主机会话。",
             );
-            false
+            (false, action)
         }
     }
+}
+
+fn paint_right_dock_ssh_needed_empty(
+    ui: &mut Ui,
+    theme: &Theme,
+    ctx: &egui::Context,
+    reason_en: &'static str,
+    reason_zh: &'static str,
+) -> RightDockSshGateAction {
+    ui.label(
+        RichText::new(crate::i18n::tr(ctx, reason_en, reason_zh))
+            .size(theme.font_size_body())
+            .color(theme.text_secondary()),
+    );
+    ui.add_space(theme.spacing_sm());
+    ui.label(
+        RichText::new(crate::i18n::tr(
+            ctx,
+            "Pick a next step:",
+            "可以下一步：",
+        ))
+        .size(theme.font_size_caption())
+        .color(theme.text_tertiary()),
+    );
+    ui.add_space(theme.spacing_xs());
+    let mut action = RightDockSshGateAction::None;
+    let row_w = ui.available_width().max(120.0);
+    if panel_action_primary_button_with_icon_ex_min_w(
+        ui,
+        theme,
+        crate::ui::icons::IconId::Server,
+        crate::i18n::tr(ctx, "Open existing SSH…", "打开已有 SSH 连接…"),
+        true,
+        row_w,
+    )
+    .clicked()
+    {
+        action = RightDockSshGateAction::OpenExistingConnection;
+    }
+    ui.add_space(theme.spacing_xs());
+    if panel_action_button_ex(
+        ui,
+        theme,
+        crate::i18n::tr(ctx, "New SSH session…", "新建 SSH 会话…"),
+        true,
+    )
+    .clicked()
+    {
+        action = RightDockSshGateAction::NewSshSession;
+    }
+    action
 }
 
 /// 只读信息标签(连接元信息、侧栏分组等)
