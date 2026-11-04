@@ -2468,6 +2468,35 @@ impl MistTermApp {
                     self.open_new_tab_for_session(ctx, &session);
                 }
             }
+            // #326：同一帧内 reconnect 与 split/close 等互斥——egui 0.37 弹窗在
+            // macOS 上出现过点击归属串扰（复现：点「重新连接」却触发「左右分屏」，
+            // 原窗格残留断开 + 新窗格 local-ssh (2)）。裁决规则在 core::reconnect
+            // 的 TabMenuActions::resolve（优先级：重连 > 断开 > 分屏），带单测。
+            let menu_actions = crate::core::reconnect::TabMenuActions {
+                reconnect: reconnect_idx.is_some(),
+                disconnect: disconnect_ssh_idx.is_some(),
+                close_pane: close_pane_tab.is_some(),
+                split_h: split_h_idx.is_some(),
+                split_v: split_v_idx.is_some(),
+            }
+            .resolve();
+            let reconnect_idx = if menu_actions.reconnect {
+                reconnect_idx
+            } else {
+                None
+            };
+            let disconnect_ssh_idx = if menu_actions.disconnect {
+                disconnect_ssh_idx
+            } else {
+                None
+            };
+            let split_h_idx = if menu_actions.split_h { split_h_idx } else { None };
+            let split_v_idx = if menu_actions.split_v { split_v_idx } else { None };
+            let close_pane_tab = if menu_actions.close_pane {
+                close_pane_tab
+            } else {
+                None
+            };
             if let Some(idx) = disconnect_ssh_idx {
                 self.disconnect_ssh_keep_buffer_at(ctx, idx);
             }
