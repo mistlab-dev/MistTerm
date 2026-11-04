@@ -2647,7 +2647,7 @@ impl MistTermApp {
                         .max_height(220.0)
                         .show(ui, |ui| {
                             for session in &others {
-                                let host_line = if session.port != 22 {
+                                let host_line = if session.port != crate::core::session::DEFAULT_SSH_PORT {
                                     format!("{}:{}", session.host, session.port)
                                 } else {
                                     session.host.clone()

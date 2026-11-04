@@ -63,7 +63,7 @@ impl MistTermApp {
                     ui.add_space(theme.spacing_sm());
                     egui::ScrollArea::vertical().show(ui, |ui| {
                         for session in &sessions {
-                            let host_line = if session.port != 22 {
+                            let host_line = if session.port != crate::core::session::DEFAULT_SSH_PORT {
                                 format!("{}:{}", session.host, session.port)
                             } else {
                                 session.host.clone()
