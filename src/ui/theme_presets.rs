@@ -5,11 +5,11 @@ impl Theme {
     pub fn dark() -> Self {
         Self {
             name: "暗夜".to_string(),
-            bg_body: Color32Serializable::new(32, 32, 32), // #202020
-            bg_window: Color32Serializable::new(37, 37, 37), // #252525
-            // Terminal pane one step darker than chrome (#202020 → #1a1a1a) for clearer light-gray text.
-            bg_terminal: Color32Serializable::new(26, 26, 26), // #1a1a1a
-            bg_tab_bar: Color32Serializable::new(28, 28, 28), // #1c1c1c
+            // Tian: #1a1a1a still too light; deepen chrome + terminal another step.
+            bg_body: Color32Serializable::new(22, 22, 22), // #161616 (was #202020)
+            bg_window: Color32Serializable::new(30, 30, 30), // #1e1e1e (was #252525)
+            bg_terminal: Color32Serializable::new(18, 18, 18), // #121212 (was #1a1a1a)
+            bg_tab_bar: Color32Serializable::new(20, 20, 20), // #141414 (was #1c1c1c)
             bg_hover: Color32Serializable::with_alpha(255, 255, 255, 10),
             bg_selected: Color32Serializable::with_alpha(255, 255, 255, 16),
             fg_high: Color32Serializable::new(255, 255, 255),
