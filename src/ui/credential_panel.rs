@@ -268,8 +268,8 @@ impl CredentialPanel {
                     ui.label(
                         egui::RichText::new(i18n::tr(
                             ui.ctx(),
-                            "No credentials yet — tap New",
-                            "暂无凭证，点「新建」添加",
+                            "No credentials yet — tap New credential",
+                            "暂无凭证，点「新建凭证」添加",
                         ))
                             .color(theme.text_tertiary()),
                     );
@@ -1022,15 +1022,74 @@ impl CredentialPanel {
                     *close_panel = true;
                 }
                 chrome::right_dock_header_divider(ui, theme);
-                ui.label(
-                    egui::RichText::new(format!(
-                        "{}{}",
-                        i18n::tr(ctx, "Stored at: ", "存储："),
-                        self.vault.path().display()
-                    ))
-                        .size(theme.font_size_small())
-                        .color(theme.color_form_hint()),
-                );
+
+                // #348 / #228：路径收回「高级」，不当主表面副标题。
+                egui::CollapsingHeader::new(i18n::tr(ctx, "Advanced", "高级"))
+                    .id_salt("credential_panel_advanced_path")
+                    .default_open(false)
+                    .show(ui, |ui| {
+                        ui.label(
+                            egui::RichText::new(i18n::tr(
+                                ctx,
+                                "Local encrypted store location (for backup).",
+                                "本地加密库位置（备份用）。",
+                            ))
+                            .size(theme.font_size_caption())
+                            .color(theme.color_form_hint()),
+                        );
+                        ui.horizontal_wrapped(|ui| {
+                            if chrome::panel_action_icon_button(
+                                ui,
+                                theme,
+                                crate::ui::icons::IconId::Copy,
+                                i18n::tr(ui.ctx(), "Copy path", "复制路径"),
+                            )
+                            .clicked()
+                            {
+                                let path = self.vault.path().display().to_string();
+                                ui.ctx().copy_text(path);
+                                self.status_msg = i18n::tr(
+                                    ctx,
+                                    "Path copied",
+                                    "已复制路径",
+                                )
+                                .to_string();
+                            }
+                            if chrome::panel_action_icon_button(
+                                ui,
+                                theme,
+                                crate::ui::icons::IconId::Folder,
+                                i18n::tr(
+                                    ui.ctx(),
+                                    "Show in file manager",
+                                    "在文件管理器中显示",
+                                ),
+                            )
+                            .clicked()
+                            {
+                                let path = self.vault.path();
+                                let reveal = path
+                                    .parent()
+                                    .filter(|p| p.is_dir())
+                                    .unwrap_or_else(|| path.as_path());
+                                if crate::platform::reveal_directory(reveal) {
+                                    self.status_msg = i18n::tr(
+                                        ctx,
+                                        "Opened in file manager",
+                                        "已在文件管理器中打开",
+                                    )
+                                    .to_string();
+                                } else {
+                                    self.status_msg = i18n::tr(
+                                        ctx,
+                                        "Could not open file manager",
+                                        "无法打开文件管理器",
+                                    )
+                                    .to_string();
+                                }
+                            }
+                        });
+                    });
                 ui.add_space(theme.spacing_sm());
 
                 // 「新建」与搜索各占一行：窄面板下不再互相挤，高度与弹窗表单控件对齐。
@@ -1077,8 +1136,8 @@ impl CredentialPanel {
                     ui.label(
                         egui::RichText::new(i18n::tr(
                             ui.ctx(),
-                            "No credentials yet — tap New",
-                            "暂无凭证，点「新建」添加",
+                            "No credentials yet — tap New credential",
+                            "暂无凭证，点「新建凭证」添加",
                         ))
                             .size(theme.font_size_body())
                             .color(theme.color_form_hint()),
