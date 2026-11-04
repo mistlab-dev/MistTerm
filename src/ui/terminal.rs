@@ -591,12 +591,25 @@ impl TerminalView {
             .max(font_size)
     }
 
-    fn terminal_cell_metrics(ui: &egui::Ui, font_size: f32, color: egui::Color32) -> (f32, f32) {
+    /// `(cell_w, line_height, wide_char_pad)`。
+    /// `wide_char_pad = (2*cell_w - CJK字形advance).max(0)`，供宽字符 spacer 补齐双宽（#343）。
+    fn terminal_cell_metrics(
+        ui: &egui::Ui,
+        font_size: f32,
+        color: egui::Color32,
+    ) -> (f32, f32, f32) {
         ui.ctx().fonts_mut(|fonts| {
             let font_id = egui::FontId::monospace(font_size);
-            let width_galley = fonts.layout_no_wrap("M".to_string(), font_id, color);
+            // 与 sync_pty_size_with_ui 一致：长串测平均字宽，避免单字符 galley 偏窄。
+            let width_galley =
+                fonts.layout_no_wrap("M".repeat(64), font_id.clone(), color);
+            let cell_w = (width_galley.size().x / 64.0).max(6.0);
             let line_height = Self::measure_terminal_line_height(fonts, font_size, color);
-            ((width_galley.size().x / 64.0).max(6.0), line_height)
+            // 代表汉字：等宽主字体缺字时走 CJK 回退，advance 常 ≠ 2*cell_w。
+            let wide_galley = fonts.layout_no_wrap("中".to_owned(), font_id, color);
+            let wide_advance = wide_galley.size().x.max(0.0);
+            let wide_pad = (2.0 * cell_w - wide_advance).max(0.0);
+            (cell_w, line_height, wide_pad)
         })
     }
 
@@ -1940,8 +1953,8 @@ impl TerminalView {
                     // 必须先按视口同步 PTY 行列，再构建 LayoutJob。
                     // 若先构图再 sync：galley 仍是旧行数，而容器已是新高度 + BOTTOM 对齐 → Tab 下出现大块空白。
                     let shell = terminal_shell_style_from_theme(theme);
-                    let cell_w =
-                        Self::terminal_cell_metrics(ui, self.font_size, theme.text_primary()).0;
+                    let (cell_w, _cell_h, wide_char_pad) =
+                        Self::terminal_cell_metrics(ui, self.font_size, theme.text_primary());
                     self.sync_pty_size_with_ui(
                         ui,
                         egui::vec2(col_w.max(1.0), fit_h.max(1.0)),
@@ -2010,6 +2023,7 @@ impl TerminalView {
                                     self.font_size,
                                     line_height,
                                     cell_w,
+                                    wide_char_pad,
                                     &shell,
                                     self.search_highlight,
                                     selection_arg,
@@ -2041,6 +2055,7 @@ impl TerminalView {
                                 self.font_size,
                                 line_height,
                                 cell_w,
+                                wide_char_pad,
                                 &shell,
                                 self.search_highlight,
                                 selection_arg,
