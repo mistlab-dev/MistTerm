@@ -95,7 +95,9 @@ Components
   cairo-rs 0.18.5                              MIT
   cairo-sys-rs 0.18.2                          MIT
   calloop 0.13.0                               MIT
+  calloop 0.14.5                               MIT
   calloop-wayland-source 0.3.0                 MIT
+  calloop-wayland-source 0.4.1                 MIT
   cbc 0.1.2                                    MIT OR Apache-2.0
   cc 1.6.0                                     MIT OR Apache-2.0
   cfg-expr 0.15.8                              MIT OR Apache-2.0
@@ -564,6 +566,8 @@ Components
   smallvec 1.16.2                              MIT OR Apache-2.0
   smartstring 1.0.1                            MPL-2.0+
   smithay-client-toolkit 0.19.2                MIT
+  smithay-client-toolkit 0.20.0                MIT
+  smithay-clipboard 0.7.3                      MIT
   smol_str 0.2.2                               MIT OR Apache-2.0
   socket2 0.4.10                               MIT OR Apache-2.0
   socket2 0.5.10                               MIT OR Apache-2.0
@@ -674,6 +678,8 @@ Components
   wayland-csd-frame 0.3.0                      MIT
   wayland-cursor 0.31.14                       MIT
   wayland-protocols 0.32.13                    MIT
+  wayland-protocols-experimental 20250721.0.1  MIT
+  wayland-protocols-misc 0.3.12                MIT
   wayland-protocols-plasma 0.3.12              MIT
   wayland-protocols-wlr 0.3.12                 MIT
   wayland-scanner 0.31.11                      MIT
@@ -4245,7 +4251,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ==============================================================================
-Applies to: calloop 0.13.0, smithay-client-toolkit 0.19.2
+Applies to: calloop 0.13.0, calloop 0.14.5, smithay-client-toolkit 0.19.2, smithay-client-toolkit 0.20.0
 ==============================================================================
 
 Copyright (c) 2018 Victor Berger
@@ -4269,7 +4275,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 ==============================================================================
-Applies to: calloop-wayland-source 0.3.0
+Applies to: calloop-wayland-source 0.3.0, calloop-wayland-source 0.4.1
 ==============================================================================
 
 Copyright (c) 2023 Kirill Chibisov
@@ -17329,6 +17335,30 @@ You may add additional accurate notices of copyright ownership.
     defined by the Mozilla Public License, v. 2.0.
 
 ==============================================================================
+Applies to: smithay-clipboard 0.7.3
+==============================================================================
+
+Copyright (c) 2018 Lucas Timmins & Victor Berger
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+
+==============================================================================
 Applies to: stable_deref_trait 1.2.1
 ==============================================================================
 
@@ -20161,7 +20191,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 ==============================================================================
-Applies to: wayland-backend 0.3.17, wayland-client 0.31.15, wayland-cursor 0.31.14, wayland-protocols 0.32.13, wayland-protocols-plasma 0.3.12, wayland-protocols-wlr 0.3.12, wayland-scanner 0.31.11, wayland-sys 0.31.11
+Applies to: wayland-backend 0.3.17, wayland-client 0.31.15, wayland-cursor 0.31.14, wayland-protocols 0.32.13, wayland-protocols-experimental 20250721.0.1, wayland-protocols-misc 0.3.12, wayland-protocols-plasma 0.3.12, wayland-protocols-wlr 0.3.12, wayland-scanner 0.31.11, wayland-sys 0.31.11
 ==============================================================================
 
 Copyright (c) 2015 Elinor Berger
