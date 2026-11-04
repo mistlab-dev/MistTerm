@@ -10367,18 +10367,26 @@ impl MistTermApp {
         let s = ui.available_size();
         let card_w = 420.0_f32.min((s.x - 32.0).max(220.0));
         let has_saved_hosts = !self.session_manager.list_sessions().is_empty();
-        let card_h = (if has_saved_hosts { 258.0_f32 } else { 210.0 }).min(s.y.max(1.0));
+        // #363：主 CTA 一行 + 次入口另起一行，整块居中；勿再把第三钮塞进 left_to_right（会溢到右半屏）。
+        let card_h = (if has_saved_hosts { 280.0_f32 } else { 230.0 }).min(s.y.max(1.0));
         let origin = egui::pos2(
             ui.cursor().min.x + ((s.x - card_w).max(0.0) * 0.5),
             ui.cursor().min.y + ((s.y - card_h).max(0.0) * 0.32),
         );
         let rect = egui::Rect::from_min_size(origin, egui::vec2(card_w, card_h));
         ui.allocate_rect(rect, egui::Sense::hover());
-        let mut card = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(egui::Layout::top_down(egui::Align::Center)));
+        let mut card = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(rect)
+                .layout(egui::Layout::top_down(egui::Align::Center)),
+        );
+        let title_font = crate::platform::ui_font_id(theme.font_size_panel_title() + 6.0);
+        let body_font = crate::platform::ui_font_id(theme.font_size_body());
+        let caption_font = crate::platform::ui_font_id(theme.font_size_caption());
         card.add_space(8.0);
         card.label(
             egui::RichText::new("MistTerm")
-                .size(theme.font_size_panel_title() + 6.0)
+                .font(title_font)
                 .strong()
                 .color(theme.text_primary()),
         );
@@ -10389,64 +10397,52 @@ impl MistTermApp {
                 "Open a local terminal, or add a server.",
                 "先开本机终端，或添加一台服务器。",
             ))
+            .font(body_font)
             .color(theme.text_secondary()),
         );
         card.add_space(18.0);
-        // 与侧栏「新建」同族：主操作实心 Primary，次要描边 Secondary（勿用 chrome_small 幽灵字）。
-        // horizontal 会占满行宽，两列向中线靠拢，与标题同轴。
-        card.allocate_ui_with_layout(
-            egui::vec2(card_w, 40.0),
-            egui::Layout::left_to_right(egui::Align::Center),
-            |ui| {
-                ui.spacing_mut().item_spacing.x = 16.0;
-                ui.columns(2, |cols| {
-                    cols[0].with_layout(
-                        egui::Layout::right_to_left(egui::Align::Center),
-                        |ui| {
-                            if crate::ui::chrome::panel_action_button(
-                                ui,
-                                &theme,
-                                crate::i18n::tr(&ctx, "Local terminal", "本机终端"),
-                            )
-                            .clicked()
-                            {
-                                self.open_local_shell_tab(&ctx);
-                                self.collapse_connection_sidebar();
-                            }
-                        },
-                    );
-                    cols[1].with_layout(
-                        egui::Layout::left_to_right(egui::Align::Center),
-                        |ui| {
-                            if crate::ui::chrome::panel_header_new_button_with_label(
-                                ui,
-                                &theme,
-                                crate::i18n::tr(&ctx, "New connection", "新建连接"),
-                            )
-                            .clicked()
-                            {
-                                self.dialog_flags.new_session = true;
-                                self.sidebar_collapsed = false;
-                                self.sidebar_user_dismissed_responsive = false;
-                            }
-                        },
-                    );
-                });
-                // #335：已有至少一台保存的主机时，空态增加「打开已有连接」第三入口。
-                if has_saved_hosts {
-                    ui.add_space(10.0);
-                    if crate::ui::chrome::panel_action_button(
-                        ui,
-                        &theme,
-                        crate::i18n::tr(&ctx, "Open existing connection", "打开已有连接"),
-                    )
-                    .clicked()
-                    {
-                        self.dialog_flags.open_existing_connection = true;
-                    }
+        // 主 CTA 一行：两列向中线靠拢（与标题同轴）。第三入口绝不放进同一 left_to_right。
+        card.columns(2, |cols| {
+            cols[0].with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.spacing_mut().item_spacing.x = 12.0;
+                if crate::ui::chrome::panel_action_button(
+                    ui,
+                    &theme,
+                    crate::i18n::tr(&ctx, "Local terminal", "本机终端"),
+                )
+                .clicked()
+                {
+                    self.open_local_shell_tab(&ctx);
+                    self.collapse_connection_sidebar();
                 }
-            },
-        );
+            });
+            cols[1].with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                if crate::ui::chrome::panel_header_new_button_with_label(
+                    ui,
+                    &theme,
+                    crate::i18n::tr(&ctx, "New connection", "新建连接"),
+                )
+                .clicked()
+                {
+                    self.dialog_flags.new_session = true;
+                    self.sidebar_collapsed = false;
+                    self.sidebar_user_dismissed_responsive = false;
+                }
+            });
+        });
+        // #335 / #363：次入口单独一行，落在 top_down 居中卡片里，不再溢到右半屏。
+        if has_saved_hosts {
+            card.add_space(12.0);
+            if crate::ui::chrome::panel_action_button(
+                &mut card,
+                &theme,
+                crate::i18n::tr(&ctx, "Open existing connection", "打开已有连接"),
+            )
+            .clicked()
+            {
+                self.dialog_flags.open_existing_connection = true;
+            }
+        }
         card.add_space(12.0);
         card.label(
             egui::RichText::new(crate::i18n::tr(
@@ -10454,7 +10450,7 @@ impl MistTermApp {
                 "Tip: local SSH works without a mistlab.dev account.",
                 "提示：本地 SSH 无需 mistlab.dev 账号。",
             ))
-            .size(theme.font_size_caption())
+            .font(caption_font)
             .color(theme.text_tertiary()),
         );
     }
