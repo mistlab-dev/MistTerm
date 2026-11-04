@@ -7410,11 +7410,27 @@ impl MistTermApp {
             return;
         };
         let session_id = self.tabs[idx].primary_session_id();
+        // #349：本机标签不在 session_manager 里，勿把 local:N 当标题；用标签人话名。
         let name = self
             .session_manager
             .get_session(&session_id)
             .map(|s| s.name.clone())
-            .unwrap_or(session_id.clone());
+            .or_else(|| {
+                self.tabs.get(idx).and_then(|t| {
+                    t.panes
+                        .iter()
+                        .find(|p| p.session_id == session_id)
+                        .map(|p| p.title.clone())
+                        .filter(|s| !s.trim().is_empty())
+                })
+            })
+            .unwrap_or_else(|| {
+                if session_id.starts_with("local:") {
+                    crate::i18n::tr(ctx, "Local Shell", "本机终端").to_string()
+                } else {
+                    session_id.clone()
+                }
+            });
         self.flush_session_log_buffers_for_session(&session_id);
         self.session_log_dialog
             .open_for(ctx, &session_id, &name, &self.session_log_settings);
