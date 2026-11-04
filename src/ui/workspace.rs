@@ -15,21 +15,20 @@ impl MistTermApp {
         theme: &crate::ui::theme::Theme,
     ) {
         // 顶栏：
-        // - 普通模式：非 macOS 显示窗口内菜单；macOS 用系统菜单栏(应用内 top_chrome 高度 0)。
-        // - 沉浸式：Win/Linux 关掉系统边框，自绘标题栏并把会话标签放进去；macOS 仍保留系统标题栏。
+        // - 普通模式：非 macOS 显示窗口内菜单；macOS 用透明系统标题栏 + fullsize content view，
+        //   会话标签画在 top_chrome（红绿灯右侧）。
+        // - 沉浸式：Win/Linux 关掉系统边框，自绘标题栏并把会话标签放进去；macOS 仍走透明标题栏路径。
         let pending = self.ssh_pending_import_count();
         let _ = pending; // SSH 待导入改走右下角需确认 Toast，顶栏不再显示 chip
         let immersive = self.activity_rail_collapsed;
         self.sync_window_decorations_for_immersive(ctx, immersive);
         let custom_caption = immersive && !cfg!(target_os = "macos");
-        // macOS 用 fullsize content view：标签始终画在标题栏那一行(红绿灯右侧)。
+        // macOS 用 fullsize content view：标签始终画在（透明）标题栏那一行(红绿灯右侧)。
         let tabs_in_top = immersive || cfg!(target_os = "macos");
         let top_chrome_height = if tabs_in_top {
-            if custom_caption {
-                theme.title_bar_height().max(theme.size_tab_bar_row_h())
-            } else {
-                theme.size_tab_bar_row_h()
-            }
+            // Win/Linux 自绘标题栏、以及 macOS 普通窗（tabs_in_top && !custom_caption）：
+            // 高度取 title_bar_height 与 tab 行高的较大值，避免矮于红绿灯区（#325）。
+            theme.title_bar_height().max(theme.size_tab_bar_row_h())
         } else if cfg!(target_os = "macos") {
             0.0
         } else {
