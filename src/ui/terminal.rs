@@ -838,6 +838,14 @@ impl TerminalView {
                     .desired_width(ime_rect.width().max(8.0)),
             );
         });
+        // #367: focused IME TextEdit may have applied Event::Paste into ime_capture.
+        // We always clear that buffer (preedit must not leak to PTY). If an earlier
+        // shortcut route missed ⌘V, forward the leftover Paste payload now.
+        let leftover_paste =
+            ui.input_mut(crate::ui::terminal_keys::take_leftover_paste_event);
+        if let Some(text) = leftover_paste {
+            self.paste_text(&text, ui.ctx());
+        }
         ui.memory_mut(|m| {
             m.set_focus_lock_filter(
                 ime_id,
