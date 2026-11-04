@@ -8908,7 +8908,7 @@ impl MistTermApp {
                         theme,
                         crate::ui::icons::IconId::Fragment,
                         self.fragment_state.show_fragment_panel,
-                        &tip(menu.fragment_panel, Some(crate::platform::accel("K"))),
+                        &tip(menu.fragment_panel, None),
                         crate::i18n::tr(ctx, "Snips", "片段"),
                     )
                     .clicked()
@@ -8920,10 +8920,7 @@ impl MistTermApp {
                         theme,
                         crate::ui::icons::IconId::Folder,
                         self.show_sftp_panel,
-                        &tip(
-                            menu.sftp_panel,
-                            Some(crate::platform::accel_shift("S")),
-                        ),
+                        &tip(menu.sftp_panel, None),
                         crate::i18n::tr(ctx, "Files", "文件"),
                     )
                     .clicked()
@@ -10060,13 +10057,6 @@ impl eframe::App for MistTermApp {
                         }
                     });
                 }
-            }
-            if ctx.input(|i| {
-                self.app_shortcut_overrides_terminal(i)
-                    && Self::input_primary_mod(i)
-                    && i.key_pressed(egui::Key::H)
-            }) {
-                self.dialog_flags.about = true;
             }
             if ctx.input(|i| {
                 self.app_shortcut_overrides_terminal(i)

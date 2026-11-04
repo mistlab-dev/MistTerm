@@ -115,7 +115,7 @@ MistTerm 是一款 **SSH 终端客户端**，帮助您：
 | AI 助手 | **Ctrl+Shift+A** 或活动栏「AI」 |
 | 显示/隐藏活动栏 | **Ctrl+B**（Mac：**⌘B**）或 **视图** 菜单 |
 | 偏好设置 | **Ctrl+,** 或活动栏底部设置 |
-| 帮助与快捷键 | **帮助 → 快速入门 / 键盘快捷键** 或 **Ctrl+H** |
+| 帮助与快捷键 | **帮助 → 快速入门 / 键盘快捷键 / 关于** |
 
 ![侧栏会话列表](screenshots/20-sidebar-sessions.png)
 
@@ -534,7 +534,7 @@ MistTerm 有两层命令安全检查：本地检查用于快捷提示，服务�
 
 *图 13-1：偏好设置*
 
-- **Ctrl+H** 查看关于与内置快捷键说明  
+- **帮助 → 关于** 查看关于与内置快捷键说明  
 
 ![关于 Mist](screenshots/14-about.png)
 
@@ -595,7 +595,7 @@ MistTerm 有两层命令安全检查：本地检查用于快捷提示，服务�
 | **Ctrl+Shift+L** | 终端选区发送到 AI |
 | **Ctrl+Shift+D** / **Ctrl+Shift+U**（Mac：**⌘⇧D** / **⌘⇧U**） | 终端左右 / 上下分屏 |
 | **Ctrl+,** | 偏好设置 |
-| **Ctrl+H** | 关于与快捷键说明 |
+| **帮助 → 关于** | 关于与快捷键说明（不用 Ctrl+H；Mac 上 ⌘H 为系统隐藏窗口） |
 | **Alt+B** / **Alt+F** | 终端聚焦时发给 shell，按词向左 / 向右跳（Mac：**Option+B** / **Option+F**） |
 | **Alt+D** / **Alt+Backspace** | 终端聚焦时发给 shell，向右 / 向左按词删除（Mac 用 **Option**） |
 | **Alt+.** | 终端聚焦时发给 shell，插入上一条命令的最后参数（Mac：**Option+.**） |

@@ -159,7 +159,15 @@ impl MistTermApp {
                 self.toggle_terminal_search();
             }
             ui.separator();
-            if crate::ui::chrome::popup_menu_button(ui, theme, l.preferences).clicked() {
+            let prefs_accel = crate::platform::accel_literal(",");
+            if crate::ui::chrome::popup_menu_button_shortcut(
+                ui,
+                theme,
+                l.preferences,
+                Some(&prefs_accel),
+            )
+            .clicked()
+            {
                 self.open_preferences_dialog();
                 ui.close();
             }
@@ -215,14 +223,7 @@ impl MistTermApp {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
             }
             ui.separator();
-            if crate::ui::chrome::popup_menu_button_accel_shift(
-                ui,
-                theme,
-                l.sftp_panel,
-                "s",
-            )
-            .clicked()
-            {
+            if crate::ui::chrome::popup_menu_button(ui, theme, l.sftp_panel).clicked() {
                 self.toggle_sftp_panel(ctx);
             }
             if crate::ui::chrome::menu_toggle_item(
@@ -235,14 +236,7 @@ impl MistTermApp {
             {
                 self.toggle_port_forward_panel(ctx);
             }
-            if crate::ui::chrome::popup_menu_button_accel(
-                ui,
-                theme,
-                l.fragment_panel,
-                "k",
-            )
-            .clicked()
-            {
+            if crate::ui::chrome::popup_menu_button(ui, theme, l.fragment_panel).clicked() {
                 self.toggle_fragment_sidebar(ctx);
             }
             if crate::ui::chrome::menu_toggle_item(

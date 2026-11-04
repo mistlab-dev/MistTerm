@@ -113,7 +113,7 @@ Do not edit these files manually; use the in-app interface to make changes.
 | Command snippets | Bottom bar **Snippets**, or type a snippet name in the command palette |
 | AI Assistant | **Ctrl+Shift+A** or bottom bar **AI** |
 | Preferences | **Ctrl+,** |
-| Help & shortcuts | **Help → Quick Start / Keyboard Shortcuts** or **Ctrl+H** |
+| Help & shortcuts | **Help → Quick Start / Keyboard Shortcuts / About** |
 
 ![Sidebar session list](screenshots/20-sidebar-sessions.png)
 
@@ -529,7 +529,7 @@ On panic, MistTerm writes a report under `logs/crash-reports/` in the config dir
 
 *Fig 13-1: Preferences*
 
-- **Ctrl+H** to view About and built-in shortcut guide
+- **Help → About** to view About and the built-in shortcut guide
 
 ![About Mist](screenshots/14-about.png)
 
@@ -589,7 +589,7 @@ The following uses **Windows** keys; on macOS, replace **Ctrl** with **⌘** (e.
 | **Ctrl+Shift+L** | Send terminal selection to AI |
 | **Ctrl+Shift+D** / **Ctrl+Shift+U** (Mac: **⌘⇧D** / **⌘⇧U**) | Split terminal left/right / top/bottom |
 | **Ctrl+,** | Preferences |
-| **Ctrl+H** | About & shortcut guide |
+| **Help → About** | About & shortcut guide (no Ctrl+H; on Mac, ⌘H hides the app) |
 | **Alt+B** / **Alt+F** | While the terminal is focused, sent to the shell to move by word (Mac: **Option+B** / **Option+F**) |
 | **Alt+D** / **Alt+Backspace** | While the terminal is focused, sent to the shell to delete a word forward / backward (Mac: **Option**) |
 | **Alt+.** | While the terminal is focused, sent to the shell to insert the previous command's last argument (Mac: **Option+.**) |
