@@ -695,6 +695,8 @@ fn localize_log_markers_for_display(text: &str) -> String {
         ("[fullscreen TUI ended]", "[全屏 TUI 结束]"),
         ("<- session connected", "<- 会话已连接"),
         ("<- session disconnected", "<- 会话已断开"),
+        // #349：文件头注释只改展示，不改落盘格式。
+        ("# MistTerm session log — ", "# MistTerm 会话日志 — "),
     ];
     for (en, zh) in pairs {
         out = out.replace(en, zh);
@@ -755,6 +757,21 @@ mod tests {
         assert!(got.contains("已跳过 3 行重复内容"), "{got}");
         assert!(!got.contains("skipped"), "{got}");
         crate::i18n::set_process_language(crate::i18n::UiLanguage::En);
+    }
+
+    #[test]
+    fn localize_session_log_file_header_in_zh() {
+        crate::i18n::set_process_language(crate::i18n::UiLanguage::Zh);
+        let raw = "# MistTerm session log — 本机终端 (local:10000)\n";
+        let got = log_text_for_display(raw);
+        assert!(
+            got.contains("# MistTerm 会话日志 — 本机终端 (local:10000)"),
+            "{got}"
+        );
+        assert!(!got.contains("session log"), "{got}");
+        crate::i18n::set_process_language(crate::i18n::UiLanguage::En);
+        let en = log_text_for_display(raw);
+        assert!(en.contains("# MistTerm session log — "), "{en}");
     }
 
     #[test]
