@@ -209,3 +209,83 @@ mod foreground_tests {
         assert!(should_reconnect_on_activation(ON, true, true, 0, 5));
     }
 }
+
+/// #326：同一帧内标签菜单动作的互斥判定。
+///
+/// egui 0.37 弹窗在 macOS 上出现过点击归属串扰（点「重新连接」却触发「左右分屏」，
+/// 原窗格残留断开 + 新窗格 `名称 (2)`）。UI 层收集到哪些动作就交给这里裁决；
+/// 优先级：重连 > 断开 > 关闭窗格 > 分屏。重连和断开天然互斥（重连自己会先断开），
+/// 重连帧里再分屏必然是串扰。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TabMenuActions {
+    pub reconnect: bool,
+    pub disconnect: bool,
+    pub close_pane: bool,
+    pub split_h: bool,
+    pub split_v: bool,
+}
+
+impl TabMenuActions {
+    /// 返回去串扰后的动作；重连帧吞掉其余全部动作。
+    pub fn resolve(mut self) -> Self {
+        if self.reconnect {
+            self.disconnect = false;
+            self.close_pane = false;
+            self.split_h = false;
+            self.split_v = false;
+        }
+        self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reconnect_wins_over_disconnect_and_splits() {
+        // 复现 #326 的串扰组合：重连 + 左右分屏同时命中。
+        let got = TabMenuActions {
+            reconnect: true,
+            disconnect: false,
+            close_pane: false,
+            split_h: true,
+            split_v: false,
+        }
+        .resolve();
+        assert!(got.reconnect);
+        assert!(!got.split_h, "重连帧不得再触发分屏（#326）");
+        assert!(!got.split_v);
+        assert!(!got.disconnect);
+        assert!(!got.close_pane);
+    }
+
+    #[test]
+    fn reconnect_alone_passes_through() {
+        let got = TabMenuActions {
+            reconnect: true,
+            ..Default::default()
+        }
+        .resolve();
+        assert!(got.reconnect);
+        assert!(!got.disconnect);
+    }
+
+    #[test]
+    fn disconnect_without_reconnect_is_kept() {
+        let got = TabMenuActions {
+            disconnect: true,
+            split_h: true,
+            ..Default::default()
+        }
+        .resolve();
+        assert!(got.disconnect);
+        assert!(got.split_h, "没有重连串扰时其他动作原样保留");
+    }
+
+    #[test]
+    fn empty_actions_stay_empty() {
+        let got = TabMenuActions::default().resolve();
+        assert_eq!(got, TabMenuActions::default());
+    }
+}
