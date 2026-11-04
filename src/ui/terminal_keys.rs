@@ -524,6 +524,19 @@ impl ImePreedit {
     }
 }
 
+
+/// Keep keyboard + IME on the terminal capture widget without cancelling composition.
+///
+/// egui 0.37's [`egui::Memory::request_focus`] always calls `interrupt_ime()`. The
+/// terminal used to call it every frame while focused; egui-winit then toggles
+/// `set_ime_allowed(false/true)` and macOS/Sogou preedit never sticks (#352).
+/// Only request focus when the capture box does not already own it.
+pub fn ensure_terminal_ime_focus(memory: &mut egui::Memory, ime_id: egui::Id) {
+    if !memory.has_focus(ime_id) {
+        memory.request_focus(ime_id);
+    }
+}
+
 /// 与 `vendor/winit` 里 X11 / macOS 补丁同一条策略：Control 已按下、键不是修饰键本身、
 /// 也不是 XIM 的 keycode 0 提交事件时，不把该键交给输入法。
 /// 字母、空格、退格、方向键仍走 IME。macOS 在 preedit 期间据此跳过
@@ -1073,6 +1086,74 @@ mod tests {
             preedit.is_empty(),
             "empty CompositionUpdate clears a cancelled preedit"
         );
+    }
+
+
+    /// #352: egui 0.37 request_focus always interrupt_ime. Re-requesting every
+    /// frame while the terminal IME box already owns focus cancels preedit
+    /// (egui-winit toggles set_ime_allowed). ensure_terminal_ime_focus must not.
+    #[test]
+    fn ensure_terminal_ime_focus_does_not_interrupt_when_already_focused() {
+        let ctx = egui::Context::default();
+        let ime_id = egui::Id::unique("ime_focus_interrupt_352");
+
+        // Warm-up: create + focus the capture TextEdit so PlatformOutput::ime is set.
+        let mut warm = ctx.run_pass(egui::RawInput::default(), |ctx| {
+            ctx.root_ui(|root| {
+                egui::CentralPanel::default().show(root, |ui| {
+                    let mut t = String::new();
+                    ui.add(egui::TextEdit::singleline(&mut t).id(ime_id).lock_focus(true));
+                });
+            });
+            ctx.memory_mut(|m| m.request_focus(ime_id));
+        });
+        warm.textures_delta.clear();
+        assert!(ctx.memory(|m| m.has_focus(ime_id)));
+
+        // Bad path (old terminal): request_focus every frame → interrupt.
+        let mut bad = ctx.run_pass(egui::RawInput::default(), |ctx| {
+            ctx.root_ui(|root| {
+                egui::CentralPanel::default().show(root, |ui| {
+                    let mut t = String::new();
+                    ui.add(egui::TextEdit::singleline(&mut t).id(ime_id).lock_focus(true));
+                });
+            });
+            ctx.memory_mut(|m| m.request_focus(ime_id));
+        });
+        bad.textures_delta.clear();
+        let bad_interrupt = bad
+            .platform_output
+            .ime
+            .as_ref()
+            .map(|ime| ime.should_interrupt_composition)
+            .unwrap_or(false);
+        assert!(
+            bad_interrupt,
+            "egui 0.37 contract: request_focus while focused must interrupt IME"
+        );
+
+        // Good path: ensure_terminal_ime_focus skips when already focused.
+        let mut good = ctx.run_pass(egui::RawInput::default(), |ctx| {
+            ctx.root_ui(|root| {
+                egui::CentralPanel::default().show(root, |ui| {
+                    let mut t = String::new();
+                    ui.add(egui::TextEdit::singleline(&mut t).id(ime_id).lock_focus(true));
+                });
+            });
+            ctx.memory_mut(|m| ensure_terminal_ime_focus(m, ime_id));
+        });
+        good.textures_delta.clear();
+        let good_interrupt = good
+            .platform_output
+            .ime
+            .as_ref()
+            .map(|ime| ime.should_interrupt_composition)
+            .unwrap_or(true);
+        assert!(
+            !good_interrupt,
+            "ensure_terminal_ime_focus must not interrupt an owned IME composition"
+        );
+        assert!(ctx.memory(|m| m.has_focus(ime_id)));
     }
 
     #[test]

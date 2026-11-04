@@ -2375,7 +2375,10 @@ impl TerminalView {
                             }
 
                             if self.terminal_focused {
-                                ui.memory_mut(|m| m.request_focus(ime_id));
+                                // egui 0.37: bare request_focus interrupts IME every frame (#352).
+                                ui.memory_mut(|m| {
+                                    crate::ui::terminal_keys::ensure_terminal_ime_focus(m, ime_id)
+                                });
                             }
 
                             // 块状闪烁光标(UI 层绘制，勿再用 │ 字符占位)。
