@@ -561,27 +561,7 @@ impl MonitorPanel {
                                         {
                                             *open = false;
                                         }
-                                        if self.monitor.is_some() {
-                                            if crate::ui::chrome::panel_action_icon_button(
-                                                ui,
-                                                theme,
-                                                crate::ui::icons::IconId::Api,
-                                                crate::i18n::tr(
-                                                    ui.ctx(),
-                                                    "Send snapshot to AI",
-                                                    "快照发送到 AI",
-                                                ),
-                                            )
-                                            .on_hover_text(crate::i18n::tr(
-                                                ui.ctx(),
-                                                "Attach current metrics to the AI panel",
-                                                "将当前监控指标附带至 AI 面板",
-                                            ))
-                                            .clicked()
-                                            {
-                                                self.pending_send_to_ai = true;
-                                            }
-                                        }
+                                        // #376 P2：标题栏只留标题+关闭；快照按钮下移到标题下工具条。
                                     },
                                 );
                             });
@@ -613,6 +593,28 @@ impl MonitorPanel {
             ui.vertical(|ui| {
                 layout_util::set_width_to_available(ui);
                 ui.horizontal(|ui| {
+                    // #376 P2：「快照发送到 AI」从标题栏下移到此处工具条，可带说明。
+                    if self.monitor.is_some() {
+                        if crate::ui::chrome::panel_action_icon_button(
+                            ui,
+                            theme,
+                            crate::ui::icons::IconId::Api,
+                            crate::i18n::tr(
+                                ui.ctx(),
+                                "Send snapshot to AI",
+                                "快照发送到 AI",
+                            ),
+                        )
+                        .on_hover_text(crate::i18n::tr(
+                            ui.ctx(),
+                            "Attach current metrics to the AI panel",
+                            "将当前监控指标附带至 AI 面板",
+                        ))
+                        .clicked()
+                        {
+                            self.pending_send_to_ai = true;
+                        }
+                    }
                     crate::ui::chrome::form_checkbox(
                         ui,
                         theme,

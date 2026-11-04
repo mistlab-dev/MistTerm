@@ -18,6 +18,8 @@ pub struct CommandHistoryOverlay {
     pub match_index: usize,
     /// 默认开：只看活动标签对应会话的历史。
     pub filter_active_tab: bool,
+    /// #376 P2：仅显示成功（exit 0）的命令，默认关；不改入库策略。
+    pub filter_success_only: bool,
     /// 勾选的历史条目键：`executed_at|command`
     checked: HashSet<String>,
     /// 组成片段前可改标题。
@@ -36,6 +38,7 @@ impl Default for CommandHistoryOverlay {
             selected: 0,
             match_index: 0,
             filter_active_tab: true,
+            filter_success_only: false,
             checked: HashSet::new(),
             compose_title: String::new(),
             compose_title_customized: false,
@@ -88,7 +91,11 @@ impl CommandHistoryOverlay {
         } else {
             None
         };
-        let results = history.search_filtered(&self.query, true, session_filter);
+        let mut results = history.search_filtered(&self.query, true, session_filter);
+        // #376 P2：仅成功（exit 0）筛选，默认关；纯列表过滤，不改入库。
+        if self.filter_success_only {
+            results.retain(|e| e.success);
+        }
         let fuzzy_suggestions = if results.is_empty()
             && !self.query.trim().is_empty()
             && session_filter.is_none()
@@ -217,6 +224,18 @@ impl CommandHistoryOverlay {
                             self.match_index = 0;
                         }
                     });
+                    // #376 P2：仅成功（exit 0）筛选，默认关；只过滤列表，不改入库策略。
+                    if crate::ui::chrome::form_checkbox(
+                        ui,
+                        theme,
+                        &mut self.filter_success_only,
+                        crate::i18n::tr(ctx, "Successful only", "仅成功"),
+                    )
+                    .changed()
+                    {
+                        self.selected = 0;
+                        self.match_index = 0;
+                    }
                     if !filter_enabled {
                         ui.label(
                             egui::RichText::new(crate::i18n::tr(
