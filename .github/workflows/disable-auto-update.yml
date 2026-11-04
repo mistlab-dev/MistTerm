@@ -1,0 +1,126 @@
+name: Disable auto_update in manifests
+
+# One-shot: set every platform auto_update=false on the live v* release
+# latest.json, re-sign, upload to GitHub Release, and rsync to mistlab mirror.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version (no leading v)"
+        required: true
+        default: "1.3.7"
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: disable-auto-update-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  disable:
+    name: Disable auto_update
+    runs-on: ubuntu-24.04
+    environment: release
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install minisign
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends minisign rsync openssh-client
+
+      - name: Download and patch latest.json
+        env:
+          VERSION_INPUT: ${{ inputs.version }}
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${VERSION_INPUT#v}"
+          echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
+          mkdir -p dist
+          gh release download "v${VERSION}" --repo "$GITHUB_REPOSITORY" --pattern latest.json --dir dist --clobber
+          python3 - <<'PY'
+          import json, pathlib
+          p = pathlib.Path("dist/latest.json")
+          m = json.loads(p.read_text())
+          for k, plat in m.get("platforms", {}).items():
+              plat["auto_update"] = False
+          p.write_text(json.dumps(m, indent=2, ensure_ascii=False) + "\n")
+          print("version", m["version"], "platforms", len(m["platforms"]))
+          for k, plat in m["platforms"].items():
+              print(k, plat.get("auto_update"))
+          PY
+          python3 scripts/gen-update-manifest.py --trusted-comment-of dist/latest.json > dist/latest.json.tc
+          echo "Trusted comment: $(cat dist/latest.json.tc)"
+
+      - name: Sign latest.json
+        shell: bash
+        env:
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+          MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          umask 077
+          KEY="$RUNNER_TEMP/minisign.key"
+          printf '%s\n' "$MINISIGN_SECRET_KEY" > "$KEY"
+          trap 'rm -f "$KEY"' EXIT
+          TC="$(cat dist/latest.json.tc)"
+          printf '%s\n' "$MINISIGN_PASSWORD" | minisign -S -s "$KEY" -m dist/latest.json -t "$TC" -c "mistterm update manifest"
+          minisign -V -p resources/update/minisign-primary.pub -m dist/latest.json
+          grep -q "^trusted comment: $(cat dist/latest.json.tc)\$" dist/latest.json.minisig
+
+      - name: Upload to GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release upload "v${VERSION}" dist/latest.json dist/latest.json.minisig --repo "$GITHUB_REPOSITORY" --clobber
+
+      - name: Sync mistlab mirror manifests
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${DEPLOY_HOST:-}" ] || [ -z "${DEPLOY_SSH_KEY:-}" ]; then
+            echo "::error::DEPLOY_* secrets missing; signed files are on the GitHub Release only"
+            exit 1
+          fi
+          umask 077
+          KEY="$RUNNER_TEMP/deploy.key"
+          printf '%s\n' "$DEPLOY_SSH_KEY" > "$KEY"
+          KH="$RUNNER_TEMP/known_hosts"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$KH"
+          trap 'rm -f "$KEY"' EXIT
+          BASE="${DEPLOY_PATH:-/var/www/mistlab/downloads/mistterm}"
+          DEST="${DEPLOY_USER}@${DEPLOY_HOST}"
+          SSH=(ssh -i "$KEY" -o UserKnownHostsFile="$KH" -o StrictHostKeyChecking=yes)
+          RSYNC=(rsync -av -e "ssh -i $KEY -o UserKnownHostsFile=$KH -o StrictHostKeyChecking=yes")
+          # version dir + stable channel + root aliases used by site/clients
+          "${SSH[@]}" "$DEST" "mkdir -p '${BASE}/v${VERSION}' '${BASE}/stable'"
+          "${RSYNC[@]}" dist/latest.json dist/latest.json.minisig "$DEST:${BASE}/v${VERSION}/"
+          "${RSYNC[@]}" dist/latest.json dist/latest.json.minisig "$DEST:${BASE}/stable/"
+          "${RSYNC[@]}" dist/latest.json dist/latest.json.minisig "$DEST:${BASE}/"
+          # stable.json is a duplicate of the channel tip
+          scp -i "$KEY" -o UserKnownHostsFile="$KH" -o StrictHostKeyChecking=yes \
+            dist/latest.json "$DEST:${BASE}/stable.json"
+          scp -i "$KEY" -o UserKnownHostsFile="$KH" -o StrictHostKeyChecking=yes \
+            dist/latest.json.minisig "$DEST:${BASE}/stable.json.minisig"
+          "${SSH[@]}" "$DEST" "ls -la '${BASE}/stable/latest.json' '${BASE}/latest.json' '${BASE}/v${VERSION}/latest.json'"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: disabled-auto-update-manifest
+          path: |
+            dist/latest.json
+            dist/latest.json.minisig
+            dist/latest.json.tc
