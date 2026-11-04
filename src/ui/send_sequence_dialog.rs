@@ -64,9 +64,16 @@ impl SendSequenceDialog {
         let mut action = SendSequenceUiAction::None;
         let mut keep_open = self.open;
         let mut should_close = false;
-        let modal_sz = egui::vec2(760.0, 560.0);
+        // #346：避开自绘顶栏菜单（与凭证 Dock 不同，本弹窗会压进 content_rect 顶部）。
+        let (modal_sz, modal_pos) = crate::ui::layout_util::modal_manager_size_and_pos(
+            ctx,
+            theme,
+            egui::vec2(760.0, 560.0),
+        );
         crate::ui::chrome::modal_window("send_sequence_dialog", theme, ctx)
+            .constrain_to(crate::ui::layout_util::modal_safe_constrain_rect(ctx, theme))
             .open(&mut keep_open)
+            .default_pos(modal_pos)
             .movable(true)
             .resizable(false)
             .fixed_size(modal_sz)
