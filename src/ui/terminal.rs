@@ -1885,11 +1885,7 @@ impl TerminalView {
             )
         });
         if let Some(step) = wheel {
-            let new_size = (self.font_size + step).clamp(
-                crate::platform::TERMINAL_FONT_SIZE_MIN,
-                crate::platform::TERMINAL_FONT_SIZE_MAX,
-            );
-            self.set_font_size(new_size);
+            self.set_font_size(self.font_size + step);
         }
 
         if capture_pty_keyboard {
@@ -4708,7 +4704,10 @@ impl TerminalView {
     }
 
     pub fn set_font_size(&mut self, size: f32) {
-        let n = size.clamp(10.0, 24.0);
+        let n = size.clamp(
+            crate::platform::TERMINAL_FONT_SIZE_MIN,
+            crate::platform::TERMINAL_FONT_SIZE_MAX,
+        );
         if (n - self.font_size).abs() > f32::EPSILON {
             self.visual_layout_cache = None;
         }
@@ -4733,7 +4732,9 @@ impl TerminalView {
         connected_or_buffered: bool,
     ) -> Option<f32> {
         let zoom = i.zoom_delta();
-        if zoom.abs() <= f32::EPSILON
+        // egui 约定 zoom==1.0 表示「无缩放」（默认 zoom_factor_delta=1.0），
+        // 只按住修饰键没有滚轮时每帧都是 1.0，必须放行而不是当成缩小。
+        if (zoom - 1.0).abs() <= f32::EPSILON
             || !terminal_focused
             || !connected_or_buffered
             || !(i.modifiers.ctrl || i.modifiers.mac_cmd)
@@ -5830,15 +5831,28 @@ mod wheel_zoom_tests {
     }
 
     #[test]
-    fn no_zoom_delta_gives_none() {
+    fn idle_zoom_identity_gives_none() {
+        // egui 约定 zoom==1.0 = 无缩放：只按住 Ctrl/⌘ 没有滚轮时每帧都是 1.0，
+        // 不得当成缩小（#375 复审阻塞项）。
         let i = input_with_zoom(
             egui::Modifiers {
                 ctrl: true,
                 ..Default::default()
             },
-            0.0,
+            1.0,
         );
-        // zoom=0 会被 egui 归一化为无事件；此处直接验证零值不触发步进。
+        assert_eq!(TerminalView::terminal_wheel_zoom(&i, true, true), None);
+    }
+
+    #[test]
+    fn mac_cmd_idle_zoom_identity_gives_none() {
+        let i = input_with_zoom(
+            egui::Modifiers {
+                mac_cmd: true,
+                ..Default::default()
+            },
+            1.0,
+        );
         assert_eq!(TerminalView::terminal_wheel_zoom(&i, true, true), None);
     }
 
