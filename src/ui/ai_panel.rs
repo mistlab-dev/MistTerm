@@ -2494,7 +2494,7 @@ impl AiPanel {
 
                 ui.add_space(theme.spacing_sm());
 
-                // Footer：安全提示 + 操作按钮
+                // Footer：安全提示（#376 P1：按钮拆出，贴卡底右对齐）
                 egui::Frame::NONE
                     .fill(theme.color_ops_sub_fill())
                     .corner_radius(egui::CornerRadius::same(5))
@@ -2509,35 +2509,41 @@ impl AiPanel {
                             .size(theme.font_size_caption())
                             .color(theme.text_tertiary()),
                         );
-                        ui.add_space(4.0);
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            let confirm_label = if plan.l2_armed {
-                                i18n::tr(ctx, "I understand — run", "我已知晓，仍然执行 ↵")
-                            } else {
-                                i18n::tr(ctx, "Confirm and Run ↵", "确认并执行 ↵")
-                            };
-                            if crate::ui::chrome::panel_action_primary_button_ex(
-                                ui,
-                                theme,
-                                confirm_label,
-                                !executing && !plan.command_edit.trim().is_empty(),
-                            )
-                            .clicked()
-                            {
-                                clicked_confirm = true;
-                            }
-                            if crate::ui::chrome::panel_action_button_ex(
-                                ui,
-                                theme,
-                                i18n::tr(ctx, "Cancel", "放弃"),
-                                !executing,
-                            )
-                            .clicked()
-                            {
-                                clicked_cancel = true;
-                            }
-                        });
                     });
+
+                // #376 P1：操作按钮贴计划卡底部右对齐——「确认并执行」实心主按钮，
+                // 「放弃」次按钮；不再悬在卡内大片空白中间。
+                ui.add_space(theme.spacing_sm());
+                ui.with_layout(
+                    egui::Layout::right_to_left(egui::Align::Center),
+                    |ui| {
+                        let confirm_label = if plan.l2_armed {
+                            i18n::tr(ctx, "I understand — run", "我已知晓，仍然执行 ↵")
+                        } else {
+                            i18n::tr(ctx, "Confirm and Run ↵", "确认并执行 ↵")
+                        };
+                        if crate::ui::chrome::panel_action_primary_button_ex(
+                            ui,
+                            theme,
+                            confirm_label,
+                            !executing && !plan.command_edit.trim().is_empty(),
+                        )
+                        .clicked()
+                        {
+                            clicked_confirm = true;
+                        }
+                        if crate::ui::chrome::panel_action_button_ex(
+                            ui,
+                            theme,
+                            i18n::tr(ctx, "Cancel", "放弃"),
+                            !executing,
+                        )
+                        .clicked()
+                        {
+                            clicked_cancel = true;
+                        }
+                    },
+                );
             });
 
         if clicked_confirm {

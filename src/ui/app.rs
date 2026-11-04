@@ -7131,10 +7131,8 @@ impl MistTermApp {
         let Some(pane) = self.tabs.get_mut(idx).and_then(|t| t.active_pane_mut()) else {
             return;
         };
-        if pane.terminal.menu_copy_to_clipboard(ctx) {
-            self.notify_auto(
-                crate::i18n::tr(ctx, "Copied to clipboard", "已复制到剪贴板").to_string(),
-            );
+        if let Some(text) = pane.terminal.menu_copy_to_clipboard(ctx) {
+            self.notify_auto(crate::ui::terminal::TerminalView::copy_toast_label(ctx, &text));
         } else {
             self.notify_auto(
                 crate::i18n::tr(ctx, "Terminal has nothing to copy", "终端无内容可复制")
@@ -7178,11 +7176,9 @@ impl MistTermApp {
             if let Ok(mut clip) = arboard::Clipboard::new() {
                 let _ = clip.set_text(text.clone());
             }
-            ctx.copy_text(text);
+            ctx.copy_text(text.clone());
         }
-        self.notify_auto(
-            crate::i18n::tr(ctx, "Copied to clipboard", "已复制到剪贴板").to_string(),
-        );
+        self.notify_auto(crate::ui::terminal::TerminalView::copy_toast_label(ctx, &text));
     }
 
     pub(crate) fn menu_paste_to_terminal(&mut self, ctx: &egui::Context) {
@@ -7193,7 +7189,11 @@ impl MistTermApp {
             return;
         };
         if let Some(pane) = self.tabs.get_mut(idx).and_then(|t| t.active_pane_mut()) {
-            pane.terminal.menu_paste_from_clipboard(ctx);
+            let text = pane.terminal.menu_paste_text_from_clipboard();
+            if !text.is_empty() {
+                pane.terminal.paste_text(&text, ctx);
+                self.notify_auto(crate::ui::terminal::TerminalView::paste_toast_label(ctx, &text));
+            }
         }
     }
 
@@ -10218,6 +10218,7 @@ impl eframe::App for MistTermApp {
                 .is_enabled(crate::modules::display_link::MODULE_ID),
             self.module_registry
                 .is_enabled(crate::modules::cmd_audit_local::MODULE_ID),
+            Some(&self.module_registry),
             &mut self.app_settings,
         );
         self.poll_paste_history_notes();
