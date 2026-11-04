@@ -72,12 +72,14 @@ pub fn tab_bar_new_tab_button(ui: &mut Ui, theme: &Theme) -> Response {
     let row_h = theme.size_tab_bar_row_h();
     let icon = theme.size_tab_bar_icon_btn();
     let accel = crate::platform::accel("T");
+    // #377 软注：新建会话快捷键是 ⌘N / Ctrl+N，按平台取文案避免混拼。
+    let accel_n = crate::platform::accel("N");
     let tooltip = match crate::i18n::language(ui.ctx()) {
         crate::i18n::UiLanguage::En => format!(
-            "New session · {accel}/⌘N — pick which connection to open",
+            "New session · {accel_n} — pick which connection to open ({accel} opens the current selection)",
         ),
         crate::i18n::UiLanguage::Zh => format!(
-            "新建会话 · {accel}/⌘N — 点此选择连哪台",
+            "新建会话 · {accel_n} — 点此选择连哪台（{accel} 打开当前选中的连接）",
         ),
     };
     ui.allocate_ui_with_layout(
