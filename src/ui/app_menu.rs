@@ -21,51 +21,6 @@ impl MistTermApp {
 
         ui.menu_button(label(l.terminal_menu), |ui| {
             crate::ui::chrome::apply_menu_popup_style(ui, theme);
-            // 先测量所有行的最大内容宽度，避免弹窗被初始可用宽度撑得过大
-            let broadcast_on_measure = self
-                .active_tab
-                .and_then(|idx| self.tabs.get(idx))
-                .is_some_and(|t| t.broadcast_input);
-            let broadcast_label_measure = if broadcast_on_measure {
-                format!("✓ {}", l.broadcast_input)
-            } else {
-                l.broadcast_input.to_string()
-            };
-            let new_session_accel_m = crate::platform::accel("n");
-            let new_tab_accel_m = crate::platform::new_tab_accel();
-            let local_shell_accel_m = crate::platform::local_shell_accel();
-            let split_h_accel_m = crate::platform::accel_shift("d");
-            let split_v_accel_m = crate::platform::accel_shift("u");
-            let broadcast_accel_m = crate::platform::accel_shift("b");
-            let close_tab_accel_m = crate::platform::close_tab_accel();
-            let import_foreign_label_m = format!("{}…", l.import_foreign);
-            let quit_label_m = crate::i18n::tr(ctx, "Quit", "退出");
-            let mut term_max_w = 0.0_f32;
-            for (title, sc) in [
-                (l.new_session, Some(&new_session_accel_m)),
-                (l.new_tab, Some(&new_tab_accel_m)),
-                (l.local_shell, Some(&local_shell_accel_m)),
-                (l.split_horizontal, Some(&split_h_accel_m)),
-                (l.split_vertical, Some(&split_v_accel_m)),
-                (&broadcast_label_measure, Some(&broadcast_accel_m)),
-                (l.merge_split, None),
-                (l.import_ssh, None),
-                (&import_foreign_label_m, None),
-                (l.close_tab, Some(&close_tab_accel_m)),
-                (l.disconnect, None),
-                (l.reconnect, None),
-                (l.batch_exec, None),
-                (&quit_label_m, None),
-            ] {
-                term_max_w = term_max_w.max(crate::ui::chrome::measure_popup_menu_row_width(
-                    ui,
-                    theme,
-                    title,
-                    sc.map(|s| s.as_str()),
-                ));
-            }
-            crate::ui::chrome::prime_menu_popup_width(ui, term_max_w);
-
             if crate::ui::chrome::popup_menu_button_accel(ui, theme, l.new_session, "n").clicked() {
                 self.dialog_flags.new_session = true;
             }
@@ -183,51 +138,28 @@ impl MistTermApp {
         ui.menu_button(label(l.edit_menu), |ui| {
             crate::ui::chrome::apply_menu_popup_style(ui, theme);
             let copy_accel = crate::platform::terminal_copy_accel();
-            let paste_accel = crate::platform::terminal_paste_accel();
-            let select_all_accel = crate::platform::accel_shift("a");
-            let find_accel = crate::platform::accel("f");
-            let prefs_accel = crate::platform::accel_literal(",");
-            // 先测量所有行的最大内容宽度，避免弹窗被初始可用宽度撑得过大
-            let mut max_w = 0.0_f32;
-            for (title, sc) in [
-                (l.copy, Some(&copy_accel)),
-                (l.paste, Some(&paste_accel)),
-                (l.select_all, Some(&select_all_accel)),
-                (l.find_in_terminal, Some(&find_accel)),
-                (l.preferences, Some(&prefs_accel)),
-                (l.ai_settings, None),
-            ] {
-                max_w = max_w.max(crate::ui::chrome::measure_popup_menu_row_width(
-                    ui,
-                    theme,
-                    title,
-                    sc.map(|s| s.as_str()),
-                ));
-            }
-            crate::ui::chrome::prime_menu_popup_width(ui, max_w);
-
             if crate::ui::chrome::popup_menu_button_shortcut(ui, theme, l.copy, Some(&copy_accel))
                 .clicked()
             {
                 self.menu_copy_for_context(ctx);
             }
+            let paste_accel = crate::platform::terminal_paste_accel();
             if crate::ui::chrome::popup_menu_button_shortcut(ui, theme, l.paste, Some(&paste_accel))
                 .clicked()
             {
                 self.menu_paste_for_context(ctx);
             }
-            if crate::ui::chrome::popup_menu_button_shortcut(ui, theme, l.select_all, Some(&select_all_accel))
-                .clicked()
+            if crate::ui::chrome::popup_menu_button_accel_shift(ui, theme, l.select_all, "a").clicked()
             {
                 self.menu_select_all_for_context(ctx);
             }
             ui.separator();
-            if crate::ui::chrome::popup_menu_button_shortcut(ui, theme, l.find_in_terminal, Some(&find_accel))
-                .clicked()
+            if crate::ui::chrome::popup_menu_button_accel(ui, theme, l.find_in_terminal, "f").clicked()
             {
                 self.toggle_terminal_search();
             }
             ui.separator();
+            let prefs_accel = crate::platform::accel_literal(",");
             if crate::ui::chrome::popup_menu_button_shortcut(
                 ui,
                 theme,
@@ -245,53 +177,18 @@ impl MistTermApp {
         });
         ui.menu_button(label(l.view_menu), |ui| {
             crate::ui::chrome::apply_menu_popup_style(ui, theme);
-            // 先测量所有行的最大内容宽度，避免弹窗被初始可用宽度撑得过大
-            let rail_label_m = format!(
-                "{} · {}",
-                if self.activity_rail_collapsed {
-                    l.show_activity_rail
-                } else {
-                    l.hide_activity_rail
-                },
-                crate::platform::accel("B"),
-            );
-            let sidebar_label_m = if self.sidebar_collapsed {
-                l.expand_sidebar.to_string()
-            } else {
-                l.collapse_sidebar.to_string()
-            };
-            let maximized_m = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
-            let window_label_m = if maximized_m {
-                l.restore_window.to_string()
-            } else {
-                l.maximize_window.to_string()
-            };
-            let ai_panel_accel_m = crate::platform::accel_shift("i");
-            let mut view_max_w = 0.0_f32;
-            for (title, sc) in [
-                (rail_label_m.as_str(), None),
-                (sidebar_label_m.as_str(), None),
-                (window_label_m.as_str(), None),
-                (l.sftp_panel, None),
-                (l.port_forward_panel, None),
-                (l.fragment_panel, None),
-                (l.monitor_panel, None),
-                (l.ai_panel, Some(ai_panel_accel_m.as_str())),
-                (l.theme_menu, None),
-            ] {
-                view_max_w = view_max_w.max(crate::ui::chrome::measure_popup_menu_row_width(
-                    ui,
-                    theme,
-                    title,
-                    sc,
-                ));
-            }
-            crate::ui::chrome::prime_menu_popup_width(ui, view_max_w);
-
             if crate::ui::chrome::popup_menu_button(
                 ui,
                 theme,
-                &rail_label_m,
+                &format!(
+                    "{} · {}",
+                    if self.activity_rail_collapsed {
+                        l.show_activity_rail
+                    } else {
+                        l.hide_activity_rail
+                    },
+                    crate::platform::accel("B"),
+                ),
             )
             .clicked()
             {
@@ -380,30 +277,6 @@ impl MistTermApp {
         // 工具四段（#198）：片段与发送 / 历史 / 规则 / 账号与数据；偏好不进工具。
         ui.menu_button(label(l.tools_menu), |ui| {
             crate::ui::chrome::apply_menu_popup_style(ui, theme);
-            // 先测量所有行的最大内容宽度，避免弹窗被初始可用宽度撑得过大
-            let quick_frag_accel_m = crate::platform::accel_shift("j");
-            let cmd_history_accel_m = crate::platform::terminal_history_accel();
-            let paste_history_accel_m = crate::platform::accel_shift("P");
-            let mut tools_max_w = 0.0_f32;
-            for (title, sc) in [
-                (l.fragment_library, None),
-                (l.quick_fragments, Some(quick_frag_accel_m.as_str())),
-                (l.send_sequences, None),
-                (l.command_history, Some(cmd_history_accel_m)),
-                (l.paste_history, Some(paste_history_accel_m.as_str())),
-                (l.rule_manager, None),
-                (l.credentials, None),
-                (l.session_logs, None),
-            ] {
-                tools_max_w = tools_max_w.max(crate::ui::chrome::measure_popup_menu_row_width(
-                    ui,
-                    theme,
-                    title,
-                    sc,
-                ));
-            }
-            crate::ui::chrome::prime_menu_popup_width(ui, tools_max_w);
-
             // 1. 片段与发送
             if crate::ui::chrome::popup_menu_button(ui, theme, l.fragment_library).clicked() {
                 self.open_snippet_library_dialog();
@@ -453,15 +326,6 @@ impl MistTermApp {
         });
         ui.menu_button(label(l.team_menu), |ui| {
             crate::ui::chrome::apply_menu_popup_style(ui, theme);
-            // 先测量所有行的最大内容宽度，避免弹窗被初始可用宽度撑得过大
-            let mut team_max_w = 0.0_f32;
-            for title in [l.team_sign_in, l.team_members, l.cloud_sync] {
-                team_max_w = team_max_w.max(crate::ui::chrome::measure_popup_menu_row_width(
-                    ui, theme, title, None,
-                ));
-            }
-            crate::ui::chrome::prime_menu_popup_width(ui, team_max_w);
-
             if crate::ui::chrome::popup_menu_button(ui, theme, l.team_sign_in).clicked() {
                 self.open_preferences_team_sync(ctx);
                 ui.close();
@@ -478,36 +342,10 @@ impl MistTermApp {
         });
         ui.menu_button(label(l.help_menu), |ui| {
             crate::ui::chrome::apply_menu_popup_style(ui, theme);
-            // 先测量所有一级行的最大内容宽度，避免弹窗被初始可用宽度撑得过大
-            let getting_started_m = crate::i18n::tr(ctx, "Getting started", "新人上手");
-            let feature_guide_m = crate::i18n::tr(ctx, "Feature guide", "功能指南");
-            let diagnostics_label_m = l.diagnostics;
-            let advanced_label_m = crate::i18n::tr(ctx, "Advanced", "高级功能");
-            let update_label_m = self.update_menu_label(ctx);
-            let mut help_max_w = 0.0_f32;
-            for title in [
-                &getting_started_m,
-                l.help_guide,
-                &feature_guide_m,
-                l.help_shortcuts,
-                l.help_online_docs,
-                l.ask_knowledge,
-                l.help_report_issue,
-                diagnostics_label_m,
-                &advanced_label_m,
-                &update_label_m,
-                l.help_about,
-            ] {
-                help_max_w = help_max_w.max(crate::ui::chrome::measure_popup_menu_row_width(
-                    ui, theme, title, None,
-                ));
-            }
-            crate::ui::chrome::prime_menu_popup_width(ui, help_max_w);
-
             if crate::ui::chrome::popup_menu_button(
                 ui,
                 theme,
-                &getting_started_m,
+                crate::i18n::tr(ctx, "Getting started", "新人上手"),
             )
             .clicked()
             {
@@ -548,21 +386,10 @@ impl MistTermApp {
                 l.diagnostics,
                 |ui| {
                     crate::ui::chrome::apply_menu_popup_style(ui, theme);
-                    // 测量子菜单最大宽度
-                    let crash_lbl_m = crate::i18n::tr(ctx, "Open crash reports folder", "打开崩溃报告目录");
-                    let hang_lbl_m = crate::i18n::tr(ctx, "Open hang reports folder", "打开卡顿报告目录");
-                    let mut diag_max_w = 0.0_f32;
-                    for title in [&crash_lbl_m, &hang_lbl_m] {
-                        diag_max_w = diag_max_w.max(crate::ui::chrome::measure_popup_menu_row_width(
-                            ui, theme, title, None,
-                        ));
-                    }
-                    crate::ui::chrome::prime_menu_popup_width(ui, diag_max_w);
-
                     if crate::ui::chrome::popup_menu_button(
                         ui,
                         theme,
-                        &crash_lbl_m,
+                        crate::i18n::tr(ctx, "Open crash reports folder", "打开崩溃报告目录"),
                     )
                     .clicked()
                     {
@@ -583,22 +410,6 @@ impl MistTermApp {
                 crate::i18n::tr(ctx, "Advanced", "高级功能"),
                 |ui| {
                     crate::ui::chrome::apply_menu_popup_style(ui, theme);
-                    // 测量子菜单最大宽度
-                    let adv_crash_lbl_m = crate::i18n::tr(ctx, "Open crash reports folder", "打开崩溃报告目录");
-                    let freeze_lbl_m = crate::i18n::tr(ctx, "Freeze diagnostics", "卡顿诊断");
-                    let mut adv_max_w = 0.0_f32;
-                    for title in [
-                        l.audit_timeline,
-                        l.install_audit_agent,
-                        &adv_crash_lbl_m,
-                        &freeze_lbl_m,
-                    ] {
-                        adv_max_w = adv_max_w.max(crate::ui::chrome::measure_popup_menu_row_width(
-                            ui, theme, title, None,
-                        ));
-                    }
-                    crate::ui::chrome::prime_menu_popup_width(ui, adv_max_w);
-
                     if crate::ui::chrome::popup_menu_button(ui, theme, l.audit_timeline).clicked() {
                         self.open_audit_timeline_dialog();
                     }
@@ -619,25 +430,13 @@ impl MistTermApp {
                         self.open_crash_report_folder(ctx);
                     }
                     ui.menu_button(
-                        freeze_lbl_m,
+                        crate::i18n::tr(ctx, "Freeze diagnostics", "卡顿诊断"),
                         |ui| {
                             crate::ui::chrome::apply_menu_popup_style(ui, theme);
-                            // 测量嵌套子菜单最大宽度
-                            let diag_dir_lbl_m = crate::i18n::tr(ctx, "Open diagnostics folder", "打开诊断目录");
-                            let copy_summary_lbl_m = crate::i18n::tr(ctx, "Copy recent summary", "复制最近摘要");
-                            let report_issue_lbl_m = crate::i18n::tr(ctx, "Report with summary", "带摘要提交 Issue");
-                            let mut freeze_max_w = 0.0_f32;
-                            for title in [&diag_dir_lbl_m, &copy_summary_lbl_m, &report_issue_lbl_m] {
-                                freeze_max_w = freeze_max_w.max(crate::ui::chrome::measure_popup_menu_row_width(
-                                    ui, theme, title, None,
-                                ));
-                            }
-                            crate::ui::chrome::prime_menu_popup_width(ui, freeze_max_w);
-
                             if crate::ui::chrome::popup_menu_button(
                                 ui,
                                 theme,
-                                &diag_dir_lbl_m,
+                                crate::i18n::tr(ctx, "Open diagnostics folder", "打开诊断目录"),
                             )
                             .clicked()
                             {

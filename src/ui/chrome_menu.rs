@@ -7,6 +7,17 @@ pub fn apply_menu_popup_style(ui: &mut Ui, theme: &Theme) {
     ui.style_mut().spacing.item_spacing = egui::vec2(4.0, 2.0);
 }
 
+/// 菜单行宽：
+/// - sizing pass(隐藏测量帧)用真实内容宽，避免初始大可用宽度把弹窗撑大；
+/// - 正式帧铺满可用宽度，保证 hover 背景完整覆盖整行。
+fn menu_row_width(ui: &Ui, content_w: f32) -> f32 {
+    if ui.is_sizing_pass() {
+        content_w
+    } else {
+        ui.available_width().max(content_w)
+    }
+}
+
 /// 菜单分组小标题（不可点；与分隔线搭配用）。
 pub fn popup_menu_section_label(ui: &mut Ui, theme: &Theme, text: &str) {
     ui.add_space(4.0);
@@ -73,7 +84,7 @@ fn menu_selectable_row(
         )
     });
     let content_w = pad.x * 2.0 + check_w + check_gap + galley.size().x;
-    let row_w = ui.available_width().max(content_w);
+    let row_w = menu_row_width(ui, content_w);
     let row_h = (galley.size().y + pad.y * 2.0).max(ui.spacing().interact_size.y);
     let (rect, response) = ui.allocate_exact_size(egui::vec2(row_w, row_h), Sense::click());
     let rounding = theme.radius_list_item();
@@ -183,7 +194,7 @@ pub fn popup_menu_button_shortcut_enabled(
         0.0
     };
     let content_w = pad.x * 2.0 + title_g.size().x + gap + shortcut_w;
-    let row_w = ui.available_width().max(content_w);
+    let row_w = menu_row_width(ui, content_w);
     let content_h = title_g.size().y;
     let row_h = (content_h + pad.y * 2.0).max(ui.spacing().interact_size.y);
 
