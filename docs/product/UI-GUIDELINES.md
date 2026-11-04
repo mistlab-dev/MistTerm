@@ -235,7 +235,7 @@
 | ⌘J | 定位到左侧搜索框 | `focus_sidebar_connection_search(ctx)` |
 | ⌘K | 终端失焦时打开命令面板（Win/Linux 为 Ctrl+K；聚焦时 Ctrl+K 仍删到行尾） | `open_command_palette(ctx)` |
 | ⌘E | 编辑当前选中会话 | `open_edit_session_dialog(sid)` |
-| ⌘H | 打开关于 | `show_about_dialog = true` |
+| 帮助 → 关于 | 打开关于（不占用 ⌘H；macOS ⌘H 为系统隐藏） | `show_about_dialog = true` |
 | ⌘, | 偏好设置 | `show_preferences_dialog = true` |
 | ⌘F / ⌃F | 终端内容搜索 | `show_terminal_search` 切换 |
 | ⌘⇧J / ⌃⇧J | 快速片段选择器 | `quick_selector.open = true` |

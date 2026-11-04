@@ -151,7 +151,7 @@ impl NativeAppMenu {
             "mistterm.app.preferences",
             l.preferences,
             true,
-            None,
+            Some(Accelerator::new(Some(Modifiers::SUPER), Code::Comma)),
         );
         let quit = MenuItem::with_id(
             "mistterm.app.quit",

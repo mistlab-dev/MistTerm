@@ -507,7 +507,8 @@ SSH 密码直接存储在配置文件中存在安全风险。MistTerm 管理着�
 | `⌘⌥←` / `⌘⌥→` | `Ctrl+Shift+←` / `Ctrl+Shift+→` | 分屏 Tab 内切换活动窗格焦点 |
 | `⌘⇧D` / `Ctrl+Shift+D` | 同左 | 当前 Tab **左右分屏** |
 | `⌘⇧U` / `Ctrl+Shift+U` | 同左 | 当前 Tab **上下分屏** |
-| `⌘H` | `Ctrl+H` | 关于 MistTerm |
+| `⌘,` | `Ctrl+,` | 偏好设置 |
+| （菜单） | （菜单） | 关于 MistTerm：帮助 → 关于（不用 ⌘H / Ctrl+H，macOS 上 ⌘H 留给系统隐藏窗口） |
 
 ---
 
