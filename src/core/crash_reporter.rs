@@ -15,9 +15,8 @@
 //!   纯原生 SIGSEGV/SIGBUS 当前无本机报告（crashpad 不在本票范围）。
 //! - #188：macOS `drawRect:` 外包 `catch_unwind` 后进程可继续；panic hook 仍会先写
 //!   `crash-*.log`，另由 [`write_caught_ffi_note`] 标注 caught-in-FFI。
-//!   这类「没有新的 crash-*.log」的异常退出靠 `launch_seen`：第一次安装不提示，
-//!   之后若本次启动晚于上次 `last_run.ok`，仍弹一次。确认只发生在用户关掉窗口之后
-//!   的正常退出（写 stamp），启动检测本身不写确认。
+//!   #334：「没有新的 crash-*.log 的异常退出」不再提示——上次异常退出但没有报告时
+//!   静默清除 dirty 状态（视为已确认），只有真实的新崩溃报告才弹窗。
 
 use std::io::Write as _;
 use std::path::PathBuf;
@@ -27,8 +26,6 @@ pub const MAX_REPORTS: usize = 10;
 
 /// 正常退出标记文件名（位于 logs/ 下）。
 pub const CLEAN_EXIT_STAMP: &str = "last_run.ok";
-/// 每次 GUI 启动写下的标记。比 `last_run.ok` 新，说明上次启动后没有正常退出。
-const LAUNCH_SEEN_NAME: &str = "launch_seen";
 
 static INSTALLED: AtomicBool = AtomicBool::new(false);
 
@@ -56,14 +53,15 @@ fn write_clean_exit_stamp_at(path: &std::path::Path) {
 
 /// 启动时检测上次运行是否出现过崩溃：
 /// 命中 = 存在 mtime 比 clean-exit stamp 更新的 crash-*.log（或 stamp 缺失且有报告）。
-/// 无任何 crash 报告时返回 None。没有报告的异常退出由 [`take_startup_notice`] 另判。
+/// 无任何 crash 报告时返回 None（#334：没有报告的异常退出不提示）。
 pub fn detect_unreported_crash() -> Option<CrashNotice> {
     detect_unreported_crash_in(&crash_report_dir(), &clean_exit_stamp_path())
 }
 
-/// GUI 启动时调用一次。先沿用 #190 的报告判定，再补「没有新 crash-*.log 的异常退出」。
+/// GUI 启动时调用一次（#334）：仅当有新的 crash-*.log 时返回提示；
+/// 异常退出但没有报告的 dirty 状态在此静默清除，不弹窗。
 ///
-/// 不在这里写确认：用户还没看见对话框。关掉窗口只影响本进程；下次是否再提示
+/// 不在这里写确认：关掉窗口只影响本进程；下次是否再提示
 /// 取决于之后有没有 `mark_clean_exit`。
 pub fn take_startup_notice() -> Option<CrashNotice> {
     let base = crate::core::default_log_base_dir();
@@ -73,33 +71,8 @@ pub fn take_startup_notice() -> Option<CrashNotice> {
 
 fn take_startup_notice_in(log_base: &std::path::Path) -> Option<CrashNotice> {
     let _ = std::fs::create_dir_all(log_base);
-    let seen_path = log_base.join(LAUNCH_SEEN_NAME);
     let stamp_path = log_base.join(CLEAN_EXIT_STAMP);
-    let seen_mtime = file_mtime(&seen_path);
-    let stamp_mtime = file_mtime(&stamp_path);
-    let crash = detect_unreported_crash_in(&log_base.join("crash-reports"), &stamp_path);
-    // 第一次安装没有 launch_seen，不能把「从未跑过」当成异常退出。
-    let unclean_without_new_report = seen_mtime.is_some()
-        && match (seen_mtime, stamp_mtime) {
-            (Some(seen), Some(stamp)) => seen > stamp,
-            (Some(_), None) => true,
-            _ => false,
-        };
-    let notice = if crash.is_some() {
-        crash
-    } else if unclean_without_new_report {
-        Some(CrashNotice::unclean_without_report())
-    } else {
-        None
-    };
-    if let Err(e) = std::fs::write(&seen_path, chrono::Local::now().to_rfc3339()) {
-        log::warn!("failed to record launch marker: {e}");
-    }
-    notice
-}
-
-fn file_mtime(path: &std::path::Path) -> Option<std::time::SystemTime> {
-    std::fs::metadata(path).and_then(|m| m.modified()).ok()
+    detect_unreported_crash_in(&log_base.join("crash-reports"), &stamp_path)
 }
 
 /// 可注入版本（测试用临时目录）。
@@ -158,23 +131,9 @@ pub struct CrashNotice {
     pub panic_summary: String,
     pub full_text: String,
     pub file_name: String,
-    /// `false`：上次异常退出，但没有新的 crash-*.log（例如 kill -9 / SIGSEGV）。
-    pub has_report: bool,
 }
 
 impl CrashNotice {
-    /// 没有新报告时的提示。不带可复制的全文。
-    pub fn unclean_without_report() -> Self {
-        Self {
-            version: crate::platform::APP_VERSION.to_string(),
-            time: String::new(),
-            panic_summary: String::new(),
-            full_text: String::new(),
-            file_name: String::new(),
-            has_report: false,
-        }
-    }
-
     /// 解析最新的 crash-*.log；解析失败时退化为只展示文件名。
     pub fn from_newest_report(dir: &std::path::Path) -> Option<Self> {
         let mut files = crash_report_files(dir);
@@ -211,7 +170,6 @@ impl CrashNotice {
             panic_summary,
             full_text,
             file_name,
-            has_report: true,
         })
     }
 }
@@ -429,7 +387,6 @@ mod tests {
         assert_eq!(n.panic_summary, "test panic boom");
         assert!(!n.version.is_empty());
         assert!(n.full_text.contains("backtrace"));
-        assert!(n.has_report);
     }
 
     #[test]
@@ -494,24 +451,22 @@ mod tests {
         write_report(&d, "crash-ok.log", &sample_report());
         let n = CrashNotice::from_newest_report(&d).unwrap();
         assert_eq!(n.file_name, "crash-ok.log");
-        assert!(n.has_report);
     }
 
     #[test]
     fn first_launch_without_report_does_not_prompt() {
         let d = temp_dir("first");
         assert!(take_startup_notice_in(&d).is_none());
-        assert!(d.join("launch_seen").is_file());
         assert!(!d.join(CLEAN_EXIT_STAMP).exists());
     }
 
     #[test]
-    fn second_start_without_clean_exit_prompts_even_without_a_report() {
+    fn dirty_exit_without_report_is_silent_and_cleared() {
+        // #334：上次异常退出（kill -9）但没有新 crash-*.log → 不弹窗，
+        // dirty 状态静默清除：再次启动仍无提示，直到有真实报告。
         let d = temp_dir("kill");
         assert!(take_startup_notice_in(&d).is_none());
-        let n = take_startup_notice_in(&d).expect("unclean without report");
-        assert!(!n.has_report);
-        assert!(n.full_text.is_empty());
+        assert!(take_startup_notice_in(&d).is_none(), "no report → stays silent");
     }
 
     fn set_mtime(path: &std::path::Path, secs: u64) {
@@ -524,15 +479,19 @@ mod tests {
     fn clean_exit_suppresses_the_next_prompt_until_another_unclean_start() {
         let d = temp_dir("clean");
         assert!(take_startup_notice_in(&d).is_none());
-        set_mtime(&d.join("launch_seen"), 1_000);
+        let reports = d.join("crash-reports");
+        std::fs::create_dir_all(&reports).unwrap();
+        write_report(&reports, "crash-1.log", &sample_report());
+        set_mtime(&reports.join("crash-1.log"), 1_000);
         write_clean_exit_stamp_at(&d.join(CLEAN_EXIT_STAMP));
         set_mtime(&d.join(CLEAN_EXIT_STAMP), 2_000);
         assert!(
             take_startup_notice_in(&d).is_none(),
-            "stamp newer than the previous launch"
+            "stamp newer than the report"
         );
-        let again = take_startup_notice_in(&d).expect("seen newer than stamp");
-        assert!(!again.has_report);
+        // 报告比 stamp 新 → 有真实崩溃报告才弹。
+        set_mtime(&reports.join("crash-1.log"), 3_000);
+        take_startup_notice_in(&d).expect("new report prompts");
     }
 
     #[test]
@@ -543,7 +502,6 @@ mod tests {
         std::fs::create_dir_all(&reports).unwrap();
         write_report(&reports, "crash-1.log", &sample_report());
         let n = take_startup_notice_in(&d).expect("report");
-        assert!(n.has_report);
         assert_eq!(n.panic_summary, "test panic boom");
     }
 }
