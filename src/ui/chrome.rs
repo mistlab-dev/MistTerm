@@ -1419,9 +1419,11 @@ fn paint_caption_in_rect_center(
     font_size: f32,
     color: Color32,
 ) {
+    // #363：壳层按钮文案走 ui_font_id（CJK Name 族），与 TextStyle::Body/Button 一致；
+    // 勿用 FontId::proportional（Geist 优先），避免中英回退段切分带来的字距观感问题。
     let galley = ui.painter().layout_no_wrap(
         label.to_owned(),
-        egui::FontId::proportional(font_size),
+        crate::platform::ui_font_id(font_size),
         color,
     );
     let pos = rect.center() - galley.size() * 0.5;
@@ -1445,7 +1447,7 @@ fn paint_icon_caption_row_in_rect(
     let painter = ui.painter();
     let galley = painter.layout_no_wrap(
         label.to_owned(),
-        egui::FontId::proportional(font_size),
+        crate::platform::ui_font_id(font_size),
         text_color,
     );
     let text_w = galley.size().x;
@@ -1478,7 +1480,7 @@ fn control_button_size(
 ) -> egui::Vec2 {
     let h = theme.size_control_btn_h();
     let pad_x = theme.spacing_control_btn_pad_x();
-    let font = egui::FontId::proportional(theme.font_size_control_btn());
+    let font = crate::platform::ui_font_id(theme.font_size_control_btn());
     let text_w = ui
         .painter()
         .layout_no_wrap(label.to_owned(), font, theme.text_primary())
