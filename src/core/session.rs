@@ -129,9 +129,21 @@ pub fn session_color_tag_accent_rgb(session: &SessionConfig) -> Option<(u8, u8, 
     session_color_tag_rgb(&session.color_tag)
 }
 
+/// SSH 默认端口（显示时省略 `:port` 的分界值）。
+pub const DEFAULT_SSH_PORT: u16 = 22;
+
+/// 本机 shell 会话的 `session_id` 前缀（`local:<pty句柄id>`）。
+/// 不入 sessions.json；判定本机会话请用 [`is_local_session_id`]。
+pub const LOCAL_SESSION_ID_PREFIX: &str = "local:";
+
+/// 该 session_id 是否为本机 shell 会话。
+pub fn is_local_session_id(session_id: &str) -> bool {
+    session_id.starts_with(LOCAL_SESSION_ID_PREFIX)
+}
+
 /// 终端标签标题：`名称 · host[:port]`，便于多开时区分。
 pub fn session_tab_label(session: &SessionConfig) -> String {
-    let host = if session.port != 22 {
+    let host = if session.port != DEFAULT_SSH_PORT {
         format!("{}:{}", session.host, session.port)
     } else {
         session.host.clone()
