@@ -1,5 +1,6 @@
-//! 唯一的下次启动提示：有新的 crash-*.log 时展示 #190 的摘要；
-//! 没有新报告但上次没有正常退出时，说明这一点。不在展示前写确认。
+//! 唯一的下次启动提示（#334）：有新的 crash-*.log 时展示 #190 的摘要；
+//! 异常退出但没有新报告时不再弹窗（dirty 状态在启动检测里静默清除）。
+//! 不在展示前写确认。
 
 use super::*;
 
@@ -51,39 +52,27 @@ impl MistTermApp {
                             .color(theme.color_body_text_muted()),
                     );
                     ui.add_space(theme.spacing_sm());
-                    if notice.has_report {
-                        ui.label(
-                            egui::RichText::new(crate::i18n::tr(
-                                ctx,
-                                "A crash report was saved locally:",
-                                "已在本机保存崩溃报告：",
-                            ))
+                    ui.label(
+                        egui::RichText::new(crate::i18n::tr(
+                            ctx,
+                            "A crash report was saved locally:",
+                            "已在本机保存崩溃报告：",
+                        ))
+                        .size(theme.font_size_small())
+                        .color(theme.color_form_hint()),
+                    );
+                    ui.label(
+                        egui::RichText::new(&notice.panic_summary)
+                            .monospace()
+                            .size(theme.font_size_small())
+                            .color(theme.color_danger_emphasis()),
+                    );
+                    ui.label(
+                        egui::RichText::new(&notice.file_name)
+                            .monospace()
                             .size(theme.font_size_small())
                             .color(theme.color_form_hint()),
-                        );
-                        ui.label(
-                            egui::RichText::new(&notice.panic_summary)
-                                .monospace()
-                                .size(theme.font_size_small())
-                                .color(theme.color_danger_emphasis()),
-                        );
-                        ui.label(
-                            egui::RichText::new(&notice.file_name)
-                                .monospace()
-                                .size(theme.font_size_small())
-                                .color(theme.color_form_hint()),
-                        );
-                    } else {
-                        ui.label(
-                            egui::RichText::new(crate::i18n::tr(
-                                ctx,
-                                "The last session did not exit cleanly, and no new crash report was written.",
-                                "上次没有正常退出，且没有新的崩溃报告。",
-                            ))
-                            .size(theme.font_size_small())
-                            .color(theme.color_form_hint()),
-                        );
-                    }
+                    );
                     ui.add_space(theme.spacing_md());
                     crate::ui::chrome::modal_footer_actions(ui, theme, |ui, theme| {
                         if crate::ui::chrome::modal_secondary_button(
@@ -120,7 +109,7 @@ impl MistTermApp {
             self.open_crash_report_folder(ctx);
         }
         if copy_report {
-            if notice.has_report && !notice.full_text.is_empty() {
+            if !notice.full_text.is_empty() {
                 ctx.copy_text(notice.full_text);
                 self.notify_auto(
                     crate::i18n::tr(ctx, "Copied to clipboard", "已复制到剪贴板").to_string(),
