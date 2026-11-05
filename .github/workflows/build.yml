@@ -852,10 +852,6 @@ jobs:
       # generate_release_notes 仍会在 body 后追加 ## What's Changed（对内 changelog）。
       - name: Checkout notes for release body
         uses: actions/checkout@v5
-        with:
-          sparse-checkout: |
-            docs/release/notes
-          sparse-checkout-cone-mode: false
 
       - name: Compose release body
         id: body
