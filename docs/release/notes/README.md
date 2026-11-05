@@ -14,4 +14,8 @@ CI 会把内容写进 `latest.json`，客户端的"发现新版本"窗口里会�
 
 ## 用户向文案（客户端「软件更新」/ `latest.json` notes）
 
-只写软件本身变化。**禁止**写议题号、PR 号（如 `#372`、`#375`）。对内 changelog（GitHub Release 自动生成、提交说明）另放，不要混进 `docs/release/notes/v*.{zh,en}.md`。
+只写软件本身变化，用人话短句，简单明确。
+
+**禁止**：议题号、PR 号（如 `#372`）；内部词（如 egui 版本、「UX 本批」、「死分支」）；未落地的功能（不要写「可选关闭 ×」等尚未实现项）。
+
+对内 changelog（GitHub Release 自动生成、提交说明）另放，不要混进 `docs/release/notes/v*.{zh,en}.md`。
