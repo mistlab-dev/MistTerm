@@ -847,6 +847,61 @@ jobs:
           done
           ls -la
 
+      # mistlab.dev 下载页「更新日志」读 Release body 的 ## 更新内容 / ## What's New。
+      # 人话 notes 必须进 body（与 latest.json 同源 docs/release/notes）；不能只写 Downloads。
+      # generate_release_notes 仍会在 body 后追加 ## What's Changed（对内 changelog）。
+      - name: Checkout notes for release body
+        uses: actions/checkout@v5
+        with:
+          sparse-checkout: |
+            docs/release/notes
+          sparse-checkout-cone-mode: false
+
+      - name: Compose release body
+        id: body
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          OUT="${RUNNER_TEMP}/release-body.md"
+          python3 - "$VERSION" "$OUT" <<'PY'
+          import sys
+          from pathlib import Path
+          version, out = sys.argv[1], Path(sys.argv[2])
+          parts = []
+          for lang, heading_hint in (("zh", "更新内容"), ("en", "What's New")):
+              p = Path(f"docs/release/notes/v{version}.{lang}.md")
+              if p.is_file():
+                  parts.append(p.read_text().rstrip() + "\n")
+              else:
+                  print(f"::warning::missing {p} — mistlab.dev changelog may lack ## {heading_hint}")
+          downloads = """## Downloads
+
+          Pick the archive for your platform:
+
+          - **macOS (Apple Silicon, primary)**: `Mist-macos-aarch64.dmg` (signed + notarized) or `Mist-macos-aarch64.tar.gz`
+          - **macOS (Intel, optional)**: `Mist-macos-x86_64.dmg` or `Mist-macos-x86_64.tar.gz`
+          - **Linux desktop**: `Mist-linux-x86_64.tar.gz` (GUI `Mist` only, needs a recent glibc; no bundled `mist`)
+          - **Linux CLI only** (static, any distro incl. CentOS 7): `mist-cli-linux-x86_64.tar.gz`, `mist-cli-linux-aarch64.tar.gz` — or `curl -fsSL https://mistlab.dev/install | bash`
+          - **Windows**: `MistTerm-*-windows-x86_64-setup.exe` (recommended) or `Mist-windows-x86_64.zip`
+
+          - Website: https://mistlab.dev
+          - Documentation: https://github.com/mistlab-dev/MistTerm/tree/main/docs
+          - Issues: https://github.com/mistlab-dev/MistTerm/issues
+          """
+          # Dedent downloads (written with leading spaces only for source readability)
+          import textwrap
+          downloads = textwrap.dedent(downloads)
+          body = "\n".join(parts)
+          if body and not body.endswith("\n\n"):
+              body = body.rstrip() + "\n\n"
+          body += downloads
+          out.write_text(body)
+          print(body[:600])
+          print("--- body_bytes", out.stat().st_size)
+          PY
+          echo "path=${OUT}" >> "$GITHUB_OUTPUT"
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:
@@ -855,20 +910,7 @@ jobs:
           prerelease: false
           generate_release_notes: true
           fail_on_unmatched_files: true
-          body: |
-            ## Downloads
-
-            Pick the archive for your platform:
-
-            - **macOS (Apple Silicon, primary)**: `Mist-macos-aarch64.dmg` (signed + notarized) or `Mist-macos-aarch64.tar.gz`
-            - **macOS (Intel, optional)**: `Mist-macos-x86_64.dmg` or `Mist-macos-x86_64.tar.gz`
-            - **Linux desktop**: `Mist-linux-x86_64.tar.gz` (GUI `Mist` only, needs a recent glibc; no bundled `mist`)
-            - **Linux CLI only** (static, any distro incl. CentOS 7): `mist-cli-linux-x86_64.tar.gz`, `mist-cli-linux-aarch64.tar.gz` — or `curl -fsSL https://mistlab.dev/install | bash`
-            - **Windows**: `MistTerm-*-windows-x86_64-setup.exe` (recommended) or `Mist-windows-x86_64.zip`
-
-            - Website: https://mistlab.dev
-            - Documentation: https://github.com/mistlab-dev/MistTerm/tree/main/docs
-            - Issues: https://github.com/mistlab-dev/MistTerm/issues
+          body_path: ${{ steps.body.outputs.path }}
 
   # 镜像文件的 rsync 还没做。清单里的下载地址已经指向 mistlab.dev（镜像优先）。
   # MIST_MIRROR_ENABLED=true 时这个 job 会跑，但只打印 notice，不以失败结束，避免把 tag 发版标红。

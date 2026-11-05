@@ -117,13 +117,17 @@ preflight（版本号一致性 + 清单脚本自测）
 ## 6. 发版步骤
 
 1. 改 `Cargo.toml` 和 仓库根目录的 `Info.plist` 的版本号（`python3 scripts/check-version-consistency.py` 检查）。
-2. 可选：写 `docs/release/notes/v<版本>.zh.md` / `.en.md`。
+2. **写** `docs/release/notes/v<版本>.zh.md` / `.en.md`（人话短句；规则见 `docs/release/notes/README.md`）。
+   CI 会同时写入 `latest.json` notes，并嵌进 GitHub Release body 开头（`## 更新内容` / `## What's New`），
+   供 mistlab.dev 下载页「更新日志」读取；不要只靠自动 `## What's Changed`。
 3. 合并到 main，打标签 `v<版本>` 推送。
 4. 等待 Actions 自动完成 sign + GitHub Release（无需人工批准）。
-5. 发布后核对：`curl -sL https://github.com/mistlab-dev/MistTerm/releases/latest/download/latest.json`，
-   各平台 `urls` 第一项是 `https://mistlab.dev/downloads/mistterm/v<版本>/…`，第二项是 GitHub。
-   同时确认镜像上的 `stable/latest.json` 已换成这份清单（客户端先读镜像）。
-   旧版本运行 `mist update --check` 应提示新版本。
+5. 发布后核对：
+   - `curl -sL https://github.com/mistlab-dev/MistTerm/releases/latest/download/latest.json`，
+     各平台 `urls` 第一项是 `https://mistlab.dev/downloads/mistterm/v<版本>/…`，第二项是 GitHub。
+   - Release body 含 `## 更新内容` 与 `## What's New`（再是 Downloads，再是自动 What’s Changed）。
+   - 镜像上的 `stable/latest.json` 已换成这份清单（客户端先读镜像）。
+   - 旧版本运行 `mist update --check` 应提示新版本。
 
 ### 给已发布版本补写镜像地址
 
