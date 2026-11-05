@@ -867,6 +867,7 @@ jobs:
           python3 - "$VERSION" "$OUT" <<'PY'
           import sys
           from pathlib import Path
+
           version, out = sys.argv[1], Path(sys.argv[2])
           parts = []
           for lang, heading_hint in (("zh", "更新内容"), ("en", "What's New")):
@@ -875,27 +876,27 @@ jobs:
                   parts.append(p.read_text().rstrip() + "\n")
               else:
                   print(f"::warning::missing {p} — mistlab.dev changelog may lack ## {heading_hint}")
-          downloads = """## Downloads
 
-          Pick the archive for your platform:
-
-          - **macOS (Apple Silicon, primary)**: `Mist-macos-aarch64.dmg` (signed + notarized) or `Mist-macos-aarch64.tar.gz`
-          - **macOS (Intel, optional)**: `Mist-macos-x86_64.dmg` or `Mist-macos-x86_64.tar.gz`
-          - **Linux desktop**: `Mist-linux-x86_64.tar.gz` (GUI `Mist` only, needs a recent glibc; no bundled `mist`)
-          - **Linux CLI only** (static, any distro incl. CentOS 7): `mist-cli-linux-x86_64.tar.gz`, `mist-cli-linux-aarch64.tar.gz` — or `curl -fsSL https://mistlab.dev/install | bash`
-          - **Windows**: `MistTerm-*-windows-x86_64-setup.exe` (recommended) or `Mist-windows-x86_64.zip`
-
-          - Website: https://mistlab.dev
-          - Documentation: https://github.com/mistlab-dev/MistTerm/tree/main/docs
-          - Issues: https://github.com/mistlab-dev/MistTerm/issues
-          """
-          # Dedent downloads (written with leading spaces only for source readability)
-          import textwrap
-          downloads = textwrap.dedent(downloads)
-          body = "\n".join(parts)
-          if body and not body.endswith("\n\n"):
-              body = body.rstrip() + "\n\n"
-          body += downloads
+          downloads_lines = [
+              "## Downloads",
+              "",
+              "Pick the archive for your platform:",
+              "",
+              "- **macOS (Apple Silicon, primary)**: `Mist-macos-aarch64.dmg` (signed + notarized) or `Mist-macos-aarch64.tar.gz`",
+              "- **macOS (Intel, optional)**: `Mist-macos-x86_64.dmg` or `Mist-macos-x86_64.tar.gz`",
+              "- **Linux desktop**: `Mist-linux-x86_64.tar.gz` (GUI `Mist` only, needs a recent glibc; no bundled `mist`)",
+              "- **Linux CLI only** (static, any distro incl. CentOS 7): `mist-cli-linux-x86_64.tar.gz`, `mist-cli-linux-aarch64.tar.gz` — or `curl -fsSL https://mistlab.dev/install | bash`",
+              "- **Windows**: `MistTerm-*-windows-x86_64-setup.exe` (recommended) or `Mist-windows-x86_64.zip`",
+              "",
+              "- Website: https://mistlab.dev",
+              "- Documentation: https://github.com/mistlab-dev/MistTerm/tree/main/docs",
+              "- Issues: https://github.com/mistlab-dev/MistTerm/issues",
+              "",
+          ]
+          body = "\n".join(parts).rstrip()
+          if body:
+              body += "\n\n"
+          body += "\n".join(downloads_lines)
           out.write_text(body)
           print(body[:600])
           print("--- body_bytes", out.stat().st_size)
