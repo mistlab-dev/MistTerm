@@ -851,7 +851,12 @@ jobs:
       # 人话 notes 必须进 body（与 latest.json 同源 docs/release/notes）；不能只写 Downloads。
       # generate_release_notes 仍会在 body 后追加 ## What's Changed（对内 changelog）。
       - name: Checkout notes for release body
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
+        with:
+          path: _notes
+          sparse-checkout: |
+            docs/release/notes
+          sparse-checkout-cone-mode: false
 
       - name: Compose release body
         id: body
@@ -867,7 +872,7 @@ jobs:
           version, out = sys.argv[1], Path(sys.argv[2])
           parts = []
           for lang, heading_hint in (("zh", "更新内容"), ("en", "What's New")):
-              p = Path(f"docs/release/notes/v{version}.{lang}.md")
+              p = Path(f"_notes/docs/release/notes/v{version}.{lang}.md")
               if p.is_file():
                   parts.append(p.read_text().rstrip() + "\n")
               else:
