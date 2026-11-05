@@ -157,7 +157,7 @@ impl Sidebar {
                             );
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                 ui.spacing_mut().item_spacing.x = theme.spacing_tool_btn_gap();
-                                // 先占右侧，保证收起钮不被「新建」挤出可视区
+                                // #376 #6：标题行只留收起钮；「+ 新建」按产品要求下移到搜索行右侧。
                                 if crate::ui::chrome::sidebar_collapse_button(ui, theme)
                                     .on_hover_text(crate::i18n::tr(
                                         &ctx,
@@ -168,20 +168,6 @@ impl Sidebar {
                                 {
                                     collapse_clicked = true;
                                 }
-                                if crate::ui::chrome::panel_header_new_button_with_label(
-                                    ui,
-                                    theme,
-                                    crate::i18n::tr(&ctx, "New", "新建"),
-                                )
-                                    .on_hover_text(format!(
-                                        "{} · {}",
-                                        crate::i18n::tr(&ctx, "New session", "新建会话"),
-                                        crate::platform::accel("N")
-                                    ))
-                                    .clicked()
-                                    {
-                                    create_session_clicked = true;
-                                }
                             });
                         });
                     });
@@ -189,18 +175,40 @@ impl Sidebar {
                 // 与命令片段面板一致：分隔线后留出一段呼吸空间，再进入搜索区
                 ui.add_space(theme.spacing_dock_section_gap());
 
-                crate::ui::chrome::search_field(
-                    ui,
-                    theme,
-                    search_field_id,
-                    search_query,
-                    crate::i18n::tr(
-                        ui.ctx(),
-                        "Search server name / IP",
-                        "搜索服务器名称 / IP",
-                    ),
-                    width,
-                );
+                // #376 #6：「+ 新建」放搜索行右侧（标题行只留收起钮）。
+                // 搜索框占满除按钮外的宽度，同一行右对齐蓝色实心主按钮。
+                let search_row_w = width.max(120.0);
+                let new_btn_min_w = theme.size_panel_header_btn_min_w();
+                let ctx = ui.ctx().clone();
+                ui.horizontal(|ui| {
+                    let btn_gap = theme.spacing_tool_btn_gap();
+                    let search_w = (search_row_w - new_btn_min_w - btn_gap).max(96.0);
+                    crate::ui::chrome::search_field(
+                        ui,
+                        theme,
+                        search_field_id,
+                        search_query,
+                        crate::i18n::tr(
+                            ui.ctx(),
+                            "Search server name / IP",
+                            "搜索服务器名称 / IP",
+                        ),
+                        search_w,
+                    );
+                    let new_btn = crate::ui::chrome::panel_header_new_button_with_label(
+                        ui,
+                        theme,
+                        crate::i18n::tr(&ctx, "New", "新建"),
+                    )
+                    .on_hover_text(format!(
+                        "{} · {}",
+                        crate::i18n::tr(&ctx, "New session", "新建会话"),
+                        crate::platform::accel("N")
+                    ));
+                    if new_btn.clicked() {
+                        create_session_clicked = true;
+                    }
+                });
                 ui.add_space(theme.spacing_dock_control_gap());
                 let sort_icon = match *sort_by {
                     SessionSortBy::Name | SessionSortBy::NameDesc => {
