@@ -1,8 +1,11 @@
 # 更新说明（可选）
 
-发版时如果这里有 `v<版本>.zh.md` / `v<版本>.en.md`（例如 `v1.2.0.zh.md`），
-CI 会把内容写进 `latest.json`，客户端的"发现新版本"窗口里会直接显示。
-没有这两个文件也没关系，窗口里会显示指向 GitHub Release 页面的链接。
+发版时如果这里有 `v<版本>.zh.md` / `v<版本>.en.md`（例如 `v1.2.0.zh.md`），CI 会：
+
+1. 写入 `latest.json` 的 `notes`（客户端「软件更新」弹窗）
+2. **嵌进 GitHub Release body** 开头（`## 更新内容` / `## What's New`），供 mistlab.dev 下载页「更新日志」读取；其后仍是 Downloads，再由 GitHub 自动追加 `## What's Changed`（对内）
+
+没有这两个文件时：弹窗会落到 Release 链接；下载页更新日志也会空——**发版前应写好**，不要只靠自动 What’s Changed。
 
 写法：普通 Markdown，几条要点即可，用户看得懂的大白话。
 
@@ -12,7 +15,7 @@ CI 会把内容写进 `latest.json`，客户端的"发现新版本"窗口里会�
 - Mac 主下载是 `Mist-macos-aarch64.dmg`（Apple Silicon）。Intel 用 `Mist-macos-x86_64.dmg`。不再提供 universal。已经装了 universal 的，先手动换一次对应架构的 dmg，之后才能一键更新。
 - 细节和 v1.2.34 的体积表：`docs/release/PACKAGE_SIZE.md`。
 
-## 用户向文案（客户端「软件更新」/ `latest.json` notes）
+## 用户向文案（客户端「软件更新」/ `latest.json` notes / GitHub Release body）
 
 只写软件本身变化，用人话短句，简单明确。
 
