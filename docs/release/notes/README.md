@@ -11,3 +11,7 @@ CI 会把内容写进 `latest.json`，客户端的"发现新版本"窗口里会�
 - Linux 桌面 `Mist-linux-x86_64.tar.gz` 只有 `Mist`。命令行用 `mist-cli-linux-x86_64.tar.gz` / `mist-cli-linux-aarch64.tar.gz`，或 `curl -fsSL https://mistlab.dev/install | bash`。目录里若还有旧的 `mist`，先删掉再检查更新，或重新解压。
 - Mac 主下载是 `Mist-macos-aarch64.dmg`（Apple Silicon）。Intel 用 `Mist-macos-x86_64.dmg`。不再提供 universal。已经装了 universal 的，先手动换一次对应架构的 dmg，之后才能一键更新。
 - 细节和 v1.2.34 的体积表：`docs/release/PACKAGE_SIZE.md`。
+
+## 用户向文案（客户端「软件更新」/ `latest.json` notes）
+
+只写软件本身变化。**禁止**写议题号、PR 号（如 `#372`、`#375`）。对内 changelog（GitHub Release 自动生成、提交说明）另放，不要混进 `docs/release/notes/v*.{zh,en}.md`。
