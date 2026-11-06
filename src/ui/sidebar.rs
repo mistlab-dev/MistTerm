@@ -695,8 +695,9 @@ impl Sidebar {
                                         .size(status_px)
                                         .color(status_text_color),
                                 )
-                                .truncate()
-                                .wrap(),
+                                // #385：单行截断，不折行——CJK 逐字 wrap 会把「分钟」拆成
+                                // 两行（「分」/「钟」）；truncate 保留完整词组起始部分。
+                                .truncate(),
                             );
                             
                             if response.clicked() {
