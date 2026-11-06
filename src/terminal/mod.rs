@@ -3,6 +3,7 @@
 mod alacritty;
 mod command_block;
 pub mod paste;
+pub mod program_status;
 pub mod style;
 
 pub use alacritty::{BlockNav, CopyBlock, NavDir, SearchHit, Terminal, ViewportCursor};
