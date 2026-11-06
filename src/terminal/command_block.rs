@@ -487,6 +487,22 @@ pub enum SplitItem {
         raw: Vec<u8>,
         payload: String,
     },
+    /// #392：OSC 9;4 进度报告（payload 为 `9;4` 之后的部分）。
+    Progress {
+        raw: Vec<u8>,
+        payload: String,
+    },
+    /// #392：OSC 7 / 9;9 当前目录报告。`is_osc7` 区分两种来源。
+    Cwd {
+        raw: Vec<u8>,
+        payload: String,
+        is_osc7: bool,
+    },
+    /// #392：OSC 0/2 标题报告。
+    Title {
+        raw: Vec<u8>,
+        payload: String,
+    },
 }
 
 impl OscSplitter {
@@ -595,6 +611,10 @@ impl OscSplitter {
             // #390：程序状态报告。转义序列本身不可见；raw 仍按序透传给 VTE
             // （alacritty 消费侧），保证嵌套终端（tmux 里再跑 agent）画面一致。
             out.push(SplitItem::ProgramStatus { raw, payload });
+        } else if let Some(sem) = parse_sem_osc(&raw) {
+            // #392：语义 OSC（9;4 / 7 / 9;9 / 0 / 2）。序列本身不可见，
+            // 原始字节仍按序透传，嵌套终端画面一致。
+            out.push(sem);
         } else {
             out.push(SplitItem::Bytes(raw));
         }
@@ -607,6 +627,42 @@ fn parse_7501_payload(raw: &[u8]) -> Option<String> {
     let payload = osc_payload(raw)?;
     let text = std::str::from_utf8(payload).ok()?.trim();
     text.strip_prefix("7501;").map(str::to_string)
+}
+
+/// #392：识别语义 OSC（进度 9;4 / 目录 7、9;9 / 标题 0、2）。
+/// `raw` 含前导 ESC 和结束符；不匹配返回 `None`（走 Bytes 透传）。
+fn parse_sem_osc(raw: &[u8]) -> Option<SplitItem> {
+    let payload = osc_payload(raw)?;
+    let text = std::str::from_utf8(payload).ok()?.trim();
+    let (tag, rest) = text.split_once(';')?;
+    let item = match tag {
+        "9" => {
+            let (sub, body) = rest.split_once(';')?;
+            match sub {
+                "4" => SplitItem::Progress {
+                    raw: raw.to_vec(),
+                    payload: body.to_string(),
+                },
+                "9" => SplitItem::Cwd {
+                    raw: raw.to_vec(),
+                    payload: body.to_string(),
+                    is_osc7: false,
+                },
+                _ => return None,
+            }
+        }
+        "7" => SplitItem::Cwd {
+            raw: raw.to_vec(),
+            payload: rest.to_string(),
+            is_osc7: true,
+        },
+        "0" | "2" => SplitItem::Title {
+            raw: raw.to_vec(),
+            payload: rest.to_string(),
+        },
+        _ => return None,
+    };
+    Some(item)
 }
 
 /// `raw` 含前导 ESC 和结束符。认 `133;X` / `633;X`。
@@ -682,6 +738,56 @@ mod tests {
     }
 
     #[test]
+    fn splitter_sem_osc_progress_cwd_title() {
+        // #392：9;4 进度 / 9;9 目录 / 7 file URL / 0 标题，各自产出对应变体。
+        let mut splitter = OscSplitter::default();
+        let mut out = Vec::new();
+        splitter.push(b"\x1b]9;4;1;50\x07", &mut out);
+        assert!(matches!(&out[0], SplitItem::Progress { payload, .. } if payload == "1;50"));
+        out.clear();
+        splitter.push(b"\x1b]9;9;/var/log\x1b\\", &mut out);
+        match &out[0] {
+            SplitItem::Cwd { payload, is_osc7, .. } => {
+                assert_eq!(payload, "/var/log");
+                assert!(!is_osc7);
+            }
+            other => panic!("expected Cwd, got {other:?}"),
+        }
+        out.clear();
+        splitter.push(b"\x1b]7;file://myhost/home/u\x07", &mut out);
+        match &out[0] {
+            SplitItem::Cwd { payload, is_osc7, .. } => {
+                assert_eq!(payload, "file://myhost/home/u");
+                assert!(*is_osc7);
+            }
+            other => panic!("expected Cwd(file://), got {other:?}"),
+        }
+        out.clear();
+        splitter.push(b"\x1b]0;user@host: ~/proj\x07", &mut out);
+        assert!(matches!(&out[0], SplitItem::Title { payload, .. } if payload == "user@host: ~/proj"));
+        out.clear();
+        splitter.push(b"\x1b]2;vim xxx.c\x07", &mut out);
+        assert!(matches!(&out[0], SplitItem::Title { payload, .. } if payload == "vim xxx.c"));
+    }
+
+    #[test]
+    fn splitter_sem_osc_across_chunks_and_untouched_others() {
+        // 跨 chunk。
+        let mut splitter = OscSplitter::default();
+        let mut out = Vec::new();
+        splitter.push(b"\x1b]9;4;3", &mut out);
+        assert!(out.is_empty(), "序列未完不产出");
+        splitter.push(b"\x07rest", &mut out);
+        assert!(matches!(&out[0], SplitItem::Progress { payload, .. } if payload == "3"));
+        // 其它 OSC（如 52 剪贴板、1337）不受影响，仍走 Bytes。
+        // （#392 合入后 OSC 0/2 归 Title 分支，「不受影响」例子须选语义外的编号。）
+        let mut splitter = OscSplitter::default();
+        let mut out = Vec::new();
+        splitter.push(b"\x1b]52;c;QQ==\x07", &mut out);
+        assert!(matches!(&out[0], SplitItem::Bytes(_)));
+    }
+
+    #[test]
     fn splitter_extracts_7501_reports() {
         // spec 示例：working 报告。
         let mut splitter = OscSplitter::default();
@@ -729,10 +835,11 @@ mod tests {
 
     #[test]
     fn splitter_non_7501_osc_untouched() {
-        // 其它 OSC（标题等）仍走 Bytes，行为不变。
+        // 其它 OSC（52 剪贴板等语义外编号）仍走 Bytes，行为不变。
+        // 注意：OSC 0/2 在 #392 后归 Title 分支，不能再用标题当「不受影响」例。
         let mut splitter = OscSplitter::default();
         let mut out = Vec::new();
-        splitter.push(b"\x1b]0;my title\x07", &mut out);
+        splitter.push(b"\x1b]52;c;QQ==\x07", &mut out);
         assert!(matches!(&out[0], SplitItem::Bytes(_)));
     }
 

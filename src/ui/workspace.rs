@@ -2293,6 +2293,11 @@ impl MistTermApp {
                             None
                         }
                     });
+                // #392：任一 pane 有构建进度（OSC 9;4）→ 标签叠进度环。
+                let pane_progress = tab
+                    .panes
+                    .iter()
+                    .find_map(|p| p.progress.as_ref().copied());
                 let tab_chip = crate::ui::chrome::session_tab_chip(
                     ui,
                     theme,
@@ -2302,6 +2307,7 @@ impl MistTermApp {
                     tab.needs_attention,
                     false,
                     env_color,
+                    pane_progress,
                 );
                 // #390：Agent 状态红绿灯悬停文案。blocked 优先（等审批最急），
                 // 其次 done/error（有未看结果）。角标本身走 needs_attention。

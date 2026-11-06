@@ -126,6 +126,12 @@ pub struct Terminal {
     /// #390：最近一次 OSC 7501 程序状态报告（key=value 载荷）。
     /// `feed` 解析到合法 7501 前缀后整条替换，宿主 `take_program_status_payload`。
     program_status_payload: Arc<Mutex<Option<String>>>,
+    /// #392：最近一次 OSC 9;4 进度报告载荷。
+    progress_payload: Arc<Mutex<Option<String>>>,
+    /// #392：最近一次 OSC 7 / 9;9 当前目录载荷。
+    cwd_payload: Arc<Mutex<Option<String>>>,
+    /// #392：最近一次 OSC 0/2 标题载荷。
+    title_payload: Arc<Mutex<Option<String>>>,
     /// OSC 133 / 633 命令块。坐标跟主屏幕网格走，备用屏幕不取样。
     blocks: CommandBlockIndex,
     osc: OscSplitter,
@@ -162,6 +168,9 @@ impl Terminal {
             content_epoch: 0,
             bell_pending,
             program_status_payload: Arc::new(Mutex::new(None)),
+            progress_payload: Arc::new(Mutex::new(None)),
+            cwd_payload: Arc::new(Mutex::new(None)),
+            title_payload: Arc::new(Mutex::new(None)),
             blocks: CommandBlockIndex::default(),
             osc: OscSplitter::default(),
             scrollback_limit,
@@ -178,6 +187,30 @@ impl Terminal {
     /// 宿主拿去 `program_status::parse_7501_report` 解析；没有新报告则 `None`。
     pub fn take_program_status_payload(&self) -> Option<String> {
         self.program_status_payload
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()
+    }
+
+    /// #392：取走最近一次 OSC 9;4 进度载荷（`state[;progress]` 串）。
+    pub fn take_progress_payload(&self) -> Option<String> {
+        self.progress_payload
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()
+    }
+
+    /// #392：取走最近一次 OSC 7 / 9;9 目录载荷（file URL 或裸路径）。
+    pub fn take_cwd_payload(&self) -> Option<String> {
+        self.cwd_payload
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()
+    }
+
+    /// #392：取走最近一次 OSC 0/2 标题载荷。
+    pub fn take_title_payload(&self) -> Option<String> {
+        self.title_payload
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .take()
@@ -271,6 +304,24 @@ impl Terminal {
                         .program_status_payload
                         .lock()
                         .unwrap_or_else(|e| e.into_inner()) = Some(payload);
+                }
+                SplitItem::Progress { raw, payload } => {
+                    // #392：语义 OSC 不写入画面；原始字节透传保证嵌套终端一致。
+                    self.feed_bytes(&raw);
+                    *self.progress_payload.lock().unwrap_or_else(|e| e.into_inner()) =
+                        Some(payload);
+                }
+                SplitItem::Cwd {
+                    raw,
+                    payload,
+                    is_osc7: _,
+                } => {
+                    self.feed_bytes(&raw);
+                    *self.cwd_payload.lock().unwrap_or_else(|e| e.into_inner()) = Some(payload);
+                }
+                SplitItem::Title { raw, payload } => {
+                    self.feed_bytes(&raw);
+                    *self.title_payload.lock().unwrap_or_else(|e| e.into_inner()) = Some(payload);
                 }
             }
         }
