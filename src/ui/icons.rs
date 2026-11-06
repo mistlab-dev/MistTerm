@@ -741,7 +741,7 @@ fn app_icon_corner_frac() -> f32 {
     }
 }
 
-/// 窗口 / Dock / 任务栏图标(霓虹 `>_` + 底部烟雾)。
+/// 窗口 / Dock / 任务栏图标(烘焙品牌图)。
 pub fn app_window_icon_data() -> egui::IconData {
     const SIZE: u32 = 256;
     let img = render_app_icon(SIZE, app_icon_outer_pad_frac(), app_icon_corner_frac());
@@ -752,13 +752,22 @@ pub fn app_window_icon_data() -> egui::IconData {
     }
 }
 
-/// 按任意尺寸原生绘制应用图标(外圈透明)。
+/// 按任意尺寸缩放烘焙应用图标(`assets/app-icon-1024.png`)。
+/// `pad_frac` / `corner_frac` 已烘焙进源图，保留参数以兼容调用方。
 pub fn render_app_icon(size: u32, pad_frac: f32, corner_frac: f32) -> RgbaImage {
-    let pad = (size as f32 * pad_frac).round() as u32;
-    let mut img = RgbaImage::from_pixel(size, size, Rgba([0, 0, 0, 0]));
-    let edge = size - pad;
-    paint_mist_app_icon(&mut img, pad, edge, edge, corner_frac);
-    img
+    let _ = (pad_frac, corner_frac);
+    scale_baked_app_icon(size)
+}
+
+fn scale_baked_app_icon(size: u32) -> RgbaImage {
+    const RAW: &[u8] = include_bytes!("../../assets/app-icon-1024.png");
+    let src = image::load_from_memory(RAW)
+        .expect("assets/app-icon-1024.png")
+        .into_rgba8();
+    if src.width() == size && src.height() == size {
+        return src;
+    }
+    image::imageops::resize(&src, size, size, image::imageops::FilterType::Lanczos3)
 }
 
 /// 按 macOS 打包规格渲染(预览不同尺寸用)。
