@@ -375,7 +375,13 @@ impl MistTermApp {
                                     if let Some(session) =
                                         self.session_manager.get_session(&session_id).cloned()
                                     {
-                                        self.open_new_tab_for_session(ctx, &session);
+                                        // #392：侧栏「复制/打开标签」同样继承当前活动 pane cwd。
+                                        let inherit = self
+                                            .active_tab
+                                            .and_then(|i| self.tab_pane_inherit_cwd(i));
+                                        self.open_new_tab_for_session_with_cwd(
+                                            ctx, &session, inherit,
+                                        );
                                         self.collapse_connection_sidebar();
                                     }
                                 }
@@ -2258,8 +2264,9 @@ impl MistTermApp {
             let mut close_right = None;
             let mut disconnect_ssh_idx = None;
             let mut reconnect_idx = None;
-            let mut open_another_sid: Option<String> = None;
-            let mut open_another_local = false;
+            let mut open_another_sid: Option<(String, Option<String>)> = None;
+            let mut open_another_local_cwd: Option<Option<String>> = None;
+            let mut rename_tab_idx: Option<usize> = None;
             let mut split_h_idx = None;
             let mut split_v_idx = None;
             let mut broadcast_idx = None;
@@ -2371,11 +2378,30 @@ impl MistTermApp {
                         )
                         .clicked()
                     {
+                        // #392：从右键源 tab 显式继承 cwd，避免焦点已切走时误用 active_tab。
+                        let active = tab
+                            .active_pane
+                            .min(tab.panes.len().saturating_sub(1));
+                        let inherit = tab.panes.get(active).and_then(|p| {
+                            p.terminal
+                                .shell_cwd()
+                                .map(|s| s.to_string())
+                                .or_else(|| p.shell_cwd.clone())
+                        });
                         if is_local {
-                            open_another_local = true;
+                            open_another_local_cwd = Some(inherit);
                         } else {
-                            open_another_sid = Some(sid.clone());
+                            open_another_sid = Some((sid.clone(), inherit));
                         }
+                    }
+                    if crate::ui::chrome::popup_menu_button(
+                        ui,
+                        theme,
+                        crate::i18n::tr(ctx, "Rename Tab", "重命名标签"),
+                    )
+                    .clicked()
+                    {
+                        rename_tab_idx = Some(idx);
                     }
                     if tab.any_connected_or_connecting()
                         && crate::ui::chrome::popup_menu_button(
@@ -2515,11 +2541,18 @@ impl MistTermApp {
             if let Some(idx) = to_close {
                 self.request_close_tab_at(idx);
             }
-            if open_another_local {
-                self.open_local_shell_tab(ctx);
-            } else if let Some(sid) = open_another_sid {
+            if let Some(cwd) = open_another_local_cwd {
+                self.open_local_shell_tab_with_cwd(ctx, cwd);
+            } else if let Some((sid, cwd)) = open_another_sid {
                 if let Some(session) = self.session_manager.get_session(&sid).cloned() {
-                    self.open_new_tab_for_session(ctx, &session);
+                    self.open_new_tab_for_session_with_cwd(ctx, &session, cwd);
+                }
+            }
+            if let Some(idx) = rename_tab_idx {
+                if idx < self.tabs.len() {
+                    let draft = self.tabs[idx].display_title();
+                    self.tab_rename_draft = draft;
+                    self.pending_tab_rename = Some(idx);
                 }
             }
             // #326：同一帧内 reconnect 与 split/close 等互斥——egui 0.37 弹窗在
@@ -2739,7 +2772,11 @@ impl MistTermApp {
 
         if let Some(sid) = open_session_id {
             if let Some(session) = self.session_manager.get_session(&sid).cloned() {
-                self.open_new_tab_for_session(ctx, &session);
+                // #392：与 ⌘T 一致，继承当前活动 pane 的 shell cwd。
+                let inherit = self
+                    .active_tab
+                    .and_then(|i| self.tab_pane_inherit_cwd(i));
+                self.open_new_tab_for_session_with_cwd(ctx, &session, inherit);
             }
         } else if open_local {
             self.open_local_shell_tab(ctx);
