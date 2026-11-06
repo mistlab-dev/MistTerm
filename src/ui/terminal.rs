@@ -1630,6 +1630,14 @@ impl TerminalView {
     }
 
     /// SSH 分屏：等提示符出现后再 `cd` 到源窗格目录。
+    /// #392 复审：OSC 7/9;9 汇报的目录同步进 terminal 侧缓存，
+    /// 与提示符探测的 shell_cwd() 收敛为一条；仅在未手动 cd 探测出更新时写。
+    pub(crate) fn sync_shell_cwd(&mut self, cwd: &str) {
+        if self.shell_cwd.as_deref() != Some(cwd) {
+            self.shell_cwd = Some(cwd.to_string());
+        }
+    }
+
     pub(crate) fn arm_startup_directory(&mut self, cwd: &str) {
         let cwd = cwd.trim();
         if cwd.is_empty() {
@@ -5455,6 +5463,25 @@ impl TerminalView {
     pub fn take_program_status(&mut self) -> Option<crate::terminal::program_status::ProgramStatus> {
         let payload = self.terminal.take_program_status_payload()?;
         crate::terminal::program_status::parse_7501_report(&payload)
+    }
+
+    /// #392：取走并解析最近一次 OSC 9;4 进度报告。
+    pub fn take_progress(&mut self) -> Option<crate::terminal::sem_osc::ProgressReport> {
+        let payload = self.terminal.take_progress_payload()?;
+        crate::terminal::sem_osc::ProgressReport::parse(&payload)
+    }
+
+    /// #392：取走并解析最近一次 OSC 7 / 9;9 目录报告。
+    pub fn take_cwd(&mut self) -> Option<crate::terminal::sem_osc::CwdReport> {
+        let payload = self.terminal.take_cwd_payload()?;
+        crate::terminal::sem_osc::parse_osc7(&payload)
+            .or_else(|| crate::terminal::sem_osc::parse_osc99(&payload))
+    }
+
+    /// #392：取走并校验最近一次 OSC 0/2 标题。
+    pub fn take_title(&mut self) -> Option<String> {
+        let payload = self.terminal.take_title_payload()?;
+        crate::terminal::sem_osc::parse_title(&payload)
     }
 
     /// 取走待上报的连接结果(`success`, `host`)。

@@ -1234,6 +1234,7 @@ pub fn session_tab_chip(
     needs_attention: bool,
     show_close: bool,
     env_color: Option<egui::Color32>,
+    progress: Option<crate::terminal::sem_osc::ProgressReport>,
 ) -> SessionTabChipResult {
     let close_slot = theme.size_tab_bar_icon_btn();
     let pad_x = theme.spacing_tab_x();
@@ -1344,6 +1345,48 @@ pub fn session_tab_chip(
     };
     let dot_center = egui::pos2(inner.min.x + 2.5, cy);
     ui.painter().circle_filled(dot_center, status_r, status_color);
+    // #392：OSC 9;4 进度指示——圆点右上叠一个微型进度环；error/warning 用对应色。
+    if let Some(p) = progress {
+        let ring_c = match p.state {
+            crate::terminal::sem_osc::ProgressState::Error => theme.red_color(),
+            crate::terminal::sem_osc::ProgressState::Warning => theme.amber_color(),
+            _ => theme.accent_color(),
+        };
+        let ring_cx = dot_center.x + 5.0;
+        let ring_cy = cy - 4.0;
+        match p.progress {
+            Some(pct) => {
+                // 确定进度：底环淡色 + 进度弧。
+                let radius = 3.5;
+                let bg = Color32::from_rgba_unmultiplied(ring_c.r(), ring_c.g(), ring_c.b(), 60);
+                ui.painter().circle_stroke(
+                    egui::pos2(ring_cx, ring_cy),
+                    radius,
+                    egui::Stroke::new(1.5, bg),
+                );
+                let frac = pct as f32 / 100.0;
+                let start = std::f32::consts::FRAC_PI_2; // 12 点方向起
+                let end = start - std::f32::consts::TAU * frac;
+                let center = egui::Pos2::new(ring_cx, ring_cy);
+                let steps = ((frac * 24.0).ceil() as usize).max(2);
+                let pts: Vec<egui::Pos2> = (0..=steps)
+                    .map(|i| {
+                        let ang = start + (end - start) * (i as f32 / steps as f32);
+                        center + radius * egui::vec2(ang.cos(), -ang.sin())
+                    })
+                    .collect();
+                ui.painter().add(egui::Shape::line(
+                    pts,
+                    egui::Stroke::new(1.5, ring_c),
+                ));
+            }
+            None => {
+                // 不定进度：小转圈占位（静态三点，闪烁动画成本高不做）。
+                ui.painter()
+                    .circle_filled(egui::pos2(ring_cx, ring_cy), 2.5, ring_c);
+            }
+        }
+    }
     let ink = label_galley
         .rows
         .first()
