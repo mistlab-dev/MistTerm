@@ -37,7 +37,9 @@ pub const COPY_MAX_LINES: usize = 4_000;
 /// 内存里保留的块上限（含尚未形成命令的提示符）。更老的从队头丢掉。
 const MAX_BLOCKS: usize = 4_096;
 /// 未结束的 OSC 缓冲上限。再长就交给 VTE 透传，直到结束符，避免标题类 OSC 把缓冲撑住。
-const OSC_HOLD_LIMIT: usize = 512;
+// #390 复审：OSC 7501 整序列上限 4096（msg base64 最长 2732），512 会把
+// 合法长报告拆成 Bytes 静默丢弃。抬到 8KiB，与 parse 层上限一致。
+const OSC_HOLD_LIMIT: usize = 8 * 1024;
 
 /// 网格上的一个点。`column` 对复制终点是开区间。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -590,8 +592,8 @@ impl OscSplitter {
                 exit_code,
             });
         } else if let Some(payload) = parse_7501_payload(&raw) {
-            // #390：程序状态报告。解析失败按 spec 整条丢弃——但不透传原始字节
-            // 到画面（转义序列本身不可见），等同「不支持时自动忽略」。
+            // #390：程序状态报告。转义序列本身不可见；raw 仍按序透传给 VTE
+            // （alacritty 消费侧），保证嵌套终端（tmux 里再跑 agent）画面一致。
             out.push(SplitItem::ProgramStatus { raw, payload });
         } else {
             out.push(SplitItem::Bytes(raw));
@@ -732,6 +734,26 @@ mod tests {
         let mut out = Vec::new();
         splitter.push(b"\x1b]0;my title\x07", &mut out);
         assert!(matches!(&out[0], SplitItem::Bytes(_)));
+    }
+
+    #[test]
+    fn splitter_long_7501_report_survives_hold_limit() {
+        // #390 复审回归：~600B+ 的合法长报告不再被 OSC_HOLD_LIMIT 拆碎。
+        // msg = base64(600 字节文本) ≈ 800 字符，总长超旧 512 上限。
+        let text = "x".repeat(600);
+        let b64 = {
+            use base64::Engine as _;
+            base64::engine::general_purpose::STANDARD.encode(text.as_bytes())
+        };
+        let seq = format!("\x1b]7501;state=blocked:kind=question:msg={b64}\x07");
+        let mut splitter = OscSplitter::default();
+        let mut out = Vec::new();
+        splitter.push(seq.as_bytes(), &mut out);
+        assert!(
+            matches!(&out[0], SplitItem::ProgramStatus { payload, .. }
+                if super::super::program_status::parse_7501_report(payload).is_some()),
+            "长报告必须完整产出且可解析"
+        );
     }
 
     #[test]

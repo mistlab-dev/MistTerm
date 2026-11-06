@@ -9764,7 +9764,14 @@ impl eframe::App for MistTermApp {
                     if let Some(status) = pane.terminal.take_program_status() {
                         let blocked =
                             status.state == crate::terminal::program_status::ProgramState::Blocked;
-                        pane.agent_status = Some(status);
+                        // clear = 程序主动撤记录；清掉本地缓存与注意力角标。
+                        pane.agent_status = if status.state
+                            == crate::terminal::program_status::ProgramState::Clear
+                        {
+                            None
+                        } else {
+                            Some(status)
+                        };
                         if blocked {
                             attention = true;
                         }
@@ -9796,7 +9803,13 @@ impl eframe::App for MistTermApp {
                     let _ = pane.terminal.take_pending_notifies();
                     // #390：聚焦标签也取走载荷（避免滞留），但只更新记录、不置角标。
                     if let Some(status) = pane.terminal.take_program_status() {
-                        pane.agent_status = Some(status);
+                        pane.agent_status = if status.state
+                            == crate::terminal::program_status::ProgramState::Clear
+                        {
+                            None
+                        } else {
+                            Some(status)
+                        };
                     }
                 }
             }
