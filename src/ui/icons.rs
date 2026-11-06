@@ -704,47 +704,15 @@ fn draw_m_letter_cell(p: &mut CellPainter<'_>, stroke_w: f32) {
     p.segs(M_LETTER_SEGS, stroke_w);
 }
 
-/// 霓虹青(提示符外发光 / 雾气)
-const APP_ICON_CYAN: [u8; 3] = [55, 175, 255];
-/// 提示符核心高光白
-const APP_ICON_TEXT_CORE: [u8; 4] = [238, 246, 255, 255];
-/// macOS 打包源图规格(`scripts/bundle-macos.sh` 由它生成 .icns)。
-/// 对齐 Apple 1024 模板：本体约 824×824、四周各约 100px 透明边、圆角约 185px。
-const APP_ICON_BUNDLE_SIZE: u32 = 1024;
-const APP_ICON_BUNDLE_PAD_FRAC: f32 = 100.0 / 1024.0;
-/// 相对底板边长的圆角比例（185 / 824）。
-const APP_ICON_BUNDLE_CORNER_FRAC: f32 = 185.0 / 824.0;
+/// 已定稿品牌图 `assets/app-icon-1024.png`（1024×1024 RGBA）。
+/// 圆角外透明，留白按 macOS 1024 模板烘焙在图里。macOS `.icns`、Windows ICO
+/// 和运行时窗口图标都缩放这一张，全平台共用同一套留白，不再按平台改外圈或圆角。
+const APP_ICON_MASTER_PNG: &[u8] = include_bytes!("../../assets/app-icon-1024.png");
 
-/// Windows 任务栏 / exe 资源图标规格(`assets/app-icon.ico` 同样使用)
-pub const APP_ICON_WINDOWS_PAD_FRAC: f32 = 0.02;
-pub const APP_ICON_WINDOWS_CORNER_FRAC: f32 = 0.10;
-
-/// 图标透明外圈比例：macOS 与打包 .icns 同一套规格；Windows 任务栏留白宜小。
-fn app_icon_outer_pad_frac() -> f32 {
-    if cfg!(windows) {
-        APP_ICON_WINDOWS_PAD_FRAC
-    } else if cfg!(target_os = "macos") {
-        APP_ICON_BUNDLE_PAD_FRAC
-    } else {
-        0.05
-    }
-}
-
-/// 圆角比例：macOS 与打包源图一致；Windows 任务栏再套方角缩放，圆角过大会吃掉有效面积。
-fn app_icon_corner_frac() -> f32 {
-    if cfg!(windows) {
-        APP_ICON_WINDOWS_CORNER_FRAC
-    } else if cfg!(target_os = "macos") {
-        APP_ICON_BUNDLE_CORNER_FRAC
-    } else {
-        0.165
-    }
-}
-
-/// 窗口 / Dock / 任务栏图标(霓虹 `>_` + 底部烟雾)。
+/// 窗口 / Dock / 任务栏图标。
 pub fn app_window_icon_data() -> egui::IconData {
     const SIZE: u32 = 256;
-    let img = render_app_icon(SIZE, app_icon_outer_pad_frac(), app_icon_corner_frac());
+    let img = render_app_icon(SIZE);
     egui::IconData {
         rgba: img.into_raw(),
         width: SIZE,
@@ -752,373 +720,20 @@ pub fn app_window_icon_data() -> egui::IconData {
     }
 }
 
-/// 按任意尺寸原生绘制应用图标(外圈透明)。
-pub fn render_app_icon(size: u32, pad_frac: f32, corner_frac: f32) -> RgbaImage {
-    let pad = (size as f32 * pad_frac).round() as u32;
-    let mut img = RgbaImage::from_pixel(size, size, Rgba([0, 0, 0, 0]));
-    let edge = size - pad;
-    paint_mist_app_icon(&mut img, pad, edge, edge, corner_frac);
-    img
+/// 把烘焙主图缩放到 `size`（Lanczos）。与主图同尺寸时原样返回。
+pub fn render_app_icon(size: u32) -> RgbaImage {
+    let src = image::load_from_memory(APP_ICON_MASTER_PNG)
+        .expect("assets/app-icon-1024.png")
+        .into_rgba8();
+    if src.width() == size && src.height() == size {
+        return src;
+    }
+    image::imageops::resize(&src, size, size, image::imageops::FilterType::Lanczos3)
 }
 
-/// 按 macOS 打包规格渲染(预览不同尺寸用)。
-pub fn render_app_icon_bundle(size: u32) -> RgbaImage {
-    render_app_icon(size, APP_ICON_BUNDLE_PAD_FRAC, APP_ICON_BUNDLE_CORNER_FRAC)
-}
-
-/// 导出窗口图标 PNG 预览(`cargo run --bin export_app_icon`)。
+/// 导出 256 窗口图标预览（`cargo run --bin export_app_icon`）。
 pub fn export_app_icon_png(path: &std::path::Path) -> Result<(), image::ImageError> {
-    render_app_icon(256, app_icon_outer_pad_frac(), app_icon_corner_frac()).save(path)
-}
-
-/// 导出 macOS 打包用 1024 源图(`cargo run --bin export_app_icon`)。
-pub fn export_app_icon_bundle_png(path: &std::path::Path) -> Result<(), image::ImageError> {
-    render_app_icon_bundle(APP_ICON_BUNDLE_SIZE).save(path)
-}
-
-/// `>_` 相对底板宽度的缩放
-const APP_ICON_PROMPT_SCALE: f32 = 0.62;
-
-/// 在 `[x0,x1)×[y0,y1)` 内绘制 Mist 品牌图标：居中霓虹 `>_`，底部烟雾。
-fn paint_mist_app_icon(img: &mut RgbaImage, x0: u32, x1: u32, y1: u32, corner_frac: f32) {
-    let y0 = x0;
-    let w = (x1 - x0) as f32;
-    let h = (y1 - y0) as f32;
-    let ox = x0 as f32;
-    let oy = y0 as f32;
-
-    fill_vertical_gradient(img, x0, y0, x1, y1, [19, 27, 52], [8, 11, 26]);
-    paint_mist_smoke(img, x0, y0, x1, y1);
-
-    let mut neon = NeonMask::new(img.width(), img.height());
-    add_prompt_centered(&mut neon, ox + w * 0.5, oy + h * 0.45, w * APP_ICON_PROMPT_SCALE);
-    neon.composite(img, w);
-
-    let radius = w.min(h) * corner_frac;
-    paint_window_border(img, ox, oy, ox + w, oy + h, radius, (w * 0.008).max(1.0));
-    apply_rounded_alpha_mask(img, ox, oy, ox + w, oy + h, radius);
-}
-
-/// `>` 几何(以 `scale` = 1 时的底板宽度为单位)
-const CHEVRON_W: f32 = 0.20;
-const CHEVRON_HALF_H: f32 = 0.155;
-const PROMPT_HALF_STROKE: f32 = 0.042;
-const CURSOR_GAP: f32 = 0.08;
-const CURSOR_W: f32 = 0.27;
-
-/// `>` 描边：左端点 x = `left`，垂直中心 = `cy`
-fn add_chevron(neon: &mut NeonMask, left: f32, cy: f32, scale: f32) {
-    let hw = scale * PROMPT_HALF_STROKE;
-    let a = (left, cy - scale * CHEVRON_HALF_H);
-    let b = (left + scale * CHEVRON_W, cy);
-    let c = (left, cy + scale * CHEVRON_HALF_H);
-    neon.add_sdf((a.0 - hw, a.1 - hw, b.0 + hw, c.1 + hw), |px, py| {
-        dist_to_segment(px, py, a, b).min(dist_to_segment(px, py, b, c)) - hw
-    });
-}
-
-/// 下划线光标：底边与 `>` 下端对齐
-fn add_cursor(neon: &mut NeonMask, x0: f32, x1: f32, bottom: f32, half_stroke: f32) {
-    let (y0, r) = (bottom - half_stroke * 2.0, half_stroke * 0.35);
-    neon.add_sdf((x0, y0, x1, bottom), |px, py| sdf_rounded_rect(px, py, x0, y0, x1, bottom, r));
-}
-
-/// `>_`：`left` 为 `>` 左端点，`cy` 为垂直中心
-fn add_prompt(neon: &mut NeonMask, left: f32, cy: f32, scale: f32) {
-    let hw = scale * PROMPT_HALF_STROKE;
-    add_chevron(neon, left, cy, scale);
-    let x0 = left + scale * (CHEVRON_W + CURSOR_GAP);
-    add_cursor(neon, x0, x0 + scale * CURSOR_W, cy + scale * CHEVRON_HALF_H + hw, hw);
-}
-
-/// `>_` 以可见外框中心定位
-fn add_prompt_centered(neon: &mut NeonMask, cx: f32, cy: f32, scale: f32) {
-    let hw = scale * PROMPT_HALF_STROKE;
-    let span = scale * (CHEVRON_W + CURSOR_GAP + CURSOR_W) + hw;
-    add_prompt(neon, cx - span * 0.5 + hw, cy, scale);
-}
-
-/// 霓虹层覆盖率遮罩：图形先合成，再统一模糊出外发光
-struct NeonMask {
-    w: usize,
-    h: usize,
-    cov: Vec<f32>,
-}
-
-impl NeonMask {
-    fn new(w: u32, h: u32) -> Self {
-        let (w, h) = (w as usize, h as usize);
-        Self { w, h, cov: vec![0.0; w * h] }
-    }
-
-    fn max_at(&mut self, x: i32, y: i32, c: f32) {
-        if x < 0 || y < 0 || x as usize >= self.w || y as usize >= self.h {
-            return;
-        }
-        let i = y as usize * self.w + x as usize;
-        self.cov[i] = self.cov[i].max(c);
-    }
-
-    fn add_sdf(&mut self, bounds: (f32, f32, f32, f32), sdf: impl Fn(f32, f32) -> f32) {
-        let x0 = (bounds.0 - 2.0).floor().max(0.0) as i32;
-        let y0 = (bounds.1 - 2.0).floor().max(0.0) as i32;
-        let x1 = (bounds.2 + 2.0).ceil().min(self.w as f32 - 1.0) as i32;
-        let y1 = (bounds.3 + 2.0).ceil().min(self.h as f32 - 1.0) as i32;
-        for y in y0..=y1 {
-            for x in x0..=x1 {
-                let c = (0.5 - sdf(x as f32 + 0.5, y as f32 + 0.5)).clamp(0.0, 1.0);
-                self.max_at(x, y, c);
-            }
-        }
-    }
-
-    /// 三次盒式模糊近似高斯
-    fn blurred(&self, radius: f32) -> Vec<f32> {
-        let r = (radius / 1.7).round().max(1.0) as usize;
-        let mut a = self.cov.clone();
-        let mut tmp = vec![0.0; a.len()];
-        for _ in 0..3 {
-            box_blur_pass(&a, &mut tmp, self.w, self.h, r, self.w, 1);
-            box_blur_pass(&tmp, &mut a, self.h, self.w, r, 1, self.w);
-        }
-        a
-    }
-
-    /// 宽外发光 + 窄外发光 + 白色核心
-    fn composite(&self, img: &mut RgbaImage, plate_w: f32) {
-        let wide = self.blurred(plate_w * 0.06);
-        let tight = self.blurred(plate_w * 0.012);
-        let c = APP_ICON_CYAN;
-        let core = APP_ICON_TEXT_CORE;
-        for (i, &cov) in self.cov.iter().enumerate() {
-            let (x, y) = ((i % self.w) as i32, (i / self.w) as i32);
-            let a1 = ((wide[i] * 1.6).min(1.0) * 110.0).round() as u8;
-            let a2 = ((tight[i] * 1.5).min(1.0) * 200.0).round() as u8;
-            let a3 = (cov * core[3] as f32).round() as u8;
-            blend_pixel(img, x, y, [c[0], c[1], c[2], a1]);
-            blend_pixel(img, x, y, [c[0], c[1], c[2], a2]);
-            blend_pixel(img, x, y, [core[0], core[1], core[2], a3]);
-        }
-    }
-}
-
-/// 一维盒式模糊：沿 `len` 方向(步长 `step`)处理 `lines` 条线(线间步长 `line_step`)，界外视为 0
-fn box_blur_pass(
-    src: &[f32],
-    dst: &mut [f32],
-    len: usize,
-    lines: usize,
-    r: usize,
-    line_step: usize,
-    step: usize,
-) {
-    let norm = 1.0 / (2 * r + 1) as f32;
-    for line in 0..lines {
-        let base = line * line_step;
-        let at = |k: usize| src[base + k * step];
-        let mut sum: f32 = (0..=r.min(len - 1)).map(at).sum();
-        for k in 0..len {
-            dst[base + k * step] = sum * norm;
-            if k + r + 1 < len {
-                sum += at(k + r + 1);
-            }
-            if k >= r {
-                sum -= at(k - r);
-            }
-        }
-    }
-}
-
-/// 底部烟雾：波浪上沿 + 扭曲噪声丝缕，坐标按底板归一化，各尺寸形态一致
-fn paint_mist_smoke(img: &mut RgbaImage, x0: u32, y0: u32, x1: u32, y1: u32) {
-    const DEEP: [f32; 3] = [28.0, 78.0, 140.0];
-    const BRIGHT: [f32; 3] = [80.0, 175.0, 240.0];
-    let w = (x1 - x0) as f32;
-    let h = (y1 - y0) as f32;
-    let v_start = 0.55;
-    for y in ((y0 as f32 + h * v_start) as u32)..y1 {
-        let v = (y - y0) as f32 / h;
-        for x in x0..x1 {
-            let u = (x - x0) as f32 / w;
-            let edge = 0.70 + 0.045 * (u * 5.3 + 0.7).sin() + 0.06 * (fbm(u * 2.5, 3.1) - 0.5);
-            let body = smoothstep(edge - 0.08, edge + 0.26, v);
-            if body <= 0.0 {
-                continue;
-            }
-            let wx = u * 2.2 + 1.0 * fbm(u * 1.5 + 4.1, v * 2.5 + 1.7);
-            let wy = v * 4.0 + 1.0 * fbm(u * 1.5 + 8.3, v * 2.5 + 2.9);
-            let n = fbm(wx, wy);
-            let wisp = (1.0 - (2.0 * n - 1.0).abs()).powi(2);
-            let density = (body * (0.35 + 0.50 * n + 0.35 * wisp)).clamp(0.0, 1.0);
-            let t = (n * 0.5 + wisp * 0.3 + body * 0.2).clamp(0.0, 1.0);
-            let c = |i: usize| (DEEP[i] + (BRIGHT[i] - DEEP[i]) * t).round() as u8;
-            let a = (density * 150.0).round() as u8;
-            blend_pixel(img, x as i32, y as i32, [c(0), c(1), c(2), a]);
-        }
-    }
-}
-
-fn smoothstep(e0: f32, e1: f32, x: f32) -> f32 {
-    let t = ((x - e0) / (e1 - e0)).clamp(0.0, 1.0);
-    t * t * (3.0 - 2.0 * t)
-}
-
-fn hash_noise(ix: i32, iy: i32) -> f32 {
-    let mut h = (ix as u32).wrapping_mul(374_761_393) ^ (iy as u32).wrapping_mul(668_265_263);
-    h = (h ^ (h >> 13)).wrapping_mul(1_274_126_177);
-    ((h ^ (h >> 16)) & 0x00ff_ffff) as f32 / 16_777_215.0
-}
-
-fn value_noise(x: f32, y: f32) -> f32 {
-    let (ix, iy) = (x.floor() as i32, y.floor() as i32);
-    let (fx, fy) = (x - x.floor(), y - y.floor());
-    let (sx, sy) = (fx * fx * (3.0 - 2.0 * fx), fy * fy * (3.0 - 2.0 * fy));
-    let top = hash_noise(ix, iy) + (hash_noise(ix + 1, iy) - hash_noise(ix, iy)) * sx;
-    let bottom = hash_noise(ix, iy + 1) + (hash_noise(ix + 1, iy + 1) - hash_noise(ix, iy + 1)) * sx;
-    top + (bottom - top) * sy
-}
-
-/// 分形噪声，输出约 0..1
-fn fbm(x: f32, y: f32) -> f32 {
-    let (mut sum, mut amp, mut freq, mut norm) = (0.0, 0.5, 1.0, 0.0);
-    for _ in 0..4 {
-        sum += value_noise(x * freq, y * freq) * amp;
-        norm += amp;
-        amp *= 0.5;
-        freq *= 2.0;
-    }
-    sum / norm
-}
-
-/// 沿底板内侧的细描边，深色 Dock / 任务栏上也能看清窗口轮廓
-fn paint_window_border(img: &mut RgbaImage, x0: f32, y0: f32, x1: f32, y1: f32, r: f32, width: f32) {
-    paint_sdf(img, (x0, y0, x1, y1), [120, 200, 255, 70], 0.0, |px, py| {
-        (sdf_rounded_rect(px, py, x0, y0, x1, y1, r) + width * 0.5).abs() - width * 0.5
-    });
-}
-
-fn dist_to_segment(px: f32, py: f32, a: (f32, f32), b: (f32, f32)) -> f32 {
-    let (dx, dy) = (b.0 - a.0, b.1 - a.1);
-    let len2 = (dx * dx + dy * dy).max(1e-6);
-    let t = (((px - a.0) * dx + (py - a.1) * dy) / len2).clamp(0.0, 1.0);
-    let (qx, qy) = (a.0 + dx * t - px, a.1 + dy * t - py);
-    (qx * qx + qy * qy).sqrt()
-}
-
-/// 按 SDF(负值 = 内侧)着色：`glow == 0` 时抗锯齿实心；否则内侧满色、外侧 `glow` 像素内平方衰减。
-fn paint_sdf(
-    img: &mut RgbaImage,
-    bounds: (f32, f32, f32, f32),
-    color: [u8; 4],
-    glow: f32,
-    sdf: impl Fn(f32, f32) -> f32,
-) {
-    let m = glow + 2.0;
-    let x0 = (bounds.0 - m).floor().max(0.0) as i32;
-    let y0 = (bounds.1 - m).floor().max(0.0) as i32;
-    let x1 = (bounds.2 + m).ceil().min(img.width() as f32 - 1.0) as i32;
-    let y1 = (bounds.3 + m).ceil().min(img.height() as f32 - 1.0) as i32;
-    for y in y0..=y1 {
-        for x in x0..=x1 {
-            let d = sdf(x as f32 + 0.5, y as f32 + 0.5);
-            let cov = if glow > 0.0 {
-                if d <= 0.0 { 1.0 } else { (1.0 - d / glow).max(0.0).powi(2) }
-            } else {
-                (0.5 - d).clamp(0.0, 1.0)
-            };
-            let a = (color[3] as f32 * cov).round() as u8;
-            if a > 0 {
-                blend_pixel(img, x, y, [color[0], color[1], color[2], a]);
-            }
-        }
-    }
-}
-
-/// 圆角矩形 SDF(负值 = 内侧)
-fn sdf_rounded_rect(px: f32, py: f32, x0: f32, y0: f32, x1: f32, y1: f32, r: f32) -> f32 {
-    let cx = (x0 + x1) * 0.5;
-    let cy = (y0 + y1) * 0.5;
-    let hx = (x1 - x0) * 0.5 - r;
-    let hy = (y1 - y0) * 0.5 - r;
-    let qx = (px - cx).abs() - hx;
-    let qy = (py - cy).abs() - hy;
-    let ax = qx.max(0.0);
-    let ay = qy.max(0.0);
-    (ax * ax + ay * ay).sqrt() - r + qx.max(qy).min(0.0)
-}
-
-fn rounded_rect_coverage(px: f32, py: f32, x0: f32, y0: f32, x1: f32, y1: f32, r: f32) -> f32 {
-    let d = sdf_rounded_rect(px, py, x0, y0, x1, y1, r);
-    (0.5 - d).clamp(0.0, 1.0)
-}
-
-/// 将图标内容裁切为圆角方形(外侧透明)
-fn apply_rounded_alpha_mask(img: &mut RgbaImage, x0: f32, y0: f32, x1: f32, y1: f32, radius: f32) {
-    let w = img.width();
-    let h = img.height();
-    for y in 0..h {
-        for x in 0..w {
-            let cov = rounded_rect_coverage(x as f32 + 0.5, y as f32 + 0.5, x0, y0, x1, y1, radius);
-            if cov <= 0.0 {
-                img.put_pixel(x, y, Rgba([0, 0, 0, 0]));
-            } else if cov < 1.0 {
-                let p = img.get_pixel(x, y);
-                let a = (p[3] as f32 * cov).round() as u8;
-                img.put_pixel(x, y, Rgba([p[0], p[1], p[2], a]));
-            }
-        }
-    }
-}
-
-fn fill_vertical_gradient(
-    img: &mut RgbaImage,
-    x0: u32,
-    y0: u32,
-    x1: u32,
-    y1: u32,
-    top: [u8; 3],
-    bottom: [u8; 3],
-) {
-    let h = (y1 - y0).max(1) as f32;
-    for y in y0..y1 {
-        let t = (y - y0) as f32 / h;
-        let r = lerp_u8(top[0], bottom[0], t);
-        let g = lerp_u8(top[1], bottom[1], t);
-        let b = lerp_u8(top[2], bottom[2], t);
-        for x in x0..x1 {
-            img.put_pixel(x, y, Rgba([r, g, b, 255]));
-        }
-    }
-}
-
-fn lerp_u8(a: u8, b: u8, t: f32) -> u8 {
-    (a as f32 + (b as f32 - a as f32) * t).round() as u8
-}
-
-fn blend_pixel(img: &mut RgbaImage, x: i32, y: i32, fg: [u8; 4]) {
-    if fg[3] == 0 || x < 0 || y < 0 {
-        return;
-    }
-    let (w, h) = (img.width() as i32, img.height() as i32);
-    if x >= w || y >= h {
-        return;
-    }
-    let p = img.get_pixel_mut(x as u32, y as u32);
-    let fa = fg[3] as f32 / 255.0;
-    let ba = p[3] as f32 / 255.0;
-    let out_a = fa + ba * (1.0 - fa);
-    if out_a < 1.0 / 255.0 {
-        return;
-    }
-    let blend = |fc: u8, bc: u8| -> u8 {
-        ((fc as f32 * fa + bc as f32 * ba * (1.0 - fa)) / out_a).round() as u8
-    };
-    *p = Rgba([
-        blend(fg[0], p[0]),
-        blend(fg[1], p[1]),
-        blend(fg[2], p[2]),
-        (out_a * 255.0).round() as u8,
-    ]);
+    render_app_icon(256).save(path)
 }
 
 fn put_px(img: &mut RgbaImage, x: i32, y: i32, a: u8) {
@@ -1151,6 +766,27 @@ fn draw_line_aa(img: &mut RgbaImage, x0: i32, y0: i32, x1: i32, y1: i32, width: 
                 if ox * ox + oy * oy <= hw * hw {
                     put_px(img, cx + ox, cy + oy, alpha);
                 }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod app_icon_tests {
+    use super::render_app_icon;
+
+    #[test]
+    fn baked_app_icon_corners_are_transparent() {
+        for size in [1024, 256] {
+            let img = render_app_icon(size);
+            let (w, h) = (img.width(), img.height());
+            assert_eq!((w, h), (size, size));
+            for (x, y) in [(0, 0), (w - 1, 0), (0, h - 1), (w - 1, h - 1)] {
+                assert_eq!(
+                    img.get_pixel(x, y).0[3],
+                    0,
+                    "{size}px corner ({x},{y}) must be transparent"
+                );
             }
         }
     }
