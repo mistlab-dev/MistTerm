@@ -483,6 +483,41 @@ mod split_layout_tests {
     }
 }
 
+#[cfg(test)]
+mod title_display_tests {
+    use super::*;
+
+    fn dummy_pane(id: &str) -> TerminalPane {
+        TerminalPane::new(id.into(), id.into(), crate::ui::terminal::TerminalView::new())
+    }
+
+    #[test]
+    fn display_name_prefers_pinned_title_over_dynamic() {
+        let mut pane = dummy_pane("session");
+        pane.dynamic_title = Some("vim · file.rs".into());
+        assert_eq!(pane.display_name(), "vim · file.rs");
+        pane.title = "My Tab".into();
+        pane.title_pinned = true;
+        assert_eq!(pane.display_name(), "My Tab");
+    }
+
+    #[test]
+    fn display_name_falls_back_to_session_title() {
+        let pane = dummy_pane("Local Shell");
+        assert_eq!(pane.display_name(), "Local Shell");
+    }
+
+    #[test]
+    fn tab_display_title_uses_pinned_active_pane() {
+        let mut pane = dummy_pane("session");
+        pane.dynamic_title = Some("ssh user@host".into());
+        pane.title = "Pinned".into();
+        pane.title_pinned = true;
+        let tab = TerminalTab::single(pane);
+        assert_eq!(tab.display_title(), "Pinned");
+    }
+}
+
 pub fn render_split_body(
     ui: &mut egui::Ui,
     tab: &mut TerminalTab,
