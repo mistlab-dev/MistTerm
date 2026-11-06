@@ -2277,7 +2277,42 @@ impl MistTermApp {
                     false,
                     env_color,
                 );
-                let tab_hover = if tab.needs_attention && !active {
+                // #390：Agent 状态红绿灯悬停文案。blocked 优先（等审批最急），
+                // 其次 done/error（有未看结果）。角标本身走 needs_attention。
+                let tab_hover = if let Some(status) = tab
+                    .panes
+                    .iter()
+                    .find_map(|pane| pane.agent_status.as_ref())
+                {
+                    use crate::terminal::program_status::ProgramState;
+                    let agent_line = match status.state {
+                        ProgramState::Blocked => Some(crate::i18n::tr(
+                            ctx,
+                            "Agent waiting for you (approval / input)",
+                            "Agent 等待你处理（审批 / 输入）",
+                        )),
+                        ProgramState::Done => Some(crate::i18n::tr(
+                            ctx,
+                            "Agent finished — result unread",
+                            "Agent 已完成 —— 结果未查看",
+                        )),
+                        ProgramState::Error => Some(crate::i18n::tr(
+                            ctx,
+                            "Agent failed",
+                            "Agent 运行失败",
+                        )),
+                        ProgramState::Working => Some(crate::i18n::tr(
+                            ctx,
+                            "Agent working",
+                            "Agent 运行中",
+                        )),
+                        _ => None,
+                    };
+                    match agent_line {
+                        Some(line) => format!("{}\n{}", tab_hover, line),
+                        None => tab_hover,
+                    }
+                } else if tab.needs_attention && !active {
                     format!(
                         "{}\n{}",
                         tab_hover,

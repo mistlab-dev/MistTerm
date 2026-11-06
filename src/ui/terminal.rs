@@ -5450,6 +5450,13 @@ impl TerminalView {
         std::mem::take(&mut self.pending_attention_ended)
     }
 
+    /// #390：取走并解析最近一次 OSC 7501 程序状态报告。
+    /// 无新报告 / 载荷损坏（spec 整条丢弃）→ `None`。
+    pub fn take_program_status(&mut self) -> Option<crate::terminal::program_status::ProgramStatus> {
+        let payload = self.terminal.take_program_status_payload()?;
+        crate::terminal::program_status::parse_7501_report(&payload)
+    }
+
     /// 取走待上报的连接结果(`success`, `host`)。
     pub fn take_connect_audit(&mut self) -> Option<(bool, String)> {
         self.pending_connect_audit.take()

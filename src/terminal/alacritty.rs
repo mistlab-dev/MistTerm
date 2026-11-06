@@ -16,7 +16,7 @@ use super::command_block::{
 };
 pub use super::command_block::{BlockNav, CopyBlock, NavDir};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 /// VTE `Event::Bell` → sticky；`send_event` 仅 `&self`，故用共享原子。
 #[derive(Clone)]
@@ -123,6 +123,9 @@ pub struct Terminal {
     content_epoch: u64,
     /// 与 `BellListener` 共享；`feed` 解析到 BEL 后置位，宿主 `take`。
     bell_pending: Arc<AtomicBool>,
+    /// #390：最近一次 OSC 7501 程序状态报告（key=value 载荷）。
+    /// `feed` 解析到合法 7501 前缀后整条替换，宿主 `take_program_status_payload`。
+    program_status_payload: Arc<Mutex<Option<String>>>,
     /// OSC 133 / 633 命令块。坐标跟主屏幕网格走，备用屏幕不取样。
     blocks: CommandBlockIndex,
     osc: OscSplitter,
@@ -158,6 +161,7 @@ impl Terminal {
             height,
             content_epoch: 0,
             bell_pending,
+            program_status_payload: Arc::new(Mutex::new(None)),
             blocks: CommandBlockIndex::default(),
             osc: OscSplitter::default(),
             scrollback_limit,
@@ -168,6 +172,15 @@ impl Terminal {
     #[inline]
     pub fn take_pending_bell(&self) -> bool {
         self.bell_pending.swap(false, Ordering::Relaxed)
+    }
+
+    /// #390：取走最近一次 OSC 7501 状态载荷（`key=value` 串）。
+    /// 宿主拿去 `program_status::parse_7501_report` 解析；没有新报告则 `None`。
+    pub fn take_program_status_payload(&self) -> Option<String> {
+        self.program_status_payload
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()
     }
 
     /// 是否处于 DEC 备用屏幕（vim / less / top 等全屏程序）。
@@ -249,6 +262,15 @@ impl Terminal {
                 } => {
                     self.feed_bytes(&raw);
                     self.apply_marker(kind, exit_code);
+                }
+                SplitItem::ProgramStatus { raw, payload } => {
+                    // #390：转义序列本身不可见，不写画面；只记录载荷供宿主轮询。
+                    // 原始字节仍按序透传，保证不支持 7501 的外层（如 tmux 嵌套）画面一致。
+                    self.feed_bytes(&raw);
+                    *self
+                        .program_status_payload
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner()) = Some(payload);
                 }
             }
         }

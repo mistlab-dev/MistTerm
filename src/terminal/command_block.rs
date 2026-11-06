@@ -480,6 +480,11 @@ pub enum SplitItem {
         kind: u8,
         exit_code: Option<i32>,
     },
+    /// #390：OSC 7501 程序状态报告（payload 为 ST/BEL 内的 key=value 串）。
+    ProgramStatus {
+        raw: Vec<u8>,
+        payload: String,
+    },
 }
 
 impl OscSplitter {
@@ -584,10 +589,22 @@ impl OscSplitter {
                 kind,
                 exit_code,
             });
+        } else if let Some(payload) = parse_7501_payload(&raw) {
+            // #390：程序状态报告。解析失败按 spec 整条丢弃——但不透传原始字节
+            // 到画面（转义序列本身不可见），等同「不支持时自动忽略」。
+            out.push(SplitItem::ProgramStatus { raw, payload });
         } else {
             out.push(SplitItem::Bytes(raw));
         }
     }
+}
+
+/// #390：识别 OSC 7501 状态报告。`raw` 含前导 ESC 和结束符；
+/// 返回 `key=value` 载荷（交给 program_status::parse_7501_report 解析）。
+fn parse_7501_payload(raw: &[u8]) -> Option<String> {
+    let payload = osc_payload(raw)?;
+    let text = std::str::from_utf8(payload).ok()?.trim();
+    text.strip_prefix("7501;").map(str::to_string)
 }
 
 /// `raw` 含前导 ESC 和结束符。认 `133;X` / `633;X`。
@@ -660,6 +677,61 @@ mod tests {
         assert!(marker("\x1b]133;P;Cwd=/tmp\x07").is_none());
         assert!(marker("\x1b]0;title\x07").is_none());
         assert!(marker("\x1b]133;Done\x07").is_none());
+    }
+
+    #[test]
+    fn splitter_extracts_7501_reports() {
+        // spec 示例：working 报告。
+        let mut splitter = OscSplitter::default();
+        let mut out = Vec::new();
+        splitter.push(b"\x1b]7501;state=working:app=make:msg=QnVpbGRpbmcgZG9jcw==\x07done", &mut out);
+        assert_eq!(out.len(), 2);
+        match &out[0] {
+            SplitItem::ProgramStatus { raw, payload } => {
+                assert_eq!(payload, "state=working:app=make:msg=QnVpbGRpbmcgZG9jcw==");
+                // 原始字节含完整序列（嵌套终端透传一致性）。
+                assert!(raw.starts_with(b"\x1b]7501;"));
+                assert!(raw.ends_with(b"\x07"));
+            }
+            other => panic!("expected ProgramStatus, got {other:?}"),
+        }
+        match &out[1] {
+            SplitItem::Bytes(bytes) => assert_eq!(bytes, b"done"),
+            other => panic!("expected trailing text, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn splitter_7501_across_chunks_and_st_terminator() {
+        // 跨 chunk + ST 结尾。
+        let mut splitter = OscSplitter::default();
+        let mut out = Vec::new();
+        splitter.push(b"\x1b]7501;state=done:msg=RG9jcyBi", &mut out);
+        assert!(out.is_empty(), "序列未完不产出");
+        splitter.push(b"dWlsdA==\x1b\\", &mut out);
+        assert_eq!(out.len(), 1);
+        assert!(matches!(&out[0], SplitItem::ProgramStatus { .. }));
+    }
+
+    #[test]
+    fn splitter_7501_malformed_report_still_captured() {
+        // 载荷损坏（base64 坏）也走 ProgramStatus 分支——整条丢弃的语义
+        // 在 parse_7501_report 层处理；流层只认 7501 前缀。
+        let mut splitter = OscSplitter::default();
+        let mut out = Vec::new();
+        splitter.push(b"\x1b]7501;state=idle:msg=!!!not-b64!!!\x07", &mut out);
+        assert!(matches!(&out[0], SplitItem::ProgramStatus { .. }));
+        // 解析层确实丢整条。
+        assert!(super::super::program_status::parse_7501_report("state=idle:msg=!!!not-b64!!!").is_none());
+    }
+
+    #[test]
+    fn splitter_non_7501_osc_untouched() {
+        // 其它 OSC（标题等）仍走 Bytes，行为不变。
+        let mut splitter = OscSplitter::default();
+        let mut out = Vec::new();
+        splitter.push(b"\x1b]0;my title\x07", &mut out);
+        assert!(matches!(&out[0], SplitItem::Bytes(_)));
     }
 
     #[test]
