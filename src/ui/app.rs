@@ -317,6 +317,8 @@ pub struct MistTermApp {
     prev_viewport_focused: bool,
     /// #201：标签切换记录的前台重连待检项（下一帧统一处理）。
     pending_foreground_reconnect: Option<usize>,
+    /// #392：新开标签待继承的目录（open_new_tab 时记下，push_tab_connecting 消费）。
+    pending_new_tab_cwd: Option<String>,
     rule_manager_dialog: crate::ui::rule_manager_dialog::RuleManagerDialog,
 
     /// 是否显示新建会话对话框
@@ -1176,6 +1178,7 @@ impl MistTermApp {
             cmd_audit_personal_rules,
             prev_viewport_focused: true,
             pending_foreground_reconnect: None,
+            pending_new_tab_cwd: None,
             crash_notice: crate::core::crash_reporter::take_startup_notice(),
             update_ui: update::UpdateUi::new(),
             pref_vault_token_draft: String::new(),
@@ -5009,6 +5012,7 @@ impl MistTermApp {
         let mut temp_key = None;
         self.terminal_connect_session(ctx, &mut terminal, session, &mut temp_key);
         let title = self.next_tab_title_for_session(session);
+        let inherited_cd = self.pending_new_tab_cwd.take();
         self.tabs.push(TerminalTab::single(TerminalPane::new(
             session.id.clone(),
             title,
@@ -5016,6 +5020,7 @@ impl MistTermApp {
         )));
         if let Some(tab) = self.tabs.last_mut() {
             tab.panes[0].ssh_temp_key = temp_key;
+            tab.panes[0].pending_cd = inherited_cd;
         }
         let idx = self.tabs.len() - 1;
         self.ensure_tab_log_writer(idx);
@@ -5853,7 +5858,25 @@ impl MistTermApp {
             );
             return;
         };
-        self.open_new_tab_for_session(ctx, &session);
+        // #392：继承当前活动 pane 的 shell 汇报目录（OSC 7/9;9），连接成功后自动 cd。
+        let inherited_cwd = self
+            .active_tab
+            .and_then(|i| self.tabs.get(i))
+            .and_then(|t| t.panes.get(t.active_pane))
+            .and_then(|p| p.shell_cwd.clone());
+        self.open_new_tab_for_session_with_cwd(ctx, &session, inherited_cwd);
+    }
+
+    /// #392：同 [`Self::open_new_tab_for_session`]，可带继承目录。
+    pub(crate) fn open_new_tab_for_session_with_cwd(
+        &mut self,
+        ctx: &egui::Context,
+        session: &crate::core::SessionConfig,
+        cwd: Option<String>,
+    ) {
+        self.selected_session_id = Some(session.id.clone());
+        self.pending_new_tab_cwd = cwd;
+        self.push_tab_connecting(ctx, session);
     }
 
     /// 为指定连接再开一个终端标签（与侧栏点选聚焦已有标签不同）。
@@ -9784,6 +9807,43 @@ impl eframe::App for MistTermApp {
                     let _ = pane.terminal.take_pending_bell();
                     let _ = pane.terminal.take_pending_attention_ended();
                     let _ = pane.terminal.take_pending_notifies();
+                }
+            }
+            // #392：每帧取走语义 OSC 载荷（进度 / 目录 / 标题），聚焦与否都更新——
+            // 它们是持续状态而非一次性事件，不存在「切走再冒出来」的打扰问题。
+            for (pane_idx, pane) in tab.panes.iter_mut().enumerate() {
+                // 继承目录：连接建立后自动 cd 一次并清空；未连接则等下一帧。
+                if let Some(cwd) = pane.pending_cd.clone() {
+                    if pane.terminal.is_connected() {
+                        pane.pending_cd = None;
+                        let quoted = format!("cd '{}'\r", cwd.replace('\'', "'\\''"));
+                        pane.terminal.paste_text(&quoted, ctx);
+                    }
+                }
+                if let Some(p) = pane.terminal.take_progress() {
+                    pane.progress = if p.state == crate::terminal::sem_osc::ProgressState::Remove {
+                        None
+                    } else {
+                        Some(p)
+                    };
+                }
+                if let Some(c) = pane.terminal.take_cwd() {
+                    let changed = pane.shell_cwd.as_deref() != Some(c.path.as_str());
+                    pane.shell_cwd = Some(c.path.clone());
+                    // #392：SFTP 面板已开时跟随 shell 目录变化（自动 cd 场景同样生效）；
+                    // 面板没开不主动弹，避免打扰。
+                    if changed
+                        && self.show_sftp_panel
+                        && tab_focused
+                        && tab.active_pane == pane_idx
+                    {
+                        self.sftp_panel
+                            .jump_to_remote_dir(std::path::PathBuf::from(&c.path));
+                    }
+                }
+                if let Some(t) = pane.terminal.take_title() {
+                    // 手动命名优先：title_pinned 时只存不显示。
+                    pane.dynamic_title = Some(t);
                 }
             }
         }

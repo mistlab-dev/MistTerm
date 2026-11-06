@@ -2267,6 +2267,11 @@ impl MistTermApp {
                             None
                         }
                     });
+                // #392：任一 pane 有构建进度（OSC 9;4）→ 标签叠进度环。
+                let pane_progress = tab
+                    .panes
+                    .iter()
+                    .find_map(|p| p.progress.as_ref().copied());
                 let tab_chip = crate::ui::chrome::session_tab_chip(
                     ui,
                     theme,
@@ -2276,6 +2281,7 @@ impl MistTermApp {
                     tab.needs_attention,
                     false,
                     env_color,
+                    pane_progress,
                 );
                 let tab_hover = if tab.needs_attention && !active {
                     format!(

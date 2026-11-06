@@ -108,6 +108,17 @@ pub struct TerminalPane {
     pub session_id: String,
     pub title: String,
     pub terminal: TerminalView,
+    /// #392：shell 发来的 OSC 0/2 动态标题（vim / ssh user@host 等）。
+    /// 与 `title`（用户/会话名）分开存；显示时按「手动命名优先」合并。
+    pub dynamic_title: Option<String>,
+    /// #392：用户手动改过显示名则 shell 标题不覆盖。
+    pub title_pinned: bool,
+    /// #392：shell 汇报的当前目录（OSC 7 / 9;9）；新标签预填、SFTP 定位用。
+    pub shell_cwd: Option<String>,
+    /// #392：OSC 9;4 进度（构建工具汇报）；None = 无进度指示。
+    pub progress: Option<crate::terminal::sem_osc::ProgressReport>,
+    /// #392：待下发的新标签继承目录（连接成功后发一次 `cd`，随即清空）。
+    pub pending_cd: Option<String>,
     pub ssh_auto_reconnect_next: Option<std::time::Instant>,
     pub ssh_auto_reconnect_attempts: u8,
     pub ssh_temp_key: Option<crate::core::TempKeyFile>,
@@ -116,11 +127,27 @@ pub struct TerminalPane {
 }
 
 impl TerminalPane {
+    /// #392：pane 显示名——手动命名优先，其次 shell 动态标题，最后会话名。
+    pub fn display_name(&self) -> &str {
+        if self.title_pinned {
+            &self.title
+        } else if let Some(t) = &self.dynamic_title {
+            t
+        } else {
+            &self.title
+        }
+    }
+
     pub fn new(session_id: String, title: String, terminal: TerminalView) -> Self {
         Self {
             session_id,
             title,
             terminal,
+            dynamic_title: None,
+            title_pinned: false,
+            shell_cwd: None,
+            progress: None,
+            pending_cd: None,
             ssh_auto_reconnect_next: None,
             ssh_auto_reconnect_attempts: 0,
             ssh_temp_key: None,
@@ -158,14 +185,22 @@ impl TerminalTab {
         self.needs_attention = false;
     }
 
+    /// #392：标签显示名——单窗格时按 pane 级「手动命名优先，其次 shell
+    /// 动态标题，最后会话名」合并；多窗格仍拼接（各 pane 同规则）。
+    /// 不改持久化名。
     pub fn display_title(&self) -> String {
         if self.panes.is_empty() {
             return "Terminal".into();
         }
         if self.panes.len() == 1 {
-            return self.panes[0].title.clone();
+            return self.panes[0].display_name().to_string();
         }
-        let head: Vec<_> = self.panes.iter().take(2).map(|p| p.title.as_str()).collect();
+        let head: Vec<_> = self
+            .panes
+            .iter()
+            .take(2)
+            .map(|p| p.display_name())
+            .collect();
         let base = head.join(" | ");
         if self.panes.len() > 2 {
             format!("{base} +{}", self.panes.len() - 2)

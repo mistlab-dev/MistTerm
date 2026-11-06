@@ -5450,6 +5450,25 @@ impl TerminalView {
         std::mem::take(&mut self.pending_attention_ended)
     }
 
+    /// #392：取走并解析最近一次 OSC 9;4 进度报告。
+    pub fn take_progress(&mut self) -> Option<crate::terminal::sem_osc::ProgressReport> {
+        let payload = self.terminal.take_progress_payload()?;
+        crate::terminal::sem_osc::ProgressReport::parse(&payload)
+    }
+
+    /// #392：取走并解析最近一次 OSC 7 / 9;9 目录报告。
+    pub fn take_cwd(&mut self) -> Option<crate::terminal::sem_osc::CwdReport> {
+        let payload = self.terminal.take_cwd_payload()?;
+        crate::terminal::sem_osc::parse_osc7(&payload)
+            .or_else(|| crate::terminal::sem_osc::parse_osc99(&payload))
+    }
+
+    /// #392：取走并校验最近一次 OSC 0/2 标题。
+    pub fn take_title(&mut self) -> Option<String> {
+        let payload = self.terminal.take_title_payload()?;
+        crate::terminal::sem_osc::parse_title(&payload)
+    }
+
     /// 取走待上报的连接结果(`success`, `host`)。
     pub fn take_connect_audit(&mut self) -> Option<(bool, String)> {
         self.pending_connect_audit.take()
