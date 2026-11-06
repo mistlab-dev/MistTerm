@@ -4208,11 +4208,11 @@ impl MistTermApp {
         );
         add(
             PaletteAction::Sftp,
-            "SFTP",
-            "SFTP",
+            "Files",
+            "文件",
             "Open files",
             "打开文件",
-            "files 文件",
+            "files 文件 SFTP",
         );
         add(
             PaletteAction::Monitor,

@@ -1,0 +1,1 @@
+Do not cargo/build MistTerm on this 3.6Gi host — OOM/hang. Use CI.

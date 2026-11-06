@@ -556,7 +556,7 @@ mod tests {
             item(
                 PaletteKind::Action,
                 "SFTP",
-                "SFTP files 文件 打开 SFTP",
+                "文件 files SFTP 打开",
                 PaletteId::Action(PaletteAction::Sftp),
             ),
             item(
