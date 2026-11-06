@@ -528,5 +528,94 @@ impl MistTermApp {
                 }
             }
         }
+
+        // #392：标签芯片重命名 → 写入活动窗格 title 并 pin，OSC 标题不再覆盖显示名。
+        if let Some(pending_idx) = self.pending_tab_rename {
+            if pending_idx >= self.tabs.len() {
+                self.pending_tab_rename = None;
+                self.tab_rename_draft.clear();
+            } else {
+                let mut open = true;
+                let mut should_close = false;
+                let mut do_rename = false;
+                let rename_id = egui::Id::unique("tab_rename_modal_name");
+                let can_rename = !self.tab_rename_draft.trim().is_empty();
+                let modal_sz = layout_util::modal_confirm_size(ctx);
+                let rename_hint = crate::i18n::tr(ctx, "Tab name", "标签名称");
+                let resp = crate::ui::chrome::modal_window("tab_rename_modal", theme, ctx)
+                    .open(&mut open)
+                    .default_pos(layout_util::modal_center_pos(ctx, modal_sz))
+                    .movable(true)
+                    .resizable(false)
+                    .fixed_size(modal_sz)
+                    .show(ctx, |ui| {
+                        crate::ui::chrome::modal_content_frame(theme).show(ui, |ui| {
+                            Self::modal_header_title_only(
+                                ui,
+                                theme,
+                                crate::i18n::tr(ctx, "Rename Tab", "重命名标签"),
+                                &mut should_close,
+                            );
+                            ui.add_space(theme.spacing_md());
+                            crate::ui::chrome::form_singleline_field(
+                                ui,
+                                theme,
+                                rename_id,
+                                &mut self.tab_rename_draft,
+                                rename_hint,
+                                ui.available_width().max(160.0),
+                                false,
+                            );
+                            ui.add_space(theme.spacing_lg());
+                            crate::ui::chrome::modal_footer_actions(ui, theme, |ui, th| {
+                                if crate::ui::chrome::modal_primary_icon_button(
+                                    ui,
+                                    th,
+                                    crate::ui::icons::IconId::Check,
+                                    crate::i18n::tr(ctx, "Rename", "重命名"),
+                                )
+                                .clicked()
+                                    && can_rename
+                                {
+                                    do_rename = true;
+                                    should_close = true;
+                                }
+                                if crate::ui::chrome::modal_secondary_icon_button(
+                                    ui,
+                                    th,
+                                    crate::ui::icons::IconId::Cross,
+                                    crate::i18n::tr(ctx, "Cancel", "取消"),
+                                )
+                                .clicked()
+                                {
+                                    should_close = true;
+                                }
+                            });
+                        });
+                    });
+                if let Some(inner) = resp {
+                    crate::ui::chrome::raise_window_response(ctx, &inner.response);
+                }
+                ctx.memory_mut(|m| m.request_focus(rename_id));
+                if do_rename {
+                    let name = self.tab_rename_draft.trim().to_string();
+                    if !name.is_empty() {
+                        if let Some(tab) = self.tabs.get_mut(pending_idx) {
+                            let active = tab
+                                .active_pane
+                                .min(tab.panes.len().saturating_sub(1));
+                            if let Some(pane) = tab.panes.get_mut(active) {
+                                pane.title = name;
+                                pane.title_pinned = true;
+                            }
+                        }
+                    }
+                }
+                if !open || should_close {
+                    self.pending_tab_rename = None;
+                    self.tab_rename_draft.clear();
+                }
+            }
+        }
     }
 }

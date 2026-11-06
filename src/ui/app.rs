@@ -454,6 +454,9 @@ pub struct MistTermApp {
     delete_session_confirm: Option<(String, String)>,
     /// §2.3.5：关闭仍连接/握手中的标签前确认
     close_tab_confirm_idx: Option<usize>,
+    /// #392：标签右键「重命名」——待改名的 tab 索引与草稿。
+    pending_tab_rename: Option<usize>,
+    tab_rename_draft: String,
     /// 本地快捷提示引擎(非服务器强制边界)。与 `cmd-audit-local` 模块共享同一份（#121）。
     cmd_audit_engine: std::sync::Arc<std::sync::Mutex<CmdAuditEngine>>,
     /// 敏感命令二次确认(标签索引、命令、匹配详情)
@@ -1222,6 +1225,8 @@ impl MistTermApp {
             audit_logger,
             delete_session_confirm: None,
             close_tab_confirm_idx: None,
+            pending_tab_rename: None,
+            tab_rename_draft: String::new(),
             cmd_audit_engine,
             cmd_audit_confirm: None,
             ai_danger_confirm: None,
@@ -3820,6 +3825,7 @@ impl MistTermApp {
             || self.terminal_search.open
             || self.delete_session_confirm.is_some()
             || self.close_tab_confirm_idx.is_some()
+            || self.pending_tab_rename.is_some()
             || self.cmd_audit_confirm.is_some()
             || self.ai_danger_confirm.is_some()
             || self.batch_exec_dialog.open
@@ -4803,6 +4809,7 @@ impl MistTermApp {
             || self.foreign_import_dialog.open
             || self.delete_session_confirm.is_some()
             || self.close_tab_confirm_idx.is_some()
+            || self.pending_tab_rename.is_some()
             || self.cmd_audit_confirm.is_some()
             || self.ai_danger_confirm.is_some()
             || self.batch_exec_dialog.open
@@ -5809,10 +5816,23 @@ impl MistTermApp {
 
     /// ⌘T / Ctrl+T：为左侧当前选中会话新开标签；未选中时提示(与 ⌘N 新建配置区分)
     /// 一键打开本机终端标签（不写入侧栏 `sessions.json`）。
+    /// #392：继承当前活动标签活动窗格的 OSC 7/9;9 cwd（与分屏 `split_tab_at` 同通道）。
     pub(crate) fn open_local_shell_tab(&mut self, ctx: &egui::Context) {
+        let inherit = self
+            .active_tab
+            .and_then(|i| self.tab_pane_inherit_cwd(i));
+        self.open_local_shell_tab_with_cwd(ctx, inherit);
+    }
+
+    /// #392：同 [`Self::open_local_shell_tab`]，可显式传入继承目录（复制标签用右键源 tab）。
+    pub(crate) fn open_local_shell_tab_with_cwd(
+        &mut self,
+        ctx: &egui::Context,
+        cwd: Option<String>,
+    ) {
         crate::local_shell::set_repaint_context(ctx);
         let mut terminal = self.new_terminal_view();
-        if let Err(e) = terminal.connect_local_shell() {
+        if let Err(e) = terminal.connect_local_shell_in(cwd.as_deref()) {
             self.notify_error(match crate::i18n::language(ctx) {
                 crate::i18n::UiLanguage::En => format!("Failed to open local shell: {e}"),
                 crate::i18n::UiLanguage::Zh => format!("无法打开本机终端：{e}"),
@@ -5835,15 +5855,25 @@ impl MistTermApp {
             crate::core::session::LOCAL_SESSION_ID_PREFIX,
             terminal.ssh_session_id().unwrap_or(0)
         );
-        self.tabs.push(TerminalTab::single(TerminalPane::new(
-            session_id,
-            title,
-            terminal,
-        )));
+        let mut pane = TerminalPane::new(session_id, title, terminal);
+        // connect_local_shell_in 已写入 terminal.shell_cwd；同步 pane 字段供后续继承。
+        pane.shell_cwd = pane.terminal.shell_cwd().map(|s| s.to_string());
+        self.tabs.push(TerminalTab::single(pane));
         let idx = self.tabs.len() - 1;
         self.ensure_tab_log_writer(idx);
         self.active_tab = Some(idx);
         ctx.request_repaint();
+    }
+
+    /// #392：取指定标签活动窗格的 shell cwd（优先 terminal 通道，与分屏一致；其次 pane 字段）。
+    pub(crate) fn tab_pane_inherit_cwd(&self, tab_idx: usize) -> Option<String> {
+        let tab = self.tabs.get(tab_idx)?;
+        let active = tab.active_pane.min(tab.panes.len().saturating_sub(1));
+        let pane = tab.panes.get(active)?;
+        pane.terminal
+            .shell_cwd()
+            .map(|s| s.to_string())
+            .or_else(|| pane.shell_cwd.clone())
     }
 
     fn open_new_tab_from_selection(&mut self, ctx: &egui::Context) {
