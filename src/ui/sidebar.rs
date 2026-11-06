@@ -3,7 +3,7 @@
 //! 显示会话列表、新建/删除会话等操作
 
 use eframe::egui;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::time::{SystemTime, UNIX_EPOCH};
 use crate::core::session::SessionManager;
 use crate::core::session_list::{
@@ -36,6 +36,19 @@ pub struct SidebarColumnActions {
     pub dismiss_ssh_banner: bool,
 }
 
+/// #390：侧栏会话行的 Agent 状态徽标。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AgentBadge {
+    /// 等审批/输入/凭据（标红）。
+    Blocked,
+    /// 运行中（进度圈/旋转点）。
+    Working,
+    /// 已完成，结果未看（标绿）。
+    Done,
+    /// 失败（标红叉语义）。
+    Error,
+}
+
 /// 侧边栏组件
 pub struct Sidebar;
 
@@ -58,6 +71,7 @@ impl Sidebar {
         team_servers: &[TeamServer],
         search_field_id: egui::Id,
         theme: &Theme,
+        agent_states: &HashMap<String, AgentBadge>,
     ) -> (SidebarOutput, SidebarColumnActions) {
         let mut actions = SidebarColumnActions {
             open_ssh_import: false,
@@ -96,6 +110,7 @@ impl Sidebar {
                 team_servers,
                 search_field_id,
                 theme,
+                agent_states,
             )
         });
         let shell = panel.response.rect;
@@ -120,6 +135,7 @@ impl Sidebar {
         team_servers: &[TeamServer],
         search_field_id: egui::Id,
         theme: &Theme,
+        agent_states: &HashMap<String, AgentBadge>,
     ) -> SidebarOutput {
         // 占满宿主分配的侧栏列宽(勿再 cap 200px，否则列宽 > 内容宽会出现一条空白缝)
         let width = layout_util::finite_avail_minus(
@@ -614,7 +630,7 @@ impl Sidebar {
                                 theme.color_tab_offline_dot()
                             };
                             let dot_r = 3.0_f32;
-                            let (dot_rect, _) = row_ui.allocate_exact_size(
+                            let (dot_rect, dot_resp) = row_ui.allocate_exact_size(
                                 egui::vec2(dot_r * 2.0, dot_r * 2.0),
                                 egui::Sense::hover(),
                             );
@@ -622,6 +638,48 @@ impl Sidebar {
                                 .painter()
                                 .circle_filled(dot_rect.center(), dot_r, status_color);
                             row_ui.add_space(theme.spacing_tab_dot_text());
+                            // #390：Agent 状态徽标。blocked/done 盖在在线圆点右侧，
+                            // 比连接状态更醒目；无状态不占位。
+                            if let Some(badge) = agent_states.get(&session.id) {
+                                let (badge_color, badge_r) = match badge {
+                                    AgentBadge::Blocked => (theme.red_color(), 3.5),
+                                    AgentBadge::Error => (theme.red_color(), 3.0),
+                                    AgentBadge::Done => (theme.green_color(), 3.0),
+                                    AgentBadge::Working => (theme.amber_color(), 3.0),
+                                };
+                                let (badge_rect, badge_resp) = row_ui.allocate_exact_size(
+                                    egui::vec2(badge_r * 2.0, badge_r * 2.0),
+                                    egui::Sense::hover(),
+                                );
+                                row_ui
+                                    .painter()
+                                    .circle_filled(badge_rect.center(), badge_r, badge_color);
+                                let badge_tip = match badge {
+                                    AgentBadge::Blocked => crate::i18n::tr(
+                                        ui.ctx(),
+                                        "Agent waiting for you (approval / input)",
+                                        "Agent 等待你处理（审批 / 输入）",
+                                    ),
+                                    AgentBadge::Working => crate::i18n::tr(
+                                        ui.ctx(),
+                                        "Agent working",
+                                        "Agent 运行中",
+                                    ),
+                                    AgentBadge::Done => crate::i18n::tr(
+                                        ui.ctx(),
+                                        "Agent finished — result unread",
+                                        "Agent 已完成 —— 结果未查看",
+                                    ),
+                                    AgentBadge::Error => crate::i18n::tr(
+                                        ui.ctx(),
+                                        "Agent failed",
+                                        "Agent 运行失败",
+                                    ),
+                                };
+                                badge_resp.on_hover_text(badge_tip);
+                                row_ui.add_space(theme.spacing_tab_dot_text());
+                            }
+                            let _ = dot_resp;
                             let status_text_color = if connected_sessions.contains(&session.id) {
                                 theme.color_status_online_muted()
                             } else {
