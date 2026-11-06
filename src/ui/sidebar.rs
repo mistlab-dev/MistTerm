@@ -639,8 +639,9 @@ impl Sidebar {
                             });
                             let gap = theme.spacing_sm().max(6.0);
                             let avail = row_ui.available_width();
+                            // +1px：测宽与 Label 布局浮点偶有差，避免本可单行却被截成省略。
                             let status_w =
-                                measured_status_w.min((avail - gap - 36.0).max(28.0));
+                                (measured_status_w + 1.0).min((avail - gap - 36.0).max(28.0));
                             let text_w = (avail - gap - status_w).max(0.0);
                             let text_h = row_ui.available_height();
                             let (text_rect, _) = row_ui.allocate_exact_size(
@@ -689,14 +690,16 @@ impl Sidebar {
                                 status_rect).layout(egui::Layout::right_to_left(egui::Align::Center)),
                             );
                             status_ui.set_clip_rect(status_rect);
+                            // #385: egui/epaint 可在任意汉字后断行；`.truncate().wrap()` 后者覆盖前者，
+                            // 窄栏或测宽浮点误差时会把「已连接 N 分钟」拆成「…分」/「钟」。
+                            // 状态列只单行省略，永不拆出单独的「钟」「时」。
                             status_ui.add(
                                 egui::Label::new(
                                     egui::RichText::new(status_text)
                                         .size(status_px)
                                         .color(status_text_color),
                                 )
-                                .truncate()
-                                .wrap(),
+                                .truncate(),
                             );
                             
                             if response.clicked() {
