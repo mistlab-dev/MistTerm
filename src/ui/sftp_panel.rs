@@ -3880,7 +3880,7 @@ impl SftpPanel {
                 ui,
                 theme,
                 crate::ui::icons::IconId::Folder,
-                "SFTP",
+                &crate::i18n::tr(ctx, "Files", "文件").to_string(),
                 crate::i18n::tr(
                     ctx,
                     "Hide panel · reopen from Activity Rail or View menu",

@@ -538,7 +538,8 @@ fn paint_valign_text(
     paint_valign_text_ex(ui, text, font, color, align_right, false);
 }
 
-/// `prefer_name_tail`：文件名优先保留后缀（扩展名），中间插省略号，便于辨认。
+/// `prefer_name_tail`：文件名超宽时用**中间省略**——保住开头的可区分前缀和末尾
+/// 的扩展名（#386：纯尾裁会把同后缀文件全部裁成 `…yaml`，无法区分）。
 fn paint_valign_text_ex(
     ui: &mut egui::Ui,
     text: &str,
@@ -554,11 +555,43 @@ fn paint_valign_text_ex(
             return full;
         }
         if prefer_name_tail {
-            // 尽量保住末尾（含扩展名），前面用 … 省略，长名更易辨认。
+            // #386：中间省略——二分找最大 keep，前缀 + … + 后缀同框。
+            // 前缀至少保 1 字符、后缀至少保扩展名，超窄时退化为尾部裁剪。
             let chars: Vec<char> = text.chars().collect();
-            let mut tail = chars.len().min(18);
+            let n = chars.len();
+            let suffix_chars = text
+                .rsplit_once('.')
+                .filter(|(base, _)| !base.is_empty())
+                .map(|(_, ext)| ext.chars().count() + 1)
+                .unwrap_or(0)
+                .min(n.saturating_sub(1));
+            let mut lo = 1usize; // 前缀至少 1 字符
+            let mut hi = n.saturating_sub(suffix_chars).max(1);
+            let mut best: Option<String> = None;
+            while lo <= hi {
+                let mid = (lo + hi) / 2;
+                let candidate = format!(
+                    "{}…{}",
+                    chars[..mid].iter().collect::<String>(),
+                    chars[n - suffix_chars..].iter().collect::<String>(),
+                );
+                if f.layout_no_wrap(candidate.clone(), font.clone(), color).size().x <= max_w {
+                    best = Some(candidate);
+                    lo = mid + 1;
+                } else {
+                    if mid == 1 {
+                        break; // 前缀只余 1 字符仍放不下，交给尾部裁剪兜底
+                    }
+                    hi = mid - 1;
+                }
+            }
+            if let Some(shown) = best {
+                return f.layout_no_wrap(shown, font, color);
+            }
+            // 兜底：极端窄栏——尾部裁剪（至少扩展名可辨认）。
+            let mut tail = n.min(18);
             while tail > 0 {
-                let suffix: String = chars[chars.len() - tail..].iter().collect();
+                let suffix: String = chars[n - tail..].iter().collect();
                 let candidate = format!("…{suffix}");
                 let g = f.layout_no_wrap(candidate, font.clone(), color);
                 if g.size().x <= max_w {
