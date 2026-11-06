@@ -1,10 +1,14 @@
-//! 导出应用图标：`cargo run --bin export_app_icon`
-//! - `assets/app-icon-preview.png`：256 窗口图标预览
-//! - `assets/app-icon-1024.png`：macOS 打包源图(`scripts/bundle-macos.sh` 生成 .icns)
-//! - `assets/app-icon.ico`：Windows exe 资源图标(`build.rs` 嵌入)与安装包图标(`scripts/MistTerm.iss`)
-//! - `assets/social-preview.png`：GitHub 仓库 Social preview(1280×640，需在仓库 Settings 手动上传)
+//! 从已定稿主图导出应用图标：`cargo run --bin export_app_icon`
 //!
-//! 仅预览、不改动 assets：`cargo run --bin export_app_icon -- --preview <DIR>`
+//! 源图是 `assets/app-icon-1024.png`（圆角外透明，留白按 macOS 1024 模板烘焙）。
+//! macOS `.icns`（`scripts/bundle-macos.sh`）、Windows ICO 和运行时窗口图标都用这一张，
+//! 全平台共用同一套留白。本工具不覆盖主图，只把它 Lanczos 缩放后写出：
+//! - `assets/app-icon-preview.png`：256 窗口图标预览
+//! - `assets/app-icon.ico`：Windows exe 资源图标（`build.rs` 嵌入）与安装包图标（`scripts/MistTerm.iss`）
+//! - `assets/social-preview.png`：GitHub 仓库 Social preview（1280×640，需在仓库 Settings 手动上传）
+//!
+//! ICO 各尺寸是对主图的缩放（不再逐尺寸重绘），帧为 PNG 以保留 alpha。
+//! 只写到别的目录、不改 `assets/`：`cargo run --bin export_app_icon -- --preview <DIR>`
 
 use ab_glyph::{Font, FontRef, PxScale, ScaleFont, point};
 use image::codecs::ico::{IcoEncoder, IcoFrame};
@@ -32,9 +36,8 @@ fn main() {
 
 fn export_to(dir: &Path) -> Result<(), image::ImageError> {
     let _ = std::fs::create_dir_all(dir);
-    let targets: [(&str, Exporter); 4] = [
+    let targets: [(&str, Exporter); 3] = [
         ("app-icon-preview.png", icons::export_app_icon_png),
-        ("app-icon-1024.png", icons::export_app_icon_bundle_png),
         ("app-icon.ico", export_windows_ico),
         ("social-preview.png", export_social_preview),
     ];
@@ -46,17 +49,13 @@ fn export_to(dir: &Path) -> Result<(), image::ImageError> {
     Ok(())
 }
 
-/// Windows 多尺寸 ICO：各尺寸原生渲染(小尺寸不靠缩放)，PNG 帧。
+/// Windows 多尺寸 ICO：由 1024 主图 Lanczos 缩放出各尺寸，PNG 帧保留 alpha。
 fn export_windows_ico(path: &Path) -> Result<(), image::ImageError> {
     const SIZES: [u32; 7] = [16, 24, 32, 48, 64, 128, 256];
     let frames = SIZES
         .iter()
         .map(|&size| {
-            let img = icons::render_app_icon(
-                size,
-                icons::APP_ICON_WINDOWS_PAD_FRAC,
-                icons::APP_ICON_WINDOWS_CORNER_FRAC,
-            );
+            let img = icons::render_app_icon(size);
             IcoFrame::as_png(img.as_raw(), size, size, ColorType::Rgba8)
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -85,7 +84,7 @@ fn export_social_preview(path: &Path) -> Result<(), image::ImageError> {
         let d = ((x as f32 - cx).powi(2) + (y as f32 - cy).powi(2)).sqrt() / 360.0;
         blend(px, [55, 175, 255], (1.0 - d).max(0.0).powi(2) * 0.22);
     }
-    imageops::overlay(&mut img, &icons::render_app_icon_bundle(ICON), ICON_X as i64, icon_y as i64);
+    imageops::overlay(&mut img, &icons::render_app_icon(ICON), ICON_X as i64, icon_y as i64);
 
     let font = FontRef::try_from_slice(SOCIAL_FONT).expect("bundled Geist font");
     let lines: [(&str, f32, f32, [u8; 3]); 4] = [
@@ -132,7 +131,7 @@ fn blend(px: &mut Rgba<u8>, color: [u8; 3], alpha: f32) {
     }
 }
 
-/// 导出同名文件到 `dir`，另拼一张多尺寸对比图(各尺寸原生渲染，深浅两种底色)
+/// 导出同名文件到 `dir`，另拼一张多尺寸对比图（主图缩放，深浅两种底色）
 fn export_preview(dir: &Path) -> Result<(), image::ImageError> {
     export_to(dir)?;
     const SIZES: [u32; 5] = [320, 128, 64, 32, 16];
@@ -146,7 +145,7 @@ fn export_preview(dir: &Path) -> Result<(), image::ImageError> {
         let mut x = GAP;
         for size in SIZES {
             let y = y0 + GAP + (SIZES[0] - size) / 2;
-            imageops::overlay(&mut sheet, &icons::render_app_icon_bundle(size), x as i64, y as i64);
+            imageops::overlay(&mut sheet, &icons::render_app_icon(size), x as i64, y as i64);
             x += size + GAP;
         }
     }
