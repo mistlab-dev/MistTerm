@@ -108,6 +108,9 @@ pub struct TerminalPane {
     pub session_id: String,
     pub title: String,
     pub terminal: TerminalView,
+    /// #390：该窗格最近一次 OSC 7501 程序状态（Agent 红绿灯）。
+    /// 每帧从 `terminal.take_program_status()` 取；`clear` 态记 `None`。
+    pub agent_status: Option<crate::terminal::program_status::ProgramStatus>,
     /// #392：shell 发来的 OSC 0/2 动态标题（vim / ssh user@host 等）。
     /// 与 `title`（用户/会话名）分开存；显示时按「手动命名优先」合并。
     pub dynamic_title: Option<String>,
@@ -141,6 +144,7 @@ impl TerminalPane {
             session_id,
             title,
             terminal,
+            agent_status: None,
             dynamic_title: None,
             title_pinned: false,
             shell_cwd: None,
@@ -185,6 +189,30 @@ impl TerminalTab {
     /// #392：标签显示名——单窗格时按 pane 级「手动命名优先，其次 shell
     /// 动态标题，最后会话名」合并；多窗格仍拼接（各 pane 同规则）。
     /// 不改持久化名。
+    /// #390：任一窗格的 Agent 处于 blocked（等审批/输入/凭据）。
+    /// 标签角标红绿灯的判定来源；done/error 只进侧栏徽标，不抢注意力角标。
+    pub fn any_panes_agent_blocked(&self) -> bool {
+        self.panes.iter().any(|pane| {
+            matches!(
+                pane.agent_status.as_ref().map(|s| s.state),
+                Some(crate::terminal::program_status::ProgramState::Blocked)
+            )
+        })
+    }
+
+    /// #390：任一窗格的 Agent 有未读结果（done / error）。
+    pub fn any_panes_agent_done(&self) -> bool {
+        self.panes.iter().any(|pane| {
+            matches!(
+                pane.agent_status.as_ref().map(|s| s.state),
+                Some(
+                    crate::terminal::program_status::ProgramState::Done
+                        | crate::terminal::program_status::ProgramState::Error
+                )
+            )
+        })
+    }
+
     pub fn display_title(&self) -> String {
         if self.panes.is_empty() {
             return "Terminal".into();

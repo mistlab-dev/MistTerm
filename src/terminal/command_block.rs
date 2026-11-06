@@ -37,7 +37,9 @@ pub const COPY_MAX_LINES: usize = 4_000;
 /// 内存里保留的块上限（含尚未形成命令的提示符）。更老的从队头丢掉。
 const MAX_BLOCKS: usize = 4_096;
 /// 未结束的 OSC 缓冲上限。再长就交给 VTE 透传，直到结束符，避免标题类 OSC 把缓冲撑住。
-const OSC_HOLD_LIMIT: usize = 512;
+// #390 复审：OSC 7501 整序列上限 4096（msg base64 最长 2732），512 会把
+// 合法长报告拆成 Bytes 静默丢弃。抬到 8KiB，与 parse 层上限一致。
+const OSC_HOLD_LIMIT: usize = 8 * 1024;
 
 /// 网格上的一个点。`column` 对复制终点是开区间。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -480,6 +482,11 @@ pub enum SplitItem {
         kind: u8,
         exit_code: Option<i32>,
     },
+    /// #390：OSC 7501 程序状态报告（payload 为 ST/BEL 内的 key=value 串）。
+    ProgramStatus {
+        raw: Vec<u8>,
+        payload: String,
+    },
     /// #392：OSC 9;4 进度报告（payload 为 `9;4` 之后的部分）。
     Progress {
         raw: Vec<u8>,
@@ -600,6 +607,10 @@ impl OscSplitter {
                 kind,
                 exit_code,
             });
+        } else if let Some(payload) = parse_7501_payload(&raw) {
+            // #390：程序状态报告。转义序列本身不可见；raw 仍按序透传给 VTE
+            // （alacritty 消费侧），保证嵌套终端（tmux 里再跑 agent）画面一致。
+            out.push(SplitItem::ProgramStatus { raw, payload });
         } else if let Some(sem) = parse_sem_osc(&raw) {
             // #392：语义 OSC（9;4 / 7 / 9;9 / 0 / 2）。序列本身不可见，
             // 原始字节仍按序透传，嵌套终端画面一致。
@@ -608,6 +619,14 @@ impl OscSplitter {
             out.push(SplitItem::Bytes(raw));
         }
     }
+}
+
+/// #390：识别 OSC 7501 状态报告。`raw` 含前导 ESC 和结束符；
+/// 返回 `key=value` 载荷（交给 program_status::parse_7501_report 解析）。
+fn parse_7501_payload(raw: &[u8]) -> Option<String> {
+    let payload = osc_payload(raw)?;
+    let text = std::str::from_utf8(payload).ok()?.trim();
+    text.strip_prefix("7501;").map(str::to_string)
 }
 
 /// #392：识别语义 OSC（进度 9;4 / 目录 7、9;9 / 标题 0、2）。
@@ -761,10 +780,87 @@ mod tests {
         splitter.push(b"\x07rest", &mut out);
         assert!(matches!(&out[0], SplitItem::Progress { payload, .. } if payload == "3"));
         // 其它 OSC（如 52 剪贴板、1337）不受影响，仍走 Bytes。
+        // （#392 合入后 OSC 0/2 归 Title 分支，「不受影响」例子须选语义外的编号。）
         let mut splitter = OscSplitter::default();
         let mut out = Vec::new();
         splitter.push(b"\x1b]52;c;QQ==\x07", &mut out);
         assert!(matches!(&out[0], SplitItem::Bytes(_)));
+    }
+
+    #[test]
+    fn splitter_extracts_7501_reports() {
+        // spec 示例：working 报告。
+        let mut splitter = OscSplitter::default();
+        let mut out = Vec::new();
+        splitter.push(b"\x1b]7501;state=working:app=make:msg=QnVpbGRpbmcgZG9jcw==\x07done", &mut out);
+        assert_eq!(out.len(), 2);
+        match &out[0] {
+            SplitItem::ProgramStatus { raw, payload } => {
+                assert_eq!(payload, "state=working:app=make:msg=QnVpbGRpbmcgZG9jcw==");
+                // 原始字节含完整序列（嵌套终端透传一致性）。
+                assert!(raw.starts_with(b"\x1b]7501;"));
+                assert!(raw.ends_with(b"\x07"));
+            }
+            other => panic!("expected ProgramStatus, got {other:?}"),
+        }
+        match &out[1] {
+            SplitItem::Bytes(bytes) => assert_eq!(bytes, b"done"),
+            other => panic!("expected trailing text, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn splitter_7501_across_chunks_and_st_terminator() {
+        // 跨 chunk + ST 结尾。
+        let mut splitter = OscSplitter::default();
+        let mut out = Vec::new();
+        splitter.push(b"\x1b]7501;state=done:msg=RG9jcyBi", &mut out);
+        assert!(out.is_empty(), "序列未完不产出");
+        splitter.push(b"dWlsdA==\x1b\\", &mut out);
+        assert_eq!(out.len(), 1);
+        assert!(matches!(&out[0], SplitItem::ProgramStatus { .. }));
+    }
+
+    #[test]
+    fn splitter_7501_malformed_report_still_captured() {
+        // 载荷损坏（base64 坏）也走 ProgramStatus 分支——整条丢弃的语义
+        // 在 parse_7501_report 层处理；流层只认 7501 前缀。
+        let mut splitter = OscSplitter::default();
+        let mut out = Vec::new();
+        splitter.push(b"\x1b]7501;state=idle:msg=!!!not-b64!!!\x07", &mut out);
+        assert!(matches!(&out[0], SplitItem::ProgramStatus { .. }));
+        // 解析层确实丢整条。
+        assert!(super::super::program_status::parse_7501_report("state=idle:msg=!!!not-b64!!!").is_none());
+    }
+
+    #[test]
+    fn splitter_non_7501_osc_untouched() {
+        // 其它 OSC（52 剪贴板等语义外编号）仍走 Bytes，行为不变。
+        // 注意：OSC 0/2 在 #392 后归 Title 分支，不能再用标题当「不受影响」例。
+        let mut splitter = OscSplitter::default();
+        let mut out = Vec::new();
+        splitter.push(b"\x1b]52;c;QQ==\x07", &mut out);
+        assert!(matches!(&out[0], SplitItem::Bytes(_)));
+    }
+
+    #[test]
+    fn splitter_long_7501_report_survives_hold_limit() {
+        // #390 复审回归：~600B+ 的合法长报告不再被 OSC_HOLD_LIMIT 拆碎。
+        // msg = base64(600 字节文本) ≈ 800 字符，总长超旧 512 上限。
+        let text = "x".repeat(600);
+        let b64 = {
+            use base64::Engine as _;
+            base64::engine::general_purpose::STANDARD.encode(text.as_bytes())
+        };
+        let seq = format!("\x1b]7501;state=blocked:kind=question:msg={b64}\x07");
+        let mut splitter = OscSplitter::default();
+        let mut out = Vec::new();
+        splitter.push(seq.as_bytes(), &mut out);
+        assert!(
+            matches!(&out[0], SplitItem::ProgramStatus { payload, .. }
+                if super::super::program_status::parse_7501_report(payload).is_some()),
+            "长报告必须完整产出且可解析"
+        );
     }
 
     #[test]

@@ -305,6 +305,31 @@ impl MistTermApp {
                                 .iter()
                                 .map(|t| t.primary_session_id())
                                 .collect();
+                            // #390：每个会话的 Agent 状态徽标（pane 聚合）。
+                            let agent_states: HashMap<String, crate::ui::sidebar::AgentBadge> =
+                                self.tabs
+                                    .iter()
+                                    .flat_map(|t| t.panes.iter())
+                                    .filter_map(|pane| {
+                                        let status = pane.agent_status.as_ref()?;
+                                        let badge = match status.state {
+                                            crate::terminal::program_status::ProgramState::Blocked => {
+                                                crate::ui::sidebar::AgentBadge::Blocked
+                                            }
+                                            crate::terminal::program_status::ProgramState::Working => {
+                                                crate::ui::sidebar::AgentBadge::Working
+                                            }
+                                            crate::terminal::program_status::ProgramState::Done => {
+                                                crate::ui::sidebar::AgentBadge::Done
+                                            }
+                                            crate::terminal::program_status::ProgramState::Error => {
+                                                crate::ui::sidebar::AgentBadge::Error
+                                            }
+                                            _ => return None,
+                                        };
+                                        Some((pane.session_id.clone(), badge))
+                                    })
+                                    .collect();
 
                             let sidebar_rect = egui::Rect::from_min_max(
                                 egui::pos2(col_left, work_top),
@@ -328,6 +353,7 @@ impl MistTermApp {
                                     &self.team_service.current_team_servers(),
                                     Self::id_sidebar_connection_search(),
                                     theme,
+                                    &agent_states,
                                 );
                                 let _ = col_actions;
 
@@ -2283,7 +2309,29 @@ impl MistTermApp {
                     env_color,
                     pane_progress,
                 );
-                let tab_hover = if tab.needs_attention && !active {
+                // #390：Agent 状态红绿灯悬停文案。blocked 优先（等审批最急），
+                // 其次 done/error（有未看结果）。角标本身走 needs_attention。
+                let tab_hover = if tab.any_panes_agent_blocked() {
+                    format!(
+                        "{}\n{}",
+                        tab_hover,
+                        crate::i18n::tr(
+                            ctx,
+                            "Agent waiting for you (approval / input)",
+                            "Agent 等待你处理（审批 / 输入）",
+                        )
+                    )
+                } else if tab.any_panes_agent_done() {
+                    format!(
+                        "{}\n{}",
+                        tab_hover,
+                        crate::i18n::tr(
+                            ctx,
+                            "Agent finished / failed — result unread",
+                            "Agent 已完成/失败 —— 结果未查看",
+                        )
+                    )
+                } else if tab.needs_attention && !active {
                     format!(
                         "{}\n{}",
                         tab_hover,

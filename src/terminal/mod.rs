@@ -3,6 +3,7 @@
 mod alacritty;
 mod command_block;
 pub mod paste;
+pub mod program_status;
 pub mod sem_osc;
 pub mod style;
 

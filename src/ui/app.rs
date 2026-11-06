@@ -9790,6 +9790,23 @@ impl eframe::App for MistTermApp {
                     {
                         attention = true;
                     }
+                    // #390：Agent 状态红绿灯。blocked（等审批/输入）→ 未聚焦标签置
+                    // needs_attention；clear → 清记录。聚焦标签只更新记录不标角标。
+                    if let Some(status) = pane.terminal.take_program_status() {
+                        let blocked =
+                            status.state == crate::terminal::program_status::ProgramState::Blocked;
+                        // clear = 程序主动撤记录；清掉本地缓存与注意力角标。
+                        pane.agent_status = if status.state
+                            == crate::terminal::program_status::ProgramState::Clear
+                        {
+                            None
+                        } else {
+                            Some(status)
+                        };
+                        if blocked {
+                            attention = true;
+                        }
+                    }
                     let title = pane.title.clone();
                     for act in pane.terminal.take_pending_notifies() {
                         let crate::capability::ModuleAction::Notify {
@@ -9815,6 +9832,16 @@ impl eframe::App for MistTermApp {
                     let _ = pane.terminal.take_pending_bell();
                     let _ = pane.terminal.take_pending_attention_ended();
                     let _ = pane.terminal.take_pending_notifies();
+                    // #390：聚焦标签也取走载荷（避免滞留），但只更新记录、不置角标。
+                    if let Some(status) = pane.terminal.take_program_status() {
+                        pane.agent_status = if status.state
+                            == crate::terminal::program_status::ProgramState::Clear
+                        {
+                            None
+                        } else {
+                            Some(status)
+                        };
+                    }
                 }
             }
             // #392：每帧取走语义 OSC 载荷（进度 / 目录 / 标题），聚焦与否都更新——
