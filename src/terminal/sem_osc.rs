@@ -74,7 +74,7 @@ pub fn parse_osc7(payload: &str) -> Option<CwdReport> {
         Some((_host, path)) => format!("/{path}"),
         None => return None,
     };
-    sanitize(path)
+    sanitize(percent_decode(&path))
 }
 
 /// OSC 9;9 载荷是裸路径（可能有引号包裹）。
@@ -87,10 +87,34 @@ pub fn parse_osc99(payload: &str) -> Option<CwdReport> {
 }
 
 fn sanitize(path: String) -> Option<CwdReport> {
-    if !path.starts_with('/') || path.contains('\0') {
+    // 复审软注：与标题同口径，拒一切控制字符（不只 \0）。
+    if !path.starts_with('/') || path.chars().any(char::is_control) {
         return None;
     }
     Some(CwdReport { path })
+}
+
+/// #392 软注：OSC 7 载荷做百分号解码（`%20` 等）——常见空格目录原样失败。
+/// 只解 `%XX`，非法序列原样保留。
+fn percent_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() + 1 && i + 2 < bytes.len() + 1 {
+            let hex = bytes.get(i + 1..i + 3);
+            if let Some(h) = hex {
+                if let Ok(v) = u8::from_str_radix(std::str::from_utf8(h).unwrap_or(""), 16) {
+                    out.push(v);
+                    i += 3;
+                    continue;
+                }
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// 标题汇报：OSC 0（icon+title）与 OSC 2（title）统一取整段为标题。
@@ -141,6 +165,20 @@ mod tests {
         assert_eq!(got.path, "/home/u");
         assert!(parse_osc7("not-a-file-url").is_none());
         assert!(parse_osc7("file://hostonly").is_none(), "无路径段拒绝");
+    }
+
+    #[test]
+    fn osc7_percent_decoding() {
+        let got = parse_osc7("file://host/home/u/My%20Docs").unwrap();
+        assert_eq!(got.path, "/home/u/My Docs");
+        // 非法百分号序列原样保留。
+        let got = parse_osc7("file://host/home/u/100%").unwrap();
+        assert_eq!(got.path, "/home/u/100%");
+    }
+
+    #[test]
+    fn path_with_control_char_rejected() {
+        assert!(parse_osc99("/tmp\u{1b}x").is_none());
     }
 
     #[test]

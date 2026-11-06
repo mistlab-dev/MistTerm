@@ -5013,6 +5013,11 @@ impl MistTermApp {
         self.terminal_connect_session(ctx, &mut terminal, session, &mut temp_key);
         let title = self.next_tab_title_for_session(session);
         let inherited_cd = self.pending_new_tab_cwd.take();
+        // #392 复审：复用 TerminalView::arm_startup_directory——等 shell 提示符
+        // 就绪才发 `cd -- '…'`（避免打进 MOTD/banner 输出流），与分屏继承同机制。
+        if let Some(cwd) = inherited_cd.as_deref() {
+            terminal.arm_startup_directory(cwd);
+        }
         self.tabs.push(TerminalTab::single(TerminalPane::new(
             session.id.clone(),
             title,
@@ -5020,7 +5025,10 @@ impl MistTermApp {
         )));
         if let Some(tab) = self.tabs.last_mut() {
             tab.panes[0].ssh_temp_key = temp_key;
-            tab.panes[0].pending_cd = inherited_cd;
+            // OSC 侧目录缓存同步给 terminal，双通道保持一致（复审软注）。
+            if let Some(cwd) = inherited_cd.as_deref() {
+                tab.panes[0].shell_cwd = Some(cwd.to_string());
+            }
         }
         let idx = self.tabs.len() - 1;
         self.ensure_tab_log_writer(idx);
@@ -9812,14 +9820,6 @@ impl eframe::App for MistTermApp {
             // #392：每帧取走语义 OSC 载荷（进度 / 目录 / 标题），聚焦与否都更新——
             // 它们是持续状态而非一次性事件，不存在「切走再冒出来」的打扰问题。
             for (pane_idx, pane) in tab.panes.iter_mut().enumerate() {
-                // 继承目录：连接建立后自动 cd 一次并清空；未连接则等下一帧。
-                if let Some(cwd) = pane.pending_cd.clone() {
-                    if pane.terminal.is_connected() {
-                        pane.pending_cd = None;
-                        let quoted = format!("cd '{}'\r", cwd.replace('\'', "'\\''"));
-                        pane.terminal.paste_text(&quoted, ctx);
-                    }
-                }
                 if let Some(p) = pane.terminal.take_progress() {
                     pane.progress = if p.state == crate::terminal::sem_osc::ProgressState::Remove {
                         None
@@ -9830,6 +9830,8 @@ impl eframe::App for MistTermApp {
                 if let Some(c) = pane.terminal.take_cwd() {
                     let changed = pane.shell_cwd.as_deref() != Some(c.path.as_str());
                     pane.shell_cwd = Some(c.path.clone());
+                    // 复审软注：terminal 侧 shell_cwd 同步，新标签继承两通道取一。
+                    pane.terminal.sync_shell_cwd(&c.path);
                     // #392：SFTP 面板已开时跟随 shell 目录变化（自动 cd 场景同样生效）；
                     // 面板没开不主动弹，避免打扰。
                     if changed

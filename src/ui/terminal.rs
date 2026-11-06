@@ -1630,6 +1630,14 @@ impl TerminalView {
     }
 
     /// SSH 分屏：等提示符出现后再 `cd` 到源窗格目录。
+    /// #392 复审：OSC 7/9;9 汇报的目录同步进 terminal 侧缓存，
+    /// 与提示符探测的 shell_cwd() 收敛为一条；仅在未手动 cd 探测出更新时写。
+    pub(crate) fn sync_shell_cwd(&mut self, cwd: &str) {
+        if self.shell_cwd.as_deref() != Some(cwd) {
+            self.shell_cwd = Some(cwd.to_string());
+        }
+    }
+
     pub(crate) fn arm_startup_directory(&mut self, cwd: &str) {
         let cwd = cwd.trim();
         if cwd.is_empty() {

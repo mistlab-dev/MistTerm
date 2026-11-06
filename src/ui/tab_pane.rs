@@ -117,8 +117,6 @@ pub struct TerminalPane {
     pub shell_cwd: Option<String>,
     /// #392：OSC 9;4 进度（构建工具汇报）；None = 无进度指示。
     pub progress: Option<crate::terminal::sem_osc::ProgressReport>,
-    /// #392：待下发的新标签继承目录（连接成功后发一次 `cd`，随即清空）。
-    pub pending_cd: Option<String>,
     pub ssh_auto_reconnect_next: Option<std::time::Instant>,
     pub ssh_auto_reconnect_attempts: u8,
     pub ssh_temp_key: Option<crate::core::TempKeyFile>,
@@ -147,7 +145,6 @@ impl TerminalPane {
             title_pinned: false,
             shell_cwd: None,
             progress: None,
-            pending_cd: None,
             ssh_auto_reconnect_next: None,
             ssh_auto_reconnect_attempts: 0,
             ssh_temp_key: None,
