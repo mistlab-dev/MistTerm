@@ -653,13 +653,13 @@ pub struct MonitorPanel {
 
 | 属性 | 值 |
 |------|-----|
-| 实现 | **必须** orm_singleline_field / orm_multiline_field（禁止裸 TextEdit） |
-| 字号 | ont_size_control_input()（= ont_size_ui_control，12px） |
+| 实现 | **必须** form_singleline_field / form_multiline_field（禁止裸 TextEdit） |
+| 字号 | font_size_control_input()（= font_size_ui_control，12px） |
 | 上下内边距 | spacing_search_input_y()（≥6，避免字顶满框高） |
-| 背景 / 描边 | rame_form_text_input / rame_boxed_text_input |
+| 背景 / 描边 | frame_form_text_input / frame_boxed_text_input |
 | Hint | hint_rich + color_form_hint() |
 
-数字字段用 orm_drag_value_field（同底同字号），禁止裸 DragValue 贴在小标签旁造成「标签小、数字巨大」。
+数字字段用 form_drag_value_field（同底同字号），禁止裸 DragValue 贴在小标签旁造成「标签小、数字巨大」。
 
 下拉用 `form_combo`（与 `form_singleline_field_boxed` / `form_multiline_field` 同套底+描边）；禁止裸 `ComboBox`。整数步进用 `form_u32_stepper`（± 为次要方钮，勿再画圆形）。弹窗/偏好主路径单行优先 `form_singleline_field_boxed`。
 
@@ -667,11 +667,9 @@ pub struct MonitorPanel {
 
 | 用途 | 字号 | API |
 |------|------|-----|
-| 字段标签 | ont_size_form_label()（12px） | orm_field_label / 
-ich_form_label |
-| 正文输入 | ont_size_control_input()（12px） | 见 §10.2 |
-| 说明 / 错误 / 状态 | ont_size_caption()（更小） | 
-ich_caption 或显式 .size(caption) |
+| 字段标签 | font_size_form_label()（12px） | form_field_label / rich_form_label |
+| 正文输入 | font_size_control_input()（12px） | 见 §10.2 |
+| 说明 / 错误 / 状态 | font_size_caption()（更小） | rich_caption 或显式 .size(caption) |
 
 禁止：标签用 10px caption、输入却用默认 Body/更大字号导致同一表单「忽大忽小」。
 
@@ -687,13 +685,12 @@ ich_caption 或显式 .size(caption) |
 |-------|------|
 | modal_window_frame | 对话框外框 |
 | modal_content_frame | 对话框内容容器 |
-| 
-egion_panel_frame | 侧栏、面板区域 |
+| region_panel_frame | 侧栏、面板区域 |
 | status_chip | 状态徽章 — 淡色底, padding 2px 8px, 圆角 4px, 11px |
 
 ### 10.6 分隔线
 
-1px, order_color()
+1px, border_color()
 - 菜单内: margin 3px 8px
 - 面板内: full width
 
