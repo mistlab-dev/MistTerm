@@ -1,0 +1,12 @@
+---
+description: Git commits must not include a Cursor trailer
+alwaysApply: true
+---
+
+# Commit messages
+
+When creating a git commit:
+
+- Do not append a Cursor trailer, footer, or attribution. This includes `Made-with: Cursor`, `Co-authored-by: Cursor`, `cursoragent@cursor.com`, and any similar line.
+- The message is only the subject and the body that explains the change.
+- If a hook or tool adds that trailer, amend the unpushed commit to remove it before pushing.

@@ -1,0 +1,13 @@
+---
+description: 中文界面文案必须像人话，禁止英译腔
+globs: "**/i18n*/**/*"
+alwaysApply: false
+---
+
+# 中文界面文案
+
+MistTerm / 设置 / AI 面板等用户可见中文，必须像产品文案，**禁止英文直译腔**。
+
+- 少用 Plan、Lease、Control Plane、Agent 等词当主标签；对用户说「自动执行」「等审批」「脚本账号」。
+- 按钮与状态用短动词：同意、拒绝、等待审批、已代跑。
+- 与 mistlab Console 用词对齐，避免同一功能两套叫法。
