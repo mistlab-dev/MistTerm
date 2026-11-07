@@ -1,7 +1,9 @@
 # MistTerm 操作手册
 
-> **适用版本**：1.1.2
-> **更新日期**：2026-09-03
+> **适用版本**：1.3.13
+>
+> **更新日期**：2026-11-07
+>
 > **官网**：[mistlab.dev](https://mistlab.dev) · **下载**：[GitHub Releases](https://github.com/mistlab-dev/MistTerm/releases)
 
 本手册面向**日常使用 MistTerm 连接服务器、操作终端、传文件**的用户。不涉及编译源码或参与开发；开发者文档见仓库内 `docs/` 目录。
@@ -30,7 +32,7 @@
 
 ## 1. MistTerm 是什么
 
-MistTerm 是一款 **SSH 终端客户端**，帮助您：
+MistTerm 是一款 **SSH 终端客户端**，日常用来：
 
 - 保存多台服务器连接，一键打开终端
 - 在图形界面里上传、下载文件（SFTP）
@@ -650,4 +652,4 @@ MistTerm 有两层命令安全检查：本地检查用于快捷提示，服务�
 
 ---
 
-*MistTerm v1.1.2 用户手册 · MistLab*
+*MistTerm v1.3.13 用户手册 · MistLab*

@@ -590,7 +590,7 @@ if panel_collapsed {
 | 搜索框 | `egui::TextEdit::singleline(&mut query)` |
 | 终端区域 | `egui::Frame` 包裹 TerminalView.show() |
 | Tab 栏 | `egui::containers::panel::CentralPanel` 顶部 Button 行 |
-| 状态栏 | `TopBottomPanel::bottom("status_bar", 28.0)` |
+| 状态栏 | Toast 右下角自绘浮层（`paint_status_toast`），已无 bottom panel |
 | 工具按钮 | `egui::Button` (label as emoji) |
 
 ### 12.2 折叠面板的 egui 实现技巧

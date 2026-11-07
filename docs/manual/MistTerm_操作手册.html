@@ -27,13 +27,15 @@ strong { font-weight: 600; }
 </style>
 </head>
 <body>
-<h1>MistTerm 操作手册</h1>
-<blockquote><p><strong>适用版本</strong>：1.1.2</p></blockquote>
-<blockquote><p><strong>更新日期</strong>：2026-09-03</p></blockquote>
-<blockquote><p><strong>官网</strong>：<a href="https://mistlab.dev">mistlab.dev</a> · <strong>下载</strong>：<a href="https://github.com/mistlab-dev/MistTerm/releases">GitHub Releases</a></p></blockquote>
+<h1 id="mistterm-操作手册">MistTerm 操作手册</h1>
+<blockquote>
+<p><strong>适用版本</strong>：1.3.13</p>
+<p><strong>更新日期</strong>：2026-11-07</p>
+<p><strong>官网</strong>：<a href="https://mistlab.dev">mistlab.dev</a> · <strong>下载</strong>：<a href="https://github.com/mistlab-dev/MistTerm/releases">GitHub Releases</a></p>
+</blockquote>
 <p>本手册面向<strong>日常使用 MistTerm 连接服务器、操作终端、传文件</strong>的用户。不涉及编译源码或参与开发；开发者文档见仓库内 <code>docs/</code> 目录。</p>
-<hr>
-<h2>目录</h2>
+<hr />
+<h2 id="目录">目录</h2>
 <ol>
 <li><a href="#1-mistterm-是什么">MistTerm 是什么</a></li>
 <li><a href="#2-安装与启动">安装与启动</a></li>
@@ -51,59 +53,170 @@ strong { font-weight: 600; }
 <li><a href="#14-快捷键一览">快捷键一览</a></li>
 <li><a href="#15-常见问题">常见问题</a></li>
 </ol>
-<hr>
-<h2>1. MistTerm 是什么</h2>
-<p>MistTerm 是一款 <strong>SSH 终端客户端</strong>，帮助您：</p>
+<hr />
+<h2 id="1-mistterm-是什么">1. MistTerm 是什么</h2>
+<p>MistTerm 是一款 <strong>SSH 终端客户端</strong>，日常用来：</p>
 <ul>
 <li>保存多台服务器连接，一键打开终端</li>
 <li>在图形界面里上传、下载文件（SFTP）</li>
 <li>保存常用命令模板（片段），少打重复命令</li>
+<li>把连上之后要按顺序敲的几行存成发送序列，在当前会话一键重放</li>
 <li>查看服务器 CPU、内存、磁盘等状态</li>
 <li>可选：AI 辅助解释命令、团队共享片段</li>
 </ul>
 <p>支持 <strong>Windows</strong>、<strong>macOS</strong> 与 <strong>Linux</strong>。</p>
-<hr>
-<h2>2. 安装与启动</h2>
-<h3>2.1 下载安装</h3>
+<hr />
+<h2 id="2-安装与启动">2. 安装与启动</h2>
+<h3 id="21-下载安装">2.1 下载安装</h3>
 <ol>
 <li>打开 <a href="https://github.com/mistlab-dev/MistTerm/releases">GitHub Releases</a></li>
 <li>下载对应系统的安装包：</li>
-</ol>
-<ul>
 <li><strong>Windows</strong>：<code>MistTerm-*-windows-x86_64-setup.exe</code>，双击安装</li>
 <li><strong>macOS</strong>：<code>.dmg</code>，拖入「应用程序」文件夹</li>
-</ul>
-<ol>
 <li>从开始菜单 / Launchpad 启动 <strong>Mist</strong>（或 MistTerm）</li>
 </ol>
 <p>安装后无需单独安装 OpenSSH；连接远程 Linux 服务器即可使用。</p>
-<h3>2.2 首次启动</h3>
+<h3 id="22-首次启动">2.2 首次启动</h3>
 <p>启动后会出现主窗口：左侧为<strong>活动栏</strong>（可打开连接列表与各面板），中间为<strong>工作区</strong>（连接后显示终端），顶部为<strong>菜单</strong>；提示信息以右下角 <strong>Toast</strong> 显示（无常驻底栏）。</p>
-<figure><img src="screenshots/01-main-connected.png" alt="主界面（已连接 SSH）"><figcaption>主界面（已连接 SSH）</figcaption></figure>
+<figure><img alt="主界面（已连接 SSH）" src="screenshots/01-main-connected.png" /></figure>
 <p class="caption"><em>图 2-1：已连接服务器时的主界面</em></p>
-<h3>2.3 数据保存在哪</h3>
+<h3 id="23-数据保存在哪">2.3 数据保存在哪</h3>
 <p>连接、密码、片段等配置保存在本机用户目录（已加密），例如：</p>
 <ul>
 <li>Windows：<code>%APPDATA%\mistterm\</code></li>
 <li>macOS：<code>~/Library/Application Support/mistterm/</code></li>
 </ul>
 <p>请勿手动编辑这些文件；在应用内修改即可。</p>
-<hr>
-<h2>3. 五分钟上手</h2>
-<table><thead><tr><th>步骤</th><th>操作</th></tr></thead><tbody><tr><td>1</td><td>按 <strong>Ctrl+N</strong>（Mac：<strong>⌘N</strong>）打开「新建会话」</td></tr><tr><td>2</td><td>填写名称、主机 IP/域名、端口（默认 22）、用户名、密码或密钥</td></tr><tr><td>3</td><td>点击 <strong>保存并连接</strong>，或在侧栏<strong>双击</strong>该会话</td></tr><tr><td>4</td><td>在中间终端输入命令，如 <code>ls</code>、<code>cd</code>、<code>top</code></td></tr><tr><td>5</td><td>需要传文件时：菜单 <strong>视图 → SFTP</strong>，或点击左侧<strong>活动栏</strong>「文件」</td></tr></tbody></table>
-<figure><img src="screenshots/02-new-session-dialog.png" alt="新建会话对话框"><figcaption>新建会话对话框</figcaption></figure>
+<hr />
+<h2 id="3-五分钟上手">3. 五分钟上手</h2>
+<table>
+<thead>
+<tr>
+<th>步骤</th>
+<th>操作</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>按 <strong>Ctrl+N</strong>（Mac：<strong>⌘N</strong>）打开「新建会话」</td>
+</tr>
+<tr>
+<td>2</td>
+<td>填写名称、主机 IP/域名、端口（默认 22）、用户名、密码或密钥</td>
+</tr>
+<tr>
+<td>3</td>
+<td>点击 <strong>保存并连接</strong>，或在侧栏<strong>双击</strong>该会话</td>
+</tr>
+<tr>
+<td>4</td>
+<td>在中间终端输入命令，如 <code>ls</code>、<code>cd</code>、<code>top</code></td>
+</tr>
+<tr>
+<td>5</td>
+<td>需要传文件时：菜单 <strong>视图 → SFTP</strong>，或点击左侧<strong>活动栏</strong>「文件」</td>
+</tr>
+</tbody>
+</table>
+<figure><img alt="新建会话对话框" src="screenshots/02-new-session-dialog.png" /></figure>
 <p class="caption"><em>图 3-1：新建会话</em></p>
-<hr>
-<h2>4. 认识界面</h2>
-<h3>4.1 布局</h3>
-<table><thead><tr><th>区域</th><th>位置</th><th>说明</th></tr></thead><tbody><tr><td>顶栏菜单</td><td>窗口顶部</td><td><strong>终端</strong>、<strong>编辑</strong>、<strong>视图</strong>、<strong>工具</strong>、<strong>帮助</strong>（macOS 多用系统菜单）</td></tr><tr><td>活动栏</td><td>窗口左侧</td><td>连接列表、片段、文件、转发、监控、AI、偏好；<strong>Ctrl+B</strong>（Mac：<strong>⌘B</strong>）可隐藏，左缘窄条可恢复</td></tr><tr><td>连接列表</td><td>活动栏「连接」展开</td><td>已保存的会话，支持分组与搜索（默认收起）</td></tr><tr><td>工作区</td><td>中间</td><td>终端标签页；连接后在此输入命令</td></tr><tr><td>侧面板</td><td>右侧（按需打开）</td><td>SFTP、监控、片段、AI 等（同时只开一个）</td></tr><tr><td>Toast</td><td>右下角</td><td>临时提示 / 需确认提示（已无常驻底栏）</td></tr></tbody></table>
-<h3>4.2 常用入口</h3>
-<table><thead><tr><th>想做什么</th><th>怎么打开</th></tr></thead><tbody><tr><td>新建/编辑连接</td><td><strong>Ctrl+N</strong> / 连接列表选中后 <strong>Ctrl+E</strong></td></tr><tr><td>打开 SFTP</td><td><strong>视图 → SFTP</strong> 或活动栏「文件」</td></tr><tr><td>看 CPU/内存</td><td><strong>视图 → 监控</strong> 或活动栏「监控」</td></tr><tr><td>命令面板</td><td>终端失焦时 <strong>Ctrl+K</strong>（Mac：<strong>⌘K</strong>）。模糊搜索会话、片段、历史和应用动作</td></tr><tr><td>命令片段</td><td>活动栏「片段」，或在命令面板里输入片段名后回车</td></tr><tr><td>AI 助手</td><td><strong>Ctrl+Shift+A</strong> 或活动栏「AI」</td></tr><tr><td>显示/隐藏活动栏</td><td><strong>Ctrl+B</strong>（Mac：<strong>⌘B</strong>）或 <strong>视图</strong> 菜单</td></tr><tr><td>偏好设置</td><td><strong>Ctrl+,</strong> 或活动栏底部设置</td></tr><tr><td>帮助与快捷键</td><td><strong>帮助 → 快速入门 / 键盘快捷键</strong> 或 <strong>Ctrl+H</strong></td></tr></tbody></table>
-<figure><img src="screenshots/20-sidebar-sessions.png" alt="侧栏会话列表"><figcaption>侧栏会话列表</figcaption></figure>
+<hr />
+<h2 id="4-认识界面">4. 认识界面</h2>
+<h3 id="41-布局">4.1 布局</h3>
+<table>
+<thead>
+<tr>
+<th>区域</th>
+<th>位置</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>顶栏菜单</td>
+<td>窗口顶部</td>
+<td><strong>终端</strong>、<strong>编辑</strong>、<strong>视图</strong>、<strong>工具</strong>、<strong>帮助</strong>（macOS 多用系统菜单）</td>
+</tr>
+<tr>
+<td>活动栏</td>
+<td>窗口左侧</td>
+<td>连接列表、片段、文件、转发、监控、AI、偏好；<strong>Ctrl+B</strong>（Mac：<strong>⌘B</strong>）可隐藏，左缘窄条可恢复</td>
+</tr>
+<tr>
+<td>连接列表</td>
+<td>活动栏「连接」展开</td>
+<td>已保存的会话，支持分组与搜索（默认收起）</td>
+</tr>
+<tr>
+<td>工作区</td>
+<td>中间</td>
+<td>终端标签页；连接后在此输入命令</td>
+</tr>
+<tr>
+<td>侧面板</td>
+<td>右侧（按需打开）</td>
+<td>SFTP、监控、片段、AI 等（同时只开一个）</td>
+</tr>
+<tr>
+<td>Toast</td>
+<td>右下角</td>
+<td>临时提示 / 需确认提示（已无常驻底栏）</td>
+</tr>
+</tbody>
+</table>
+<h3 id="42-常用入口">4.2 常用入口</h3>
+<table>
+<thead>
+<tr>
+<th>想做什么</th>
+<th>怎么打开</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>新建/编辑连接</td>
+<td><strong>Ctrl+N</strong> / 连接列表选中后 <strong>Ctrl+E</strong></td>
+</tr>
+<tr>
+<td>打开 SFTP</td>
+<td><strong>视图 → SFTP</strong> 或活动栏「文件」</td>
+</tr>
+<tr>
+<td>看 CPU/内存</td>
+<td><strong>视图 → 监控</strong> 或活动栏「监控」</td>
+</tr>
+<tr>
+<td>命令面板</td>
+<td>终端失焦时 <strong>Ctrl+K</strong>（Mac：<strong>⌘K</strong>）。模糊搜索会话、片段、历史和应用动作</td>
+</tr>
+<tr>
+<td>命令片段</td>
+<td>活动栏「片段」，或在命令面板里输入片段名后回车</td>
+</tr>
+<tr>
+<td>AI 助手</td>
+<td><strong>Ctrl+Shift+A</strong> 或活动栏「AI」</td>
+</tr>
+<tr>
+<td>显示/隐藏活动栏</td>
+<td><strong>Ctrl+B</strong>（Mac：<strong>⌘B</strong>）或 <strong>视图</strong> 菜单</td>
+</tr>
+<tr>
+<td>偏好设置</td>
+<td><strong>Ctrl+,</strong> 或活动栏底部设置</td>
+</tr>
+<tr>
+<td>帮助与快捷键</td>
+<td><strong>帮助 → 快速入门 / 键盘快捷键 / 关于</strong></td>
+</tr>
+</tbody>
+</table>
+<figure><img alt="侧栏会话列表" src="screenshots/20-sidebar-sessions.png" /></figure>
 <p class="caption"><em>图 4-1：侧栏会话列表（可分组、搜索）</em></p>
-<figure><img src="screenshots/12-menu-view.png" alt="视图菜单"><figcaption>视图菜单</figcaption></figure>
+<figure><img alt="视图菜单" src="screenshots/12-menu-view.png" /></figure>
 <p class="caption"><em>图 4-2：视图菜单 — 切换各侧面板</em></p>
-<h3>4.3 命令面板</h3>
+<h3 id="43-命令面板">4.3 命令面板</h3>
 <p>终端<strong>没有</strong>焦点时，按 <strong>Ctrl+K</strong>（macOS 为 <strong>⌘K</strong>）打开命令面板。输入即可模糊搜索并执行：</p>
 <ul>
 <li><strong>会话</strong>：已有标签则聚焦，否则连接</li>
@@ -114,209 +227,336 @@ strong { font-weight: 600; }
 <p>键盘：输入过滤，方向键上下，Enter 执行，Esc 关闭。面板打开时按键不会送进终端。</p>
 <p><strong>为什么不是 Ctrl+Shift+K：</strong> 终端失焦时 Ctrl+K / ⌘K 与系统快捷键不冲突，所以 Windows / Linux 仍用 Ctrl+K，macOS 用 ⌘K。终端聚焦时 Ctrl+K 仍然发给 shell，删到行尾（readline kill-to-EOL），面板不会抢走这个键。</p>
 <p>快速片段选择器仍是 <strong>Ctrl+Shift+J</strong>，同样只在终端失焦时打开。</p>
-<hr>
-<h2>5. 连接服务器</h2>
-<h3>5.1 新建会话</h3>
+<hr />
+<h2 id="5-连接服务器">5. 连接服务器</h2>
+<h3 id="51-新建会话">5.1 新建会话</h3>
 <ol>
-<li><strong>Ctrl+N</strong> 打开对话框</li>
+<li><strong>Ctrl+N</strong> 打开对话框  </li>
 <li>填写：</li>
-</ol>
-<ul>
 <li><strong>会话名称</strong>：便于识别，如「生产 Web-01」</li>
 <li><strong>主机</strong>：IP 或域名</li>
 <li><strong>端口</strong>：一般为 22</li>
 <li><strong>用户名</strong></li>
 <li><strong>密码</strong> 或 <strong>私钥文件路径</strong></li>
-</ul>
-<ol>
-<li>可选：取消勾选「使用 SSH Agent」若只用密码登录</li>
+<li>可选：取消勾选「使用 SSH Agent」若只用密码登录。要用硬件密钥时，认证方式选 <strong>FIDO2 / 安全密钥 (OpenSSH)</strong>（见 5.2.1）  </li>
 <li>点击 <strong>保存并连接</strong></li>
 </ol>
-<figure><img src="screenshots/18-import-ssh-config.png" alt="导入 SSH Config"><figcaption>导入 SSH Config</figcaption></figure>
-<p>*图 5-1：也可通过 <strong>终端 → 导入 SSH Config</strong> 从已有 <code>~/.ssh/config</code> 批量导入*</p>
-<h3>5.2 认证方式</h3>
-<table><thead><tr><th>方式</th><th>适用场景</th></tr></thead><tbody><tr><td>密码</td><td>服务器允许密码登录</td></tr><tr><td>私钥文件</td><td>本机 <code>.pem</code> / <code>id_ed25519</code> 等</td></tr><tr><td>SSH Agent</td><td>已启动 ssh-agent / Pageant，密钥已加载</td></tr><tr><td>跳板机</td><td>在高级选项中填写 ProxyJump（与 OpenSSH 相同）</td></tr></tbody></table>
-<h3>5.3 连接与重连</h3>
+<figure><img alt="导入 SSH Config" src="screenshots/18-import-ssh-config.png" /></figure>
+<p class="caption"><em>图 5-1：也可通过 <strong>终端 → 导入 SSH Config</strong> 从已有 <code>~/.ssh/config</code> 批量导入</em></p>
+<h3 id="52-认证方式">5.2 认证方式</h3>
+<table>
+<thead>
+<tr>
+<th>方式</th>
+<th>适用场景</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>密码</td>
+<td>服务器允许密码登录</td>
+</tr>
+<tr>
+<td>私钥文件</td>
+<td>本机 <code>.pem</code> / <code>id_ed25519</code> 等</td>
+</tr>
+<tr>
+<td>SSH Agent</td>
+<td>已启动 ssh-agent / Pageant，密钥已加载</td>
+</tr>
+<tr>
+<td>FIDO2 / 安全密钥 (OpenSSH)</td>
+<td>已用 <code>ssh-add</code> 加载 <code>ecdsa-sk</code> 或 <code>ed25519-sk</code>。触摸和 PIN 由系统提示完成</td>
+</tr>
+<tr>
+<td>跳板机</td>
+<td>在高级选项中填写 ProxyJump（与 OpenSSH 相同）</td>
+</tr>
+</tbody>
+</table>
+<h3 id="521-fido2-/-安全密钥">5.2.1 FIDO2 / 安全密钥</h3>
+<p>会话认证方式选 <strong>FIDO2 / 安全密钥 (OpenSSH)</strong>。MistTerm 不自带 FIDO 协议栈，签名交给本机 OpenSSH agent（<code>ecdsa-sk</code> / <code>ed25519-sk</code>）。连接时窗口会提示触摸密钥或在系统提示里输入 PIN；取消触摸、PIN 错误、代理里没有密钥或密钥文件找不到，都会显示失败原因，不会当成已登录。密码和普通密钥在这条路径上不会被拿来顶替。</p>
+<p>下面是三端各自的最短步骤。只保证 OpenSSH 能驱动的安全密钥（常见是带 ed25519-sk / ecdsa-sk 的 FIDO2 密钥，例如部分 YubiKey 5），不表示每一款硬件都可用。三端都能完成登录。</p>
+<p><strong>Windows</strong></p>
+<ol>
+<li>安装 OpenSSH 客户端，并把服务 <strong>OpenSSH Authentication Agent</strong>（<code>ssh-agent</code>）设为自动并启动。Pageant 不能为 sk 密钥签名。</li>
+<li>在 PowerShell 中：<code>ssh-keygen -t ed25519-sk -f $env:USERPROFILE\.ssh\id_ed25519_sk</code>（也可用 <code>-t ecdsa-sk</code>）。按提示触摸密钥；若要 PIN，在系统提示里输入。</li>
+<li><code>ssh-add $env:USERPROFILE\.ssh\id_ed25519_sk</code>。密钥只放在硬件里时，用 <code>ssh-add -K</code>。</li>
+<li>MistTerm 里把认证方式选成 FIDO2 / 安全密钥，路径可留空（用代理里的 sk 密钥）或填上面的文件。保存并连接，按窗口和 Windows 提示触摸或输入 PIN。</li>
+</ol>
+<p><strong>macOS</strong></p>
+<ol>
+<li>系统自带 ssh-agent。终端执行：<code>ssh-keygen -t ed25519-sk -f ~/.ssh/id_ed25519_sk</code>。</li>
+<li><code>ssh-add --apple-use-keychain ~/.ssh/id_ed25519_sk</code>（或 <code>ssh-add ~/.ssh/id_ed25519_sk</code>）。</li>
+<li>MistTerm 里选择 FIDO2 / 安全密钥并连接。密钥闪烁时触摸；需要 PIN 时在 macOS 提示里输入。</li>
+</ol>
+<p><strong>Linux</strong></p>
+<ol>
+<li>需要 OpenSSH 8.2 或更新（<code>ssh -V</code>）。在<strong>启动 MistTerm 的同一个图形会话</strong>里运行 OpenSSH 的 ssh-agent，并让进程继承 <code>SSH_AUTH_SOCK</code>。桌面自带的 gnome-keyring SSH 组件不一定能签 sk 密钥，请用 OpenSSH 的 ssh-agent。</li>
+<li><code>ssh-keygen -t ed25519-sk -f ~/.ssh/id_ed25519_sk</code>，然后 <code>ssh-add ~/.ssh/id_ed25519_sk</code>。</li>
+<li>若密钥每次都要 PIN，而 agent 没有终端：启动 agent 之前设置 <code>SSH_ASKPASS</code>（例如 <code>ssh-askpass</code>）和 <code>SSH_ASKPASS_REQUIRE=force</code>，PIN 会出现在图形提示里。</li>
+<li>MistTerm 里选择 FIDO2 / 安全密钥并连接，按提示触摸或输入 PIN。</li>
+</ol>
+<h3 id="53-连接与重连">5.3 连接与重连</h3>
 <ul>
-<li><strong>连接</strong>：侧栏单击选中 → <strong>Ctrl+T</strong> 新标签，或<strong>双击</strong>会话</li>
-<li><strong>搜索会话</strong>：终端失焦时 <strong>Ctrl+J</strong> 聚焦侧栏搜索框（终端聚焦时 Ctrl+J 发给 shell）</li>
-<li><strong>自动重连</strong>：在会话编辑里可开启 KeepAlive / 自动重连</li>
+<li><strong>连接</strong>：侧栏单击选中 → <strong>Ctrl+T</strong> 新标签，或<strong>双击</strong>会话  </li>
+<li><strong>搜索会话</strong>：终端失焦时 <strong>Ctrl+J</strong> 聚焦侧栏搜索框（终端聚焦时 Ctrl+J 发给 shell）  </li>
+<li><strong>自动重连</strong>：在会话编辑里可开启 KeepAlive / 自动重连  </li>
 <li>连接成功后，标签上会显示在线圆点；提示信息以右下角 Toast 显示</li>
 </ul>
-<h3>5.4 本地数据安全</h3>
+<h3 id="54-本地数据安全">5.4 本地数据安全</h3>
 <p>密码和会话信息在本地<strong>加密保存</strong>，换电脑需重新配置或恢复备份。配置文件为加密格式，用记事本打开会看到乱码，属正常现象。</p>
-<hr>
-<h2>6. 使用终端</h2>
-<h3>6.1 基本操作</h3>
+<hr />
+<h2 id="6-使用终端">6. 使用终端</h2>
+<h3 id="61-基本操作">6.1 基本操作</h3>
 <ul>
-<li>连接成功后直接在终端区输入命令，<strong>Enter</strong> 执行</li>
-<li><strong>Ctrl+C</strong> 始终中断前台程序（SIGINT），有选区时也一样。复制选区：Windows / Linux <strong>Ctrl+Shift+C</strong>，Mac <strong>⌘C</strong>。粘贴：<strong>Ctrl+Shift+V</strong>（Mac：<strong>⌘V</strong>）</li>
-<li><strong>Ctrl+K</strong>（终端聚焦）：发给 shell，删到行尾。<strong>Ctrl+J</strong>（终端聚焦）：发给 shell（换行，与 readline 一致）。连接搜索（Ctrl+J）和命令面板（Ctrl+K，Mac 为 ⌘K）只在终端失焦时生效。失焦 Ctrl+K 与系统不冲突，因此不用 Ctrl+Shift+K。快速片段选择器是 <strong>Ctrl+Shift+J</strong>，同样只在失焦时打开</li>
+<li>连接成功后直接在终端区输入命令，<strong>Enter</strong> 执行  </li>
+<li><strong>Ctrl+C</strong> 始终中断前台程序（SIGINT），有选区时也一样。复制选区：Windows / Linux <strong>Ctrl+Shift+C</strong>，Mac <strong>⌘C</strong>。粘贴：<strong>Ctrl+Shift+V</strong>（Mac：<strong>⌘V</strong>）  </li>
+<li><strong>Ctrl+K</strong>（终端聚焦）：发给 shell，删到行尾。<strong>Ctrl+J</strong>（终端聚焦）：发给 shell（换行，与 readline 一致）。连接搜索（Ctrl+J）和命令面板（Ctrl+K，Mac 为 ⌘K）只在终端失焦时生效。失焦 Ctrl+K 与系统不冲突，因此不用 Ctrl+Shift+K。快速片段选择器是 <strong>Ctrl+Shift+J</strong>，同样只在失焦时打开  </li>
 <li><strong>Alt</strong>（macOS 为 <strong>Option</strong>）在终端聚焦时作为 Meta 发给 shell：<strong>Alt+B</strong> / <strong>Alt+F</strong> 按词跳转，<strong>Alt+D</strong> / <strong>Alt+Backspace</strong> 按词删除，<strong>Alt+.</strong> 插入上一条命令的最后一个参数（连按可循环更早的参数）。这些键不会被界面快捷键吃掉</li>
-<li><strong>跨多屏选择</strong>：单击起点 → 滚轮翻到终点 → <strong>Shift+单击</strong>终点即可扩展选区；拖选时把鼠标移到终端上/下边缘外会自动滚动，越远越快。之后右键「复制选中」或 <strong>Ctrl+Shift+C</strong>（Mac：<strong>⌘C</strong>）复制全部内容</li>
-<li><strong>中文输入</strong>：合成过程中，预编辑文字显示在光标处；候选窗由系统输入法面板显示。合成中的 Ctrl+C、Ctrl+R 等 Ctrl 组合仍发给终端，不交给拼音编辑</li>
-<li>支持彩色输出、vim、htop 等常见 TUI 程序</li>
-<li>标签页：<strong>Ctrl+T</strong> 新开标签；<strong>Ctrl+W</strong> 关闭当前标签；<strong>Ctrl+Tab</strong> 切换标签</li>
+<li><strong>跨多屏选择</strong>：单击起点 → 滚轮翻到终点 → <strong>Shift+单击</strong>终点即可扩展选区；拖选时把鼠标移到终端上/下边缘外会自动滚动，越远越快。之后右键「复制选中」或 <strong>Ctrl+Shift+C</strong>（Mac：<strong>⌘C</strong>）复制全部内容  </li>
+<li><strong>中文输入</strong>：合成过程中，预编辑文字显示在光标处；候选窗由系统输入法面板显示。合成中的 Ctrl+C、Ctrl+R 等 Ctrl 组合仍发给终端，不交给拼音编辑  </li>
+<li>支持彩色输出、vim、htop 等常见 TUI 程序  </li>
+<li>标签页：<strong>Ctrl+T</strong> 新开标签；<strong>Ctrl+W</strong> 关闭当前标签；<strong>Ctrl+Tab</strong> 切换标签  </li>
 </ul>
-<figure><img src="screenshots/03-terminal-session.png" alt="终端会话"><figcaption>终端会话</figcaption></figure>
+<figure><img alt="终端会话" src="screenshots/03-terminal-session.png" /></figure>
 <p class="caption"><em>图 6-1：终端中执行命令</em></p>
-<h3>6.2 查找与历史</h3>
+<h3 id="62-查找与历史">6.2 查找与历史</h3>
 <ul>
-<li><strong>F3</strong> 或 <strong>Ctrl+F</strong>：在终端输出中查找文字</li>
+<li><strong>F3</strong> 或 <strong>Ctrl+F</strong>：在终端输出中查找文字  </li>
 </ul>
-<figure><img src="screenshots/15-terminal-find.png" alt="终端内查找"><figcaption>终端内查找</figcaption></figure>
+<figure><img alt="终端内查找" src="screenshots/15-terminal-find.png" /></figure>
 <p class="caption"><em>图 6-2：终端内查找</em></p>
 <ul>
-<li><strong>Ctrl+R</strong>（终端聚焦）：发给 shell，进入反向搜索（reverse-i-search），不会打开 Mist 命令历史面板</li>
-<li><strong>工具 → 命令历史</strong>：打开 Mist 的命令历史面板，搜索并重新执行最近的命令。终端失焦时 <strong>Ctrl+R</strong> 也会打开该面板</li>
+<li><strong>Ctrl+R</strong>（终端聚焦）：发给 shell，进入反向搜索（reverse-i-search），不会打开 Mist 命令历史面板  </li>
+<li><strong>工具 → 命令历史</strong>：打开 Mist 的命令历史面板，搜索并重新执行最近的命令。终端失焦时 <strong>Ctrl+R</strong> 也会打开该面板  </li>
+<li><strong>Ctrl+Shift+P</strong>（Mac：<strong>⌘⇧P</strong>）或 <strong>工具 → 粘贴历史</strong>：打开粘贴历史，把最近成功送进终端的粘贴再贴一次（默认记住 20 条）。一次粘贴仍是 <strong>Ctrl+Shift+V</strong>（Mac：<strong>⌘V</strong>），不会改成打开这个面板。私钥、常见令牌和密码/口令提示会尽量不记住；这是尽力过滤，并不完备。可在偏好设置里关闭「记住最近的粘贴」  </li>
 </ul>
-<figure><img src="screenshots/17-command-history.png" alt="命令历史"><figcaption>命令历史</figcaption></figure>
+<figure><img alt="命令历史" src="screenshots/17-command-history.png" /></figure>
 <p class="caption"><em>图 6-3：命令历史窗口</em></p>
-<h3>6.3 分屏（同一标签多窗格）</h3>
+<h3 id="63-分屏同一标签多窗格">6.3 分屏（同一标签多窗格）</h3>
 <p>菜单 <strong>终端</strong> 里也有这几项。标签上右键同样可以分屏。</p>
 <p>Windows 与 Linux 用 <strong>Ctrl+Shift</strong>，macOS 用 <strong>⌘⇧</strong>。</p>
 <ul>
-<li><strong>Ctrl+Shift+D</strong>（macOS <strong>⌘⇧D</strong>）：左右分屏</li>
-<li><strong>Ctrl+Shift+U</strong>（macOS <strong>⌘⇧U</strong>）：上下分屏</li>
-<li><strong>Ctrl+Shift+← / Ctrl+Shift+→</strong>：在分屏窗格间切换焦点（macOS 为 ⌘⌥← / ⌘⌥→）</li>
-<li>新窗格从当前窗格所在目录启动（本机终端、以及 Linux / macOS 的 <code>cd</code>，Windows 远程的 PowerShell）</li>
-<li><strong>Ctrl+Shift+B</strong>（macOS <strong>⌘⇧B</strong>）：<strong>同时输入</strong>。打开后，键入会发到这个标签里的每个窗格。窗格标题右侧会显示「同时输入」</li>
+<li><strong>Ctrl+Shift+D</strong>（macOS <strong>⌘⇧D</strong>）：左右分屏  </li>
+<li><strong>Ctrl+Shift+U</strong>（macOS <strong>⌘⇧U</strong>）：上下分屏  </li>
+<li><strong>Ctrl+Shift+← / Ctrl+Shift+→</strong>：在分屏窗格间切换焦点（macOS 为 ⌘⌥← / ⌘⌥→）  </li>
+<li>新窗格从当前窗格所在目录启动（本机终端、以及 Linux / macOS 的 <code>cd</code>，Windows 远程的 PowerShell）  </li>
+<li><strong>Ctrl+Shift+B</strong>（macOS <strong>⌘⇧B</strong>）：<strong>同时输入</strong>。打开后，键入会发到这个标签里的每个窗格。窗格标题右侧会显示「同时输入」 </li>
 </ul>
-<h3>6.4 已知限制：鼠标与 Alt+点击</h3>
+<h3 id="64-已知限制鼠标与-alt+点击">6.4 已知限制：鼠标与 Alt+点击</h3>
 <p>鼠标在终端里用来<strong>拖选文字</strong>和<strong>滚动</strong>。下面两项当前不做，不是偶发故障：</p>
 <ul>
 <li><strong>不支持 Alt+点击</strong>把光标移到点击的位置（shell 行内也不会因此跳动）</li>
 <li><strong>不向 PTY 发送 xterm 鼠标协议</strong>。tmux、vim 等的鼠标模式因此不可用：在画面上点击、拖动，远端收不到鼠标报告</li>
 </ul>
-<hr>
-<h2>7. 传输文件</h2>
-<h3>7.1 SFTP 面板（推荐）</h3>
+<h3 id="65-命令块">6.5 命令块</h3>
+<p>一条命令和它的输出可以收成一块，用来上一条 / 下一条跳转，或一次复制「命令 + 输出」。分界只认 shell integration 发出的 <strong>OSC 133</strong>（VS Code 的 <strong>OSC 633</strong> 同样认）。没有这些标记时，不会根据回车或提示符去猜，vim / less / htop 的全屏画面也不会被收成一块。</p>
+<p><strong>最短启用</strong></p>
+<ul>
+<li>本机已经开了 <strong>iTerm2</strong> 或 <strong>VS Code</strong> 的 shell integration：保持启用即可。</li>
+<li>bash，写入 <code>~/.bashrc</code>：</li>
+</ul>
+<pre><code class="language-bash">__mist_cmd_block() {
+  local ec=$?
+  printf '\e]133;D;%s\a' &quot;$ec&quot;
+  printf '\e]133;A\a'
+}
+PROMPT_COMMAND=&quot;__mist_cmd_block${PROMPT_COMMAND:+;$PROMPT_COMMAND}&quot;
+PS1=&quot;${PS1}&quot;'\[\e]133;B\a\]'
+</code></pre>
+<ul>
+<li>zsh，写入 <code>~/.zshrc</code>（若已有 <code>precmd</code> / <code>preexec</code>，把下面两行 <code>printf</code> 加进现有函数）：</li>
+</ul>
+<pre><code class="language-zsh">precmd() {
+  local ec=$?
+  printf '\e]133;D;%s\a' &quot;$ec&quot;
+  printf '\e]133;A\a'
+}
+preexec() { printf '\e]133;C\a'; }
+PS1=&quot;${PS1}&quot;'%{\e]133;B\a%}'
+</code></pre>
+<p><code>C</code>（命令已提交）可以不发。只发 <code>A</code> / <code>B</code> / <code>D</code> 时，命令结束后仍是一块。新开一个终端标签后生效。</p>
+<p><strong>怎么用</strong>（终端要处于焦点；Windows / Linux 为 Ctrl+Shift，macOS 为 ⌘⇧）</p>
+<ul>
+<li><strong>Ctrl+Shift+↑</strong>：上一条命令块</li>
+<li><strong>Ctrl+Shift+↓</strong>：下一条命令块。过了最后一条回到最新输出</li>
+<li><strong>Ctrl+Shift+O</strong>：复制当前命令块（从提示符结束到命令结束；还在跑的命令复制到光标）</li>
+<li>终端右键菜单里也有这三项。没启用时会提示来看本节，画面不滚动，快捷键也不会发给 shell</li>
+</ul>
+<p>复制最多保留开头 <strong>4000</strong> 行、<strong>200000</strong> 个字符，更长会截断并注明。进入 vim / less 的那条命令仍是一块，复制内容不含全屏画面。</p>
+<hr />
+<h2 id="7-传输文件">7. 传输文件</h2>
+<h3 id="71-sftp-面板推荐">7.1 SFTP 面板（推荐）</h3>
 <p><strong>打开方式</strong>：菜单 <strong>视图 → SFTP</strong>，或左侧<strong>活动栏</strong>「文件」。</p>
 <p>界面分为<strong>本机</strong>与<strong>远端</strong>两栏：</p>
 <ol>
-<li>路径框改目录后按 Enter 跳转；旁边 <strong>☆</strong> 可收藏，<strong>路径</strong> 下拉可打开收藏/最近</li>
-<li>路径下方可按文件名<strong>筛选</strong>（只影响当前列表）</li>
-<li>单击选中；Ctrl/⌘ 加选；Shift 范围选。文件夹上传/下载会保持相对路径</li>
-<li>工具栏或右键：<strong>上传</strong>、<strong>下载</strong>、<strong>删除</strong>、<strong>新建文件夹</strong>、<strong>重命名</strong>、<strong>编辑</strong>（远端文本）、<strong>权限</strong></li>
-<li>传输时底部显示进度与速度，可取消；同名时可选覆盖 / 续传 / 跳过（及「全部」）</li>
-<li>操作结果以右下角 <strong>Toast</strong> 提示</li>
+<li>路径框改目录后按 Enter 跳转；旁边 <strong>☆</strong> 可收藏，<strong>路径</strong> 下拉可打开收藏/最近  </li>
+<li>路径下方可按文件名<strong>筛选</strong>（只影响当前列表）  </li>
+<li>单击选中；Ctrl/⌘ 加选；Shift 范围选。文件夹上传/下载会保持相对路径  </li>
+<li>工具栏或右键：<strong>上传</strong>、<strong>下载</strong>、<strong>删除</strong>、<strong>新建文件夹</strong>、<strong>重命名</strong>、<strong>编辑</strong>（远端文本）、<strong>权限</strong>  </li>
+<li>传输时底部显示进度与速度，可取消；同名时可选覆盖 / 续传 / 跳过（及「全部」）  </li>
+<li>操作结果以右下角 <strong>Toast</strong> 提示  </li>
 </ol>
-<figure><img src="screenshots/04-sftp-panel.png" alt="SFTP 双栏浏览器"><figcaption>SFTP 双栏浏览器</figcaption></figure>
+<figure><img alt="SFTP 双栏浏览器" src="screenshots/04-sftp-panel.png" /></figure>
 <p class="caption"><em>图 7-1：SFTP 双栏文件管理</em></p>
-<figure><img src="screenshots/05-sftp-upload-done.png" alt="SFTP 上传完成"><figcaption>SFTP 上传完成</figcaption></figure>
+<figure><img alt="SFTP 上传完成" src="screenshots/05-sftp-upload-done.png" /></figure>
 <p class="caption"><em>图 7-2：上传完成后的 Toast 提示</em></p>
 <p><strong>典型流程 — 上传文件到服务器：</strong></p>
 <ol>
-<li>连接 SSH 后打开 SFTP 面板</li>
-<li>本机栏进入要上传的文件所在目录</li>
-<li>远端栏进入目标目录</li>
-<li>选中本机文件（可多选）→ 上传</li>
+<li>连接 SSH 后打开 SFTP 面板  </li>
+<li>本机栏进入要上传的文件所在目录  </li>
+<li>远端栏进入目标目录  </li>
+<li>选中本机文件（可多选）→ 上传  </li>
 </ol>
-<p><strong>下载</strong>则反向操作：选中远端文件 → 下载到本机当前目录。</p>
-<p><strong>改配置</strong>：远端双击文本文件（或右键「编辑」）用本机编辑器打开，保存后按提示回传。</p>
-<h3>7.2 终端内 ZMODEM（rz / sz）</h3>
+<p><strong>下载</strong>则反向操作：选中远端文件 → 下载到本机当前目录。<br />
+<strong>改配置</strong>：远端双击文本文件（或右键「编辑」）用本机编辑器打开，保存后按提示回传。</p>
+<h3 id="72-终端内-zmodemrz-/-sz">7.2 终端内 ZMODEM（rz / sz）</h3>
 <p>若服务器已安装 <code>lrzsz</code>，可在终端里：</p>
-<pre><code># 从本地上传文件到当前远程目录（执行后按提示选择文件）
+<pre><code class="language-bash"># 从本地上传文件到当前远程目录（执行后按提示选择文件）
 rz -bye
 
 # 从远程下载文件到本机
-sz 文件名</code></pre>
+sz 文件名
+</code></pre>
 <p>MistTerm 会自动接管传输并显示进度。若传输异常，请确认远端使用 <code>rz -bye</code>，并检查防火墙是否中断长连接。</p>
-<hr>
-<h2>8. 命令片段</h2>
+<hr />
+<h2 id="8-命令片段">8. 命令片段</h2>
 <p>将常用命令存为<strong>片段</strong>，需要时一键插入，支持 <code>&lt;变量名&gt;</code> 占位符。</p>
-<h3>8.1 打开片段</h3>
-<table><thead><tr><th>方式</th><th>说明</th></tr></thead><tbody><tr><td><strong>Ctrl+K</strong></td><td>打开命令面板并执行片段（仅终端失焦；聚焦时发给 shell，删到行尾。Mac 为 <strong>⌘K</strong>）</td></tr><tr><td><strong>Ctrl+Shift+J</strong></td><td>快速片段选择器（仅终端失焦）</td></tr><tr><td>活动栏「片段」</td><td>打开右侧片段面板</td></tr><tr><td><strong>工具 → 命令片段库</strong></td><td>管理、新建、编辑片段</td></tr></tbody></table>
-<figure><img src="screenshots/11-panel-snippets.png" alt="命令片段面板"><figcaption>命令片段面板</figcaption></figure>
+<p>片段是一条可检索的命令。若要按顺序把好几行发进当前这一个已连接会话，用 <strong>工具 → 发送序列</strong>（见 <a href="#135-发送序列">13.5</a>），不要把它建成片段。</p>
+<h3 id="81-打开片段">8.1 打开片段</h3>
+<table>
+<thead>
+<tr>
+<th>方式</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Ctrl+K</strong></td>
+<td>打开命令面板并执行片段（仅终端失焦；聚焦时发给 shell，删到行尾。Mac 为 <strong>⌘K</strong>）</td>
+</tr>
+<tr>
+<td><strong>Ctrl+Shift+J</strong></td>
+<td>快速片段选择器（仅终端失焦）</td>
+</tr>
+<tr>
+<td>活动栏「片段」</td>
+<td>打开右侧片段面板</td>
+</tr>
+<tr>
+<td><strong>工具 → 命令片段库</strong></td>
+<td>管理、新建、编辑片段</td>
+</tr>
+</tbody>
+</table>
+<figure><img alt="命令片段面板" src="screenshots/11-panel-snippets.png" /></figure>
 <p class="caption"><em>图 8-1：从活动栏打开片段侧栏</em></p>
-<figure><img src="screenshots/16-fragment-library.png" alt="命令片段库"><figcaption>命令片段库</figcaption></figure>
+<figure><img alt="命令片段库" src="screenshots/16-fragment-library.png" /></figure>
 <p class="caption"><em>图 8-2：片段库 — 新建与编辑</em></p>
-<h3>8.2 使用变量</h3>
+<h3 id="82-使用变量">8.2 使用变量</h3>
 <p>片段内容示例：</p>
-<pre><code>kubectl logs -f deployment/&lt;服务名&gt; -n &lt;命名空间&gt;</code></pre>
+<pre><code class="language-bash">kubectl logs -f deployment/&lt;服务名&gt; -n &lt;命名空间&gt;
+</code></pre>
 <p>执行时会弹出输入框，填好变量后自动替换并发送到终端。</p>
-<h3>8.3 团队片段</h3>
+<h3 id="83-团队片段">8.3 团队片段</h3>
 <p>若已登录 MistLab 团队账号，可使用团队共享片段（见第 11 节）。</p>
 <p>团队片段支持 <strong>admin / editor / viewer</strong> 角色权限，并支持针对单个成员覆盖角色权限。编辑团队片段时会自动取得编辑锁；异常退出后，客户端会在下次启动或登录时清理本人残留的编辑锁。</p>
-<hr>
-<h2>9. 监控与端口转发</h2>
-<h3>9.1 主机监控</h3>
+<hr />
+<h2 id="9-监控与端口转发">9. 监控与端口转发</h2>
+<h3 id="91-主机监控">9.1 主机监控</h3>
 <ol>
-<li>先建立 SSH 连接</li>
-<li>打开 <strong>视图 → 监控</strong> 或活动栏「监控」</li>
+<li>先建立 SSH 连接  </li>
+<li>打开 <strong>视图 → 监控</strong> 或活动栏「监控」  </li>
 <li>查看 CPU、内存、磁盘、负载等图表（数据来自远程服务器，只读采集）</li>
 </ol>
-<figure><img src="screenshots/09-panel-monitor.png" alt="主机监控面板"><figcaption>主机监控面板</figcaption></figure>
+<figure><img alt="主机监控面板" src="screenshots/09-panel-monitor.png" /></figure>
 <p class="caption"><em>图 9-1：主机监控</em></p>
-<blockquote><p>监控依赖 SSH 连接。若连接断开，图表会停止更新；重新连接即可。</p></blockquote>
-<h3>9.2 端口转发</h3>
+<blockquote>
+<p>监控依赖 SSH 连接。若连接断开，图表会停止更新；重新连接即可。</p>
+</blockquote>
+<h3 id="92-端口转发">9.2 端口转发</h3>
 <ol>
-<li>打开活动栏「转发」或 <strong>视图 → 端口转发</strong></li>
+<li>打开活动栏「转发」或 <strong>视图 → 端口转发</strong>  </li>
 <li>添加规则（格式与 OpenSSH 类似）：</li>
-</ol>
-<ul>
 <li><strong>本地转发</strong>：<code>本地端口:目标主机:目标端口</code></li>
 <li><strong>远程转发</strong>：<code>远程端口:目标主机:目标端口</code></li>
-<li><strong>SOCKS 代理</strong>：端口号</li>
-</ul>
-<ol>
-<li>连接会话后规则生效</li>
+<li><strong>SOCKS 代理</strong>：端口号  </li>
+<li>连接会话后规则生效  </li>
 </ol>
-<figure><img src="screenshots/10-panel-port-forward.png" alt="端口转发面板"><figcaption>端口转发面板</figcaption></figure>
+<figure><img alt="端口转发面板" src="screenshots/10-panel-port-forward.png" /></figure>
 <p class="caption"><em>图 9-2：端口转发管理</em></p>
-<hr>
-<h2>10. AI 助手</h2>
-<h3>10.1 首次配置</h3>
+<hr />
+<h2 id="10-ai-助手">10. AI 助手</h2>
+<h3 id="101-首次配置">10.1 首次配置</h3>
 <ol>
-<li><strong>工具 → AI 设置</strong>（或先 <strong>Ctrl+Shift+A</strong> 打开面板再进设置）</li>
-<li>填写 <strong>API 地址</strong>、<strong>API Key</strong>、<strong>模型名称</strong>（需兼容 OpenAI 接口的服务，如各类 API 网关）</li>
-<li>保存</li>
+<li><strong>工具 → AI 设置</strong>（或先 <strong>Ctrl+Shift+A</strong> 打开面板再进设置）  </li>
+<li>填写 <strong>API 地址</strong>、<strong>API Key</strong>、<strong>模型名称</strong>（需兼容 OpenAI 接口的服务，如各类 API 网关）  </li>
+<li>保存  </li>
 </ol>
-<figure><img src="screenshots/08-ai-settings-dialog.png" alt="AI 设置"><figcaption>AI 设置</figcaption></figure>
+<figure><img alt="AI 设置" src="screenshots/08-ai-settings-dialog.png" /></figure>
 <p class="caption"><em>图 10-1：AI 设置</em></p>
-<h3>10.2 使用</h3>
+<h3 id="102-使用">10.2 使用</h3>
 <ul>
-<li><strong>Ctrl+Shift+A</strong> 打开 AI 面板，输入问题后发送</li>
-<li><strong>Ctrl+Shift+L</strong>：将终端中选中的文字发送给 AI 分析</li>
+<li><strong>Ctrl+Shift+A</strong> 打开 AI 面板，输入问题后发送  </li>
+<li><strong>Ctrl+Shift+L</strong>：将终端中选中的文字发送给 AI 分析  </li>
 <li>请求直接发往您配置的 API，<strong>不经过 MistLab 服务器</strong>（密钥保存在本机）</li>
 </ul>
-<figure><img src="screenshots/06-ai-panel.png" alt="AI 助手面板"><figcaption>AI 助手面板</figcaption></figure>
+<figure><img alt="AI 助手面板" src="screenshots/06-ai-panel.png" /></figure>
 <p class="caption"><em>图 10-2：AI 助手对话</em></p>
-<figure><img src="screenshots/07-menu-tools.png" alt="工具菜单"><figcaption>工具菜单</figcaption></figure>
+<figure><img alt="工具菜单" src="screenshots/07-menu-tools.png" /></figure>
 <p class="caption"><em>图 10-3：工具菜单 — AI、片段、批量执行、凭证等</em></p>
-<hr>
-<h2>11. 团队与同步（可选）</h2>
+<hr />
+<h2 id="11-团队与同步可选">11. 团队与同步（可选）</h2>
 <p>面向使用 <strong>MistLab 团队版</strong> 的用户：</p>
 <ol>
-<li><strong>工具 → 团队账号</strong> 登录（浏览器 OAuth 授权）</li>
+<li><strong>工具 → 团队账号</strong> 登录（浏览器 OAuth 授权）  </li>
 <li>登录后可：</li>
-</ol>
-<ul>
-<li>同步/共享命令片段</li>
-<li>查看团队审计记录（若管理员已开启）</li>
-<li>使用团队 Vault 凭证（若已配置）</li>
+<li>同步/共享命令片段  </li>
+<li>查看团队审计记录（若管理员已开启）  </li>
+<li>使用团队 Vault 凭证（若已配置）  </li>
 <li>在团队设置中查看存储用量和命令审计 Agent 状态</li>
-</ul>
-<ol>
 <li><strong>工具 → 云同步</strong> 可将个人配置备份到 Git 仓库（可选）</li>
 </ol>
 <p>未登录团队时，所有个人功能照常使用。</p>
-<h3>11.1 团队片段编辑与存储</h3>
+<h3 id="111-团队片段编辑与存储">11.1 团队片段编辑与存储</h3>
 <ul>
 <li><strong>viewer</strong> 只能查看和使用被授权的团队片段。</li>
 <li><strong>editor</strong> 可以创建、修改和维护团队片段；编辑期间客户端会自动续持编辑锁。</li>
 <li><strong>admin</strong> 可以管理团队成员、片段权限和命令审计 Agent。</li>
 <li>团队设置中的存储用量卡片显示总用量、配额和片段等分项；数据不可用时会显示提示，不影响本地终端使用。</li>
 </ul>
-<h3>11.2 命令审计 Agent 状态</h3>
+<h3 id="112-命令审计-agent-状态">11.2 命令审计 Agent 状态</h3>
 <p>如果目标服务器部署了团队命令审计 Agent，客户端会在连接后接收服务器侧审计结果。团队设置中的 Agent 列表可查看主机、启用状态和最后心跳；管理员可以启用或停用 Agent。</p>
-<hr>
-<h2>12. 命令安全提示</h2>
+<hr />
+<h2 id="12-命令安全提示">12. 命令安全提示</h2>
 <p>MistTerm 有两层命令安全检查：本地检查用于快捷提示，服务器侧团队策略才是部署了 Agent 时的权威判定。两者都在危险命令实际发送或执行前给出提示或拦截：</p>
-<table><thead><tr><th>行为</th><th>说明</th></tr></thead><tbody><tr><td>拦截</td><td>如 <code>rm -rf /</code> 等极高风险命令无法发送</td></tr><tr><td>确认</td><td>弹窗询问「是否继续」</td></tr><tr><td>告警</td><td>允许执行但记录告警</td></tr></tbody></table>
-<p>本地检查覆盖片段执行、批量执行、AI 填入的命令、<code>mist exec</code>，以及<strong>在终端里直接手敲的命令</strong>：本地策略生效时，按 Enter 前会先检查当前这一行（包括「用到终端」放进来的内容和单行粘贴），被拦截时回车不会发出，命令留在输入行里；需确认时点「确认发送」才会执行。以下情况手敲命令不做本地检查，回车照常发送：vim/less/top 等全屏程序里、密码或口令提示行、rz/sz 传输进行中。用方向键、Tab 补全或历史回忆改过的行，客户端只能看到你实际敲入的字符，以服务器侧策略为准。</p>
+<table>
+<thead>
+<tr>
+<th>行为</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>拦截</td>
+<td>如 <code>rm -rf /</code> 等极高风险命令无法发送</td>
+</tr>
+<tr>
+<td>确认</td>
+<td>弹窗询问「是否继续」</td>
+</tr>
+<tr>
+<td>告警</td>
+<td>允许执行但记录告警</td>
+</tr>
+</tbody>
+</table>
+<p>本地检查覆盖片段执行、批量执行、AI 填入的命令、<code>mist exec</code>、<strong>发送序列里的每一非空行</strong>，以及<strong>在终端里直接手敲的命令</strong>：本地策略生效时，按 Enter 前会先检查当前这一行（包括「用到终端」放进来的内容和单行粘贴），被拦截时回车不会发出，命令留在输入行里；需确认时点「确认发送」才会执行。以下情况手敲命令不做本地检查，回车照常发送：vim/less/top 等全屏程序里、密码或口令提示行、rz/sz 传输进行中。用方向键、Tab 补全或历史回忆改过的行，客户端只能看到你实际敲入的字符，以服务器侧策略为准。</p>
 <p>可在 <strong>偏好设置</strong> 中查看或调整本地规则。加入团队后，管理员下发的策略会同步到本机；服务器侧 Agent 的判定会通过终端连接回传，客户端会显示「服务器策略」前缀。</p>
-<h3>12.1 服务器侧拦截与合规替代</h3>
+<h3 id="121-服务器侧拦截与合规替代">12.1 服务器侧拦截与合规替代</h3>
 <p>当服务器侧策略拦截命令时：</p>
 <ol>
 <li><strong>block</strong>：显示「服务器策略：该命令被禁止」，原命令不会发送。</li>
@@ -325,75 +565,236 @@ sz 文件名</code></pre>
 <li>若团队或个人片段库中存在相关的安全操作，拦截提示会优先推荐合规替代片段，可直接插入当前终端；团队片段还可以沉淀到个人库。</li>
 </ol>
 <p>本地规则对应的提示使用「本地检查」前缀。客户端不会通过 AI 提供绕过团队策略的做法；AI 建议也不会替代服务器侧策略判定。</p>
-<h3>12.2 Agent 不可用</h3>
+<h3 id="122-agent-不可用">12.2 Agent 不可用</h3>
 <p>客户端会定期检查当前主机的 Agent 心跳。Agent 离线或超过约 5 分钟没有心跳时，终端顶部会显示黄色提示；Agent 恢复后会显示恢复通知。此时本地提示仍可工作，但服务器侧强制审计不可视为可用，应联系团队管理员处理。</p>
-<hr>
-<h2>13. 凭证、日志与偏好</h2>
-<h3>13.1 凭证管理</h3>
+<hr />
+<h2 id="13-凭证日志与偏好">13. 凭证、日志与偏好</h2>
+<h3 id="131-凭证管理">13.1 凭证管理</h3>
 <p><strong>工具 → 凭证</strong>：集中保存服务器账号、数据库、API Token 等，供会话或片段引用。默认本地加密存储。</p>
-<h3>13.2 会话日志</h3>
+<h3 id="132-会话日志">13.2 会话日志</h3>
 <p>在偏好设置中可开启<strong>会话日志</strong>，自动保存终端交互记录，便于事后审计。可通过 <strong>工具 → 浏览会话日志</strong> 查看。</p>
-<h3>13.3 偏好设置与主题</h3>
+<h3 id="1321-崩溃与卡顿报告">13.2.1 崩溃与卡顿报告</h3>
+<p>进程 panic 时，报告写在配置目录的 <code>logs/crash-reports/</code>（与 <code>logs/hang-reports/</code> 同级）。下次打开时，若这份报告比上次正常退出更新，或上次没有正常退出且已有报告，会弹一次摘要（版本、时间、panic 首行），可打开目录或复制全文。第一次安装不提示。之后如果进程被强制结束或发生没有报告的原生崩溃（例如 SIGSEGV），下次仍会提示一次，说明没有新的崩溃报告。正常退出后再打开则不提示。</p>
+<p><strong>帮助 → 诊断</strong> 可随时打开「崩溃报告目录」和「卡顿报告目录」。Rust panic 能落盘；原生 SIGSEGV 目前没有本机报告文件。</p>
+<h3 id="133-偏好设置与主题">13.3 偏好设置与主题</h3>
 <ul>
-<li><strong>Ctrl+,</strong> 打开偏好设置：界面语言、主题、字体、审计、日志等</li>
+<li><strong>Ctrl+,</strong> 打开偏好设置：界面语言、主题、字体、审计、日志等  </li>
 </ul>
-<figure><img src="screenshots/13-preferences.png" alt="偏好设置"><figcaption>偏好设置</figcaption></figure>
+<figure><img alt="偏好设置" src="screenshots/13-preferences.png" /></figure>
 <p class="caption"><em>图 13-1：偏好设置</em></p>
 <ul>
-<li><strong>Ctrl+H</strong> 查看关于与内置快捷键说明</li>
+<li><strong>帮助 → 关于</strong> 查看关于与内置快捷键说明  </li>
 </ul>
-<figure><img src="screenshots/14-about.png" alt="关于 Mist"><figcaption>关于 Mist</figcaption></figure>
+<figure><img alt="关于 Mist" src="screenshots/14-about.png" /></figure>
 <p class="caption"><em>图 13-2：关于 Mist</em></p>
 <ul>
-<li><strong>视图 → 主题</strong>：切换深色/浅色等配色</li>
+<li><strong>视图 → 主题</strong>：切换深色/浅色等配色  </li>
 </ul>
-<h3>13.4 批量执行</h3>
+<h3 id="134-批量执行">13.4 批量执行</h3>
 <p><strong>工具 → 批量执行</strong>：选择多台已保存的主机，输入同一条命令并行执行，适合巡检（结果分主机显示，过长输出会自动截断）。</p>
-<hr>
-<h2>14. 快捷键一览</h2>
+<h3 id="135-发送序列">13.5 发送序列</h3>
+<p><strong>工具 → 发送序列</strong>（命令面板里单独一类「发送序列」，不是「片段」）把几行文字按顺序发进<strong>当前这一个已连接窗格</strong>。</p>
+<ol>
+<li>新建并命名</li>
+<li>每行一条要发出的文字。空行就是按一次回车</li>
+<li>可选行间间隔（毫秒）。<code>0</code> 表示上一行发出后马上发下一行。只做固定等待，<strong>不会</strong>等远端出现提示符</li>
+<li>保存</li>
+<li>先连上会话，再点 <strong>发到当前会话</strong></li>
+</ol>
+<p>即使当前标签开了「同时输入」，发送序列也只进入当前窗格，不会发到其它窗格或其它标签。</p>
+<p>本地命令策略生效时，每一非空行会先做和手敲回车一样的检查。被禁止的行不会发出，后面的行也不再发。需要确认时，确认之后才继续。</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>命令片段</th>
+<th><code>mist exec</code></th>
+<th>AI 批量</th>
+<th>发送序列</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>什么时候用</td>
+<td>一条可检索的命令，常带 <code>&lt;占位符&gt;</code>，可放进片段库</td>
+<td>在命令行对一台或多台主机执行，不占用终端标签</td>
+<td>用自然语言规划，确认后在多台主机执行</td>
+<td>连上之后，总要在当前会话里按顺序敲的那几行</td>
+</tr>
+<tr>
+<td>发到哪里</td>
+<td>当前终端（先填变量）</td>
+<td>另开 SSH，收回输出</td>
+<td>计划里的多台主机</td>
+<td>只发到当前这一个已连接窗格</td>
+</tr>
+<tr>
+<td>明确不做</td>
+<td>不按固定间隔重放多行</td>
+<td>不在已经打开的交互会话里敲键</td>
+<td>不是写死的键序</td>
+<td>不等待远端提示符；不广播到其它会话</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="14-快捷键一览">14. 快捷键一览</h2>
 <p>以下以 <strong>Windows</strong> 为例；macOS 将 <strong>Ctrl</strong> 换为 <strong>⌘</strong> 即可（如 Ctrl+N → ⌘N）。</p>
-<table><thead><tr><th>快捷键</th><th>功能</th></tr></thead><tbody><tr><td><strong>Ctrl+N</strong></td><td>新建会话</td></tr><tr><td><strong>Ctrl+E</strong></td><td>编辑所选会话</td></tr><tr><td><strong>Ctrl+Shift+T</strong></td><td>为所选会话新建终端标签（Mac：<strong>⌘T</strong>）</td></tr><tr><td><strong>Ctrl+Shift+W</strong></td><td>关闭当前标签（Mac：<strong>⌘W</strong>）</td></tr><tr><td><strong>Ctrl+Tab</strong> / <strong>Ctrl+Shift+Tab</strong></td><td>下一 / 上一标签</td></tr><tr><td><strong>Ctrl+1 … Ctrl+9</strong></td><td>切换到第 N 个标签</td></tr><tr><td><strong>Ctrl+B</strong></td><td>显示 / 隐藏活动栏</td></tr><tr><td><strong>Ctrl+J</strong></td><td>聚焦连接搜索（仅终端失焦；聚焦时发给 shell，换行）</td></tr><tr><td><strong>Ctrl+K</strong></td><td>打开命令面板（仅终端失焦；可搜会话、片段、历史、动作。聚焦时发给 shell，删到行尾。Mac 为 <strong>⌘K</strong>。不用 Ctrl+Shift+K）</td></tr><tr><td><strong>Ctrl+Shift+J</strong></td><td>快速片段选择器（仅终端失焦）</td></tr><tr><td><strong>Ctrl+F</strong> / <strong>F3</strong></td><td>终端内查找</td></tr><tr><td><strong>Ctrl+C</strong></td><td>中断前台程序（SIGINT），有选区也一样。复制用 <strong>Ctrl+Shift+C</strong>（Mac：<strong>⌘C</strong>）</td></tr><tr><td><strong>Ctrl+Shift+V</strong>（Mac：<strong>⌘V</strong>）</td><td>粘贴到终端</td></tr><tr><td><strong>Ctrl+R</strong></td><td>终端聚焦时发给 shell（反向搜索）。失焦时打开 Mist 命令历史；菜单在 <strong>工具 → 命令历史</strong></td></tr><tr><td><strong>Ctrl+Shift+A</strong></td><td>AI 助手面板</td></tr><tr><td><strong>Ctrl+Shift+L</strong></td><td>终端选区发送到 AI</td></tr><tr><td><strong>Ctrl+Shift+D</strong> / <strong>Ctrl+Shift+U</strong>（Mac：<strong>⌘⇧D</strong> / <strong>⌘⇧U</strong>）</td><td>终端左右 / 上下分屏</td></tr><tr><td><strong>Ctrl+,</strong></td><td>偏好设置</td></tr><tr><td><strong>Ctrl+H</strong></td><td>关于与快捷键说明</td></tr><tr><td><strong>Alt+B</strong> / <strong>Alt+F</strong></td><td>终端聚焦时发给 shell，按词向左 / 向右跳（Mac：<strong>Option+B</strong> / <strong>Option+F</strong>）</td></tr><tr><td><strong>Alt+D</strong> / <strong>Alt+Backspace</strong></td><td>终端聚焦时发给 shell，向右 / 向左按词删除（Mac 用 <strong>Option</strong>）</td></tr><tr><td><strong>Alt+.</strong></td><td>终端聚焦时发给 shell，插入上一条命令的最后参数（Mac：<strong>Option+.</strong>）</td></tr><tr><td><strong>Esc</strong></td><td>关闭当前弹窗、菜单</td></tr></tbody></table>
+<table>
+<thead>
+<tr>
+<th>快捷键</th>
+<th>功能</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Ctrl+N</strong></td>
+<td>新建会话</td>
+</tr>
+<tr>
+<td><strong>Ctrl+E</strong></td>
+<td>编辑所选会话</td>
+</tr>
+<tr>
+<td><strong>Ctrl+Shift+T</strong></td>
+<td>为所选会话新建终端标签（Mac：<strong>⌘T</strong>）</td>
+</tr>
+<tr>
+<td><strong>Ctrl+Shift+W</strong></td>
+<td>关闭当前标签（Mac：<strong>⌘W</strong>）</td>
+</tr>
+<tr>
+<td><strong>Ctrl+Tab</strong> / <strong>Ctrl+Shift+Tab</strong></td>
+<td>下一 / 上一标签</td>
+</tr>
+<tr>
+<td><strong>Ctrl+1 … Ctrl+9</strong></td>
+<td>切换到第 N 个标签</td>
+</tr>
+<tr>
+<td><strong>Ctrl+B</strong></td>
+<td>显示 / 隐藏活动栏</td>
+</tr>
+<tr>
+<td><strong>Ctrl+J</strong></td>
+<td>聚焦连接搜索（仅终端失焦；聚焦时发给 shell，换行）</td>
+</tr>
+<tr>
+<td><strong>Ctrl+K</strong></td>
+<td>打开命令面板（仅终端失焦；可搜会话、片段、历史、动作。聚焦时发给 shell，删到行尾。Mac 为 <strong>⌘K</strong>。不用 Ctrl+Shift+K）</td>
+</tr>
+<tr>
+<td><strong>Ctrl+Shift+J</strong></td>
+<td>快速片段选择器（仅终端失焦）</td>
+</tr>
+<tr>
+<td><strong>Ctrl+F</strong> / <strong>F3</strong></td>
+<td>终端内查找</td>
+</tr>
+<tr>
+<td><strong>Ctrl+C</strong></td>
+<td>中断前台程序（SIGINT），有选区也一样。复制用 <strong>Ctrl+Shift+C</strong>（Mac：<strong>⌘C</strong>）</td>
+</tr>
+<tr>
+<td><strong>Ctrl+Shift+V</strong>（Mac：<strong>⌘V</strong>）</td>
+<td>粘贴到终端</td>
+</tr>
+<tr>
+<td><strong>Ctrl+Shift+↑</strong> / <strong>Ctrl+Shift+↓</strong>（Mac：<strong>⌘⇧↑</strong> / <strong>⌘⇧↓</strong>）</td>
+<td>上一条 / 下一条命令块（需要 shell integration，见 <a href="#65-命令块">6.5</a>）</td>
+</tr>
+<tr>
+<td><strong>Ctrl+Shift+O</strong>（Mac：<strong>⌘⇧O</strong>）</td>
+<td>复制当前命令块（命令和输出；过长会截断）</td>
+</tr>
+<tr>
+<td><strong>Ctrl+Shift+P</strong>（Mac：<strong>⌘⇧P</strong>）</td>
+<td>粘贴历史。菜单在 <strong>工具 → 粘贴历史</strong>。一次粘贴仍是 <strong>Ctrl+Shift+V</strong>（Mac：<strong>⌘V</strong>）。私钥和口令提示只做尽力过滤，并不完备</td>
+</tr>
+<tr>
+<td><strong>Ctrl+R</strong></td>
+<td>终端聚焦时发给 shell（反向搜索）。失焦时打开 Mist 命令历史；菜单在 <strong>工具 → 命令历史</strong></td>
+</tr>
+<tr>
+<td><strong>Ctrl+Shift+A</strong></td>
+<td>AI 助手面板</td>
+</tr>
+<tr>
+<td><strong>Ctrl+Shift+L</strong></td>
+<td>终端选区发送到 AI</td>
+</tr>
+<tr>
+<td><strong>Ctrl+Shift+D</strong> / <strong>Ctrl+Shift+U</strong>（Mac：<strong>⌘⇧D</strong> / <strong>⌘⇧U</strong>）</td>
+<td>终端左右 / 上下分屏</td>
+</tr>
+<tr>
+<td><strong>Ctrl+,</strong></td>
+<td>偏好设置</td>
+</tr>
+<tr>
+<td><strong>帮助 → 关于</strong></td>
+<td>关于与快捷键说明（不用 Ctrl+H；Mac 上 ⌘H 为系统隐藏窗口）</td>
+</tr>
+<tr>
+<td><strong>Alt+B</strong> / <strong>Alt+F</strong></td>
+<td>终端聚焦时发给 shell，按词向左 / 向右跳（Mac：<strong>Option+B</strong> / <strong>Option+F</strong>）</td>
+</tr>
+<tr>
+<td><strong>Alt+D</strong> / <strong>Alt+Backspace</strong></td>
+<td>终端聚焦时发给 shell，向右 / 向左按词删除（Mac 用 <strong>Option</strong>）</td>
+</tr>
+<tr>
+<td><strong>Alt+.</strong></td>
+<td>终端聚焦时发给 shell，插入上一条命令的最后参数（Mac：<strong>Option+.</strong>）</td>
+</tr>
+<tr>
+<td><strong>Esc</strong></td>
+<td>关闭当前弹窗、菜单</td>
+</tr>
+</tbody>
+</table>
 <p>完整列表以应用内 <strong>帮助 → 键盘快捷键</strong> 为准。</p>
-<figure><img src="screenshots/19-help-quick-start.png" alt="快速入门帮助"><figcaption>快速入门帮助</figcaption></figure>
+<figure><img alt="快速入门帮助" src="screenshots/19-help-quick-start.png" /></figure>
 <p class="caption"><em>图 14-1：应用内帮助 — 快速入门</em></p>
-<hr>
-<h2>15. 常见问题</h2>
-<h3>无法连接服务器</h3>
+<hr />
+<h2 id="15-常见问题">15. 常见问题</h2>
+<h3 id="无法连接服务器">无法连接服务器</h3>
 <ul>
-<li>检查主机、端口、用户名、密码/密钥是否正确</li>
-<li>确认本机网络能访问目标 IP（可先用系统自带 <code>ssh</code> 命令测试）</li>
-<li>若需跳板机，在会话高级选项中配置 ProxyJump</li>
-<li>查看右下角 Toast 是否显示错误信息</li>
+<li>检查主机、端口、用户名、密码/密钥是否正确  </li>
+<li>确认本机网络能访问目标 IP（可先用系统自带 <code>ssh</code> 命令测试）  </li>
+<li>若需跳板机，在会话高级选项中配置 ProxyJump  </li>
+<li>查看右下角 Toast 是否显示错误信息  </li>
 </ul>
-<h3>连接后终端空白或乱码</h3>
+<h3 id="连接后终端空白或乱码">连接后终端空白或乱码</h3>
 <ul>
-<li>稍等几秒等待 shell 初始化</li>
-<li>在偏好设置中确认语言与字体；中文环境一般会自动选用合适字体</li>
+<li>稍等几秒等待 shell 初始化  </li>
+<li>在偏好设置中确认语言与字体；中文环境一般会自动选用合适字体  </li>
 </ul>
-<h3>SFTP 无法上传/下载</h3>
+<h3 id="sftp-无法上传/下载">SFTP 无法上传/下载</h3>
 <ul>
-<li>确认 SSH 已连接成功（同一标签页）</li>
-<li>检查远程目录是否有写权限</li>
-<li>本机目标路径是否存在、是否只读</li>
+<li>确认 SSH 已连接成功（同一标签页）  </li>
+<li>检查远程目录是否有写权限  </li>
+<li>本机目标路径是否存在、是否只读  </li>
 </ul>
-<h3>ZMODEM（rz/sz）传文件失败</h3>
+<h3 id="zmodemrz/sz传文件失败">ZMODEM（rz/sz）传文件失败</h3>
 <ul>
-<li>确认服务器已安装 <code>lrzsz</code>（<code>which rz</code>）</li>
-<li>上传时使用 <code>rz -bye</code></li>
-<li>传输过程中勿切换标签或断开连接</li>
+<li>确认服务器已安装 <code>lrzsz</code>（<code>which rz</code>）  </li>
+<li>上传时使用 <code>rz -bye</code>  </li>
+<li>传输过程中勿切换标签或断开连接  </li>
 </ul>
-<h3>配置文件打开是乱码</h3>
+<h3 id="配置文件打开是乱码">配置文件打开是乱码</h3>
 <ul>
-<li>正常现象：MistTerm 对本地配置做了加密，请只在应用内修改</li>
+<li>正常现象：MistTerm 对本地配置做了加密，请只在应用内修改  </li>
 </ul>
-<h3>如何卸载</h3>
+<h3 id="如何卸载">如何卸载</h3>
 <ul>
-<li><strong>Windows</strong>：设置 → 应用 → MistTerm → 卸载</li>
-<li><strong>macOS</strong>：将 MistTerm 拖入废纸篓；配置仍在 <code>Application Support/mistterm/</code>，可手动删除</li>
+<li><strong>Windows</strong>：设置 → 应用 → MistTerm → 卸载  </li>
+<li><strong>macOS</strong>：将 MistTerm 拖入废纸篓；配置仍在 <code>Application Support/mistterm/</code>，可手动删除  </li>
 </ul>
-<h3>如何反馈问题</h3>
+<h3 id="如何反馈问题">如何反馈问题</h3>
 <p>前往 <a href="https://github.com/mistlab-dev/MistTerm/issues">GitHub Issues</a> 描述现象、版本号与操作系统，勿在 issue 中粘贴密码或密钥。</p>
-<hr>
-<p>*MistTerm v1.1.2 用户手册 · MistLab*</p>
+<hr />
+<p><em>MistTerm v1.3.13 用户手册 · MistLab</em></p>
 </body>
 </html>

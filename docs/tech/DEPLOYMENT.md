@@ -18,8 +18,8 @@
 
 | 组件 | 最低版本 | 推荐版本 | 说明 |
 |-----|---------|---------|------|
-| Rust | 1.70 | 1.75+ | 通过 rustup 安装 |
-| Cargo | 1.70 | 1.75+ | 随 Rust 安装 |
+| Rust | 1.95 | 1.95+ | eframe 0.37 的 MSRV，通过 rustup 安装 |
+| Cargo | 1.95 | 1.95+ | 随 Rust 安装 |
 | pkg-config | 0.29 | latest | 依赖查找工具 |
 | C 编译器 | - | latest | gcc/clang/MSVC |
 
@@ -33,7 +33,7 @@
 
 **界面字体与图标**
 
-- **中文**：发布构建在编译期嵌入 `assets/fonts/NotoSansSC-Regular.otf`（OFL-1.1），不依赖系统是否安装微软雅黑等字体；若嵌入与系统字体均不可用，底栏会提示「未加载中文字体」。
+- **中文**：发布构建在编译期嵌入 `assets/fonts/NotoSansSC-Regular.otf`（OFL-1.1），不依赖系统是否安装微软雅黑等字体；若嵌入与系统字体均不可用，界面会提示「未加载中文字体」。
 - **PDF 导出**：嵌入 `assets/fonts/NotoSansSC-Regular.ttf`（Fontsource 子集，约 2MB）；无系统字体时仍可导出中文效率报告。
 - **图标**：UI 工具栏/侧栏图标使用内置图集纹理（`src/ui/icons.rs`），不依赖系统 emoji 字体；克隆仓库后若缺少字体文件，请执行 `./scripts/fetch-cjk-font.sh` 再编译。
 
@@ -168,11 +168,11 @@ conan install libssh2/1.11.0@
 ```bash
 # 检查 Rust
 rustc --version
-# 输出：rustc 1.75.0 (xxx)
+# 输出：rustc 1.95.0 (xxx)
 
 # 检查 Cargo
 cargo --version
-# 输出：cargo 1.75.0 (xxx)
+# 输出：cargo 1.95.0 (xxx)
 
 # 检查 libssh2
 pkg-config --modversion libssh2
@@ -333,7 +333,7 @@ cargo build --release --target x86_64-unknown-linux-gnu
 
 ```dockerfile
 # Dockerfile
-FROM rust:1.75
+FROM rust:1.95
 
 RUN apt-get update && apt-get install -y \
     gcc-aarch64-linux-gnu \
@@ -413,7 +413,7 @@ cat > MistTerm.app/Contents/Info.plist << EOF
     <key>CFBundleIdentifier</key>
     <string>com.example.mistterm</string>
     <key>CFBundleVersion</key>
-    <string>1.0.0</string>
+    <string>1.3.13</string>
 </dict>
 </plist>
 EOF
@@ -422,7 +422,7 @@ EOF
 cp icon.icns MistTerm.app/Contents/Resources/
 
 # 压缩
-tar -czf MistTerm-1.0.0-macos.tar.gz MistTerm.app
+tar -czf MistTerm-1.3.13-macos.tar.gz MistTerm.app
 ```
 
 ### 5.2 Linux 打包
@@ -464,7 +464,7 @@ mkdir -p deb-package/usr/share/icons/hicolor/256x256/apps
 # 控制文件
 cat > deb-package/DEBIAN/control << EOF
 Package: mistterm
-Version: 1.0.0
+Version: 1.3.13
 Section: utils
 Priority: optional
 Architecture: amd64
@@ -477,7 +477,7 @@ cp target/release/mistterm deb-package/usr/bin/
 cp icon.png deb-package/usr/share/icons/hicolor/256x256/apps/mistterm.png
 
 # 构建
-dpkg-deb --build deb-package mistterm_1.0.0_amd64.deb
+dpkg-deb --build deb-package mistterm_1.3.13_amd64.deb
 ```
 
 ### 5.3 Windows 打包
@@ -517,7 +517,7 @@ SectionEnd
 
 ```bash
 # 解压
-tar -xzf MistTerm-1.0.0-macos.tar.gz
+tar -xzf MistTerm-1.3.13-macos.tar.gz
 
 # 移动到 /usr/local/bin
 sudo mv MistTerm.app /Applications/
@@ -594,7 +594,7 @@ pkg-config --libs --cflags libssh2
 rustup update
 
 # 检查版本
-rustc --version  # 需要 >= 1.70
+rustc --version  # 需要 >= 1.95
 ```
 
 #### 问题：链接错误

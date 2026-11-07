@@ -107,7 +107,7 @@ Issues and PRs: [github.com/mistlab-dev/MistTerm](https://github.com/mistlab-dev
 
 ## 简体中文
 
-免费的团队 SSH 终端：短时证书、命令审计、共用命令、AI 批量运维。Rust 构建。
+免费的团队 SSH 终端：短时证书、命令审计、共用命令、AI 批量运维。Rust 编写，界面走 GPU 渲染。
 
 官网快速开始：[mistlab.dev/docs.html](https://mistlab.dev/docs.html) · 社区：[Discussions](https://github.com/mistlab-dev/MistTerm/discussions)
 
@@ -141,12 +141,12 @@ cargo build --release --bin Mist
 |------|------|
 | **终端** | tokio + ssh2 异步 SSH；egui + Alacritty 网格；多标签 / 分屏；密码、密钥、Agent、Vault 证书 |
 | **文件** | SFTP 侧栏；ZMODEM（`rz` / `sz`）与进度 |
-| **片段** | 首次安装自带示例命令；个人命令库与变量；市场模板；使用统计 |
+| **片段** | 首次启动自带示例命令；个人命令库与变量；片段市场；使用统计 |
 | **运维** | 主机监控；端口转发（`mist fwd`）；批量执行；会话日志 |
 | **命令行** | `mist` 无头 CLI，与 GUI 共享同一份会话库——`ls` / `exec`（单机 + `--group` / `--all` 批量）/ `ssh` / `rls` / `get` / `put` / `fwd` / `frag` / `import-ssh-config` / `sop extract`。详见 [docs/tech/CLI-DESIGN.md](docs/tech/CLI-DESIGN.md) |
 | **团队** | [mistlab.dev](https://mistlab.dev) 免费托管同步；小团队短时证书；命令记录 |
-| **AI** | 多机磁盘/内存/日志计划**无需** API Key；对话可自带模型 |
-| **审计** | 覆盖片段 / 历史 / AI / 批量，以及团队审计开启时在交互式终端回车提交的命令（可在偏好设置 → 操作审计里关掉） |
+| **AI** | 多机磁盘/内存/日志巡检**不需要** API Key；对话可自带模型 |
+| **审计** | 记录片段、历史、AI 与批量执行，以及团队审计开启时在交互式终端按回车提交的命令（偏好设置 → 操作审计里可关） |
 | **体验** | 中/英界面；首次新手引导；主题；**活动栏**（⌘/Ctrl+B 可隐藏） |
 
 ### 快速上手
@@ -172,7 +172,7 @@ Mist 启动后过一会儿检查一次有没有新版本，之后每天检查一
 | | |
 |---|---|
 | [中文索引](docs/zh/README.md) | [英文索引](docs/en/README.md) |
-| [安装说明](docs/zh/INSTALL.md) | [布局与 chrome](docs/product/LAYOUT.md) |
+| [安装说明](docs/zh/INSTALL.md) | [窗口布局](docs/product/LAYOUT.md) |
 | [终端行为](docs/tech/TERMINAL-BEHAVIOR.md) | [操作手册](docs/manual/MistTerm_操作手册.html) |
 
 ### 测试

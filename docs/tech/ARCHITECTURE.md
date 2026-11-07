@@ -1,6 +1,6 @@
 ﻿# MistTerm 技术架构文档
 
-## 📋 目录
+## 目录
 
 1. [系统概述](#1-系统概述)
 2. [架构设计](#2-架构设计)
@@ -183,164 +183,66 @@ MistTerm/
 
 ## 3. 技术栈
 
-### 3.1 核心技术
+具体版本与选型理由见 [TECH-STACK.md](./TECH-STACK.md)，这里只留架构视角需要的那几条：
 
-| 组件 | 技术选型 | 版本 | 说明 |
-|-----|---------|-----|------|
-| **编程语言** | Rust | 1.70+ | 内存安全、高性能 |
-| **GUI 框架** | egui | 0.24+ | 即时模式 GUI 库 |
-| **应用框架** | eframe | 0.24+ | egui 应用框架 |
-| **SSH 库** | libssh2 | 1.11+ | SSH 协议实现 |
-| **Rust 绑定** | ssh2 | 0.9+ | libssh2 Rust 封装 |
+| 组件 | 技术 | 在本架构里的位置 |
+|-----|------|------|
+| **编程语言** | Rust（MSRV 1.95） | 全工程 |
+| **GUI 框架** | egui / eframe 0.37 | UI 层，即时模式每帧重绘 |
+| **SSH 库** | ssh2 0.9（libssh2 绑定） | SSH 层，同步 API |
+| **终端内核** | alacritty_terminal 0.26 | 核心层，VTE 网格与解析 |
+| **异步运行时** | tokio 1.35 | 连接、文件传输、后台任务 |
+| **锁** | std::sync + parking_lot 0.12 | 共享状态 |
+| **序列化** | serde / serde_json | 配置文件与团队接口 |
+| **日志** | tracing 0.1（`log` 经 tracing-log 兼容） | 全工程 |
 
-### 3.2 依赖库
+### 3.1 依赖与分层的关系
 
-```toml
-[dependencies]
-# GUI 框架
-eframe = "0.24"
-egui = "0.24"
-
-# SSH 连接
-ssh2 = "0.9"
-
-# 并发和锁
-parking_lot = "0.12"
-
-# 序列化
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-
-# 日志
-log = "0.4"
-env_logger = "0.10"
-
-# 线程
-std::thread (标准库)
-
-# 通信通道
-std::sync::mpsc (标准库)
-```
-
-### 3.3 技术选型理由
-
-#### 3.3.1 为什么选择 Rust?
-
-| 优势 | 说明 |
-|-----|------|
-| **内存安全** | 编译时保证，无数据竞争 |
-| **高性能** | 与 C/C++ 相当的性能 |
-| **并发安全** | 所有权系统防止数据竞争 |
-| **跨平台** | 一次编写，多平台编译 |
-| **生态系统** | Cargo 包管理器，丰富的库 |
-
-#### 3.3.2 为什么选择 egui?
-
-| 优势 | 说明 |
-|-----|------|
-| **即时模式** | 简单高效，易于集成 |
-| **跨平台** | 支持所有主流平台 |
-| **轻量级** | 无外部依赖，编译快速 |
-| **自定义** | 高度可定制的样式和主题 |
-| **终端友好** | 适合终端类应用 |
-
-#### 3.3.3 为什么选择 libssh2?
-
-| 优势 | 说明 |
-|-----|------|
-| **成熟稳定** | 多年维护，广泛使用 |
-| **功能完整** | SSH-2 协议完整实现 |
-| **广泛支持** | 支持所有主流平台 |
-| **性能优秀** | C 库，性能经过优化 |
+- `ui/` 只依赖 `core/` 暴露的类型和事件，不直接碰 ssh2 会话。
+- `core/` 持有会话状态与终端网格，SSH 调用在这里发起。
+- 连接、SFTP、监控采集都跑在 tokio 任务里，UI 每帧只读快照，不在渲染路径上等 IO。
 
 ---
 
 ## 4. 模块设计
 
-### 4.1 UI 层 (ui/app.rs)
+### 4.1 UI 层（ui/）
 
-#### 4.1.1 核心结构
+| 文件 | 职责 |
+|------|------|
+| [`app.rs`](../../src/ui/app.rs) | `MistTermApp`：顶层状态、活动栏、右抽屉互斥、Toast |
+| [`workspace.rs`](../../src/ui/workspace.rs) | 面板注册顺序（top_chrome → activity_rail → 右抽屉 → CentralPanel → Foreground） |
+| [`chrome.rs`](../../src/ui/chrome.rs) | 顶栏、Tab、Toast 绘制 |
+| [`sidebar.rs`](../../src/ui/sidebar.rs) | 连接列表（默认收起，rail「连接」展开） |
 
-```rust
-pub struct MistTermApp {
-    /// 会话管理器
-    session_manager: SessionManager,
-    /// 连接管理器
-    connection_manager: Option<ConnectionManager>,
-    /// 消息接收器
-    message_rx: Option<Receiver<SshMessage>>,
-    /// 选中的会话索引
-    selected_session: Option<usize>,
-    /// 是否显示连接对话框
-    showing_connect_dialog: bool,
-    /// 新连接配置
-    new_config: SessionConfig,
-    /// 输入缓冲
-    input_buffer: HashMap<String, String>,
-}
-```
+#### 4.1.1 顶层状态分组
 
-#### 4.1.2 核心方法
+`MistTermApp` 字段多且随功能增长，按用途大致分这几组（具体以源文件为准）：
 
-| 方法 | 职责 |
-|-----|------|
-| `update()` | 应用主循环，处理事件和渲染 |
-| `render_header()` | 渲染顶部栏（标题、Connect 按钮） |
-| `render_session_list()` | 渲染会话列表 |
-| `render_terminal()` | 渲染终端主窗口 |
-| `render_input()` | 渲染命令输入框 |
-| `render_connect_dialog()` | 渲染连接对话框 |
-| `connect_session()` | 发起 SSH 连接 |
+| 分组 | 代表字段 | 作用 |
+|------|----------|------|
+| 动作与扩展 | `action_bus`、`module_registry` | 全局动作总线；扩展模块注册表 |
+| 会话与标签 | `session_manager`、`selected_session_id`、`tabs`、`active_tab` | 已保存会话、当前选中、终端标签 |
+| 布局 | `sidebar_collapsed`、`activity_rail_collapsed`、`sidebar_width` | 连接栏、活动栏、响应式档位 |
+| 域状态 | `fragment_state`、`send_replay` | 片段 / 命令面板 / 市场 / 发送序列 / 粘贴历史 |
+| 规则 | `output_trigger_rules`、`display_link_rules`、`cmd_audit_personal_rules` | 输出触发、链接识别、个人审计 |
+| 提示与更新 | `status_message`、`update_ui`、`crash_notice` | Toast、自动更新、崩溃提示 |
 
-#### 4.1.3 事件处理流程
+#### 4.1.2 一帧的流程
 
-```
-用户输入
-    │
-    ▼
-┌─────────────────┐
-│  egui 事件循环   │
-└─────────────────┘
-    │
-    ▼
-┌─────────────────┐
-│  键盘/鼠标事件   │
-└─────────────────┘
-    │
-    ├─► Enter 键 ──┐
-    │              ▼
-    │        ┌─────────────┐
-    │        │ 发送命令    │
-    │        │ 到 SSH 通道  │
-    │        └─────────────┘
-    │
-    └─► 点击 Connect ──► 打开连接对话框
-```
+1. `update()` 每帧从 egui 取输入事件（键盘、IME、滚动、拖放）。
+2. 键盘事件先判焦点：终端有焦点才进 PTY；无焦点时先给快捷键和命令面板。
+3. 面板按固定顺序注册（见 [LAYOUT.md](../product/LAYOUT.md)），右侧抽屉同一时刻只开一个。
+4. 需要告知用户的结果统一走 Toast：`status_message` → `tick_status_toast` → `paint_status_toast`。
+5. 远程数据（会话输出、监控、SFTP 进度）由 tokio 任务产生，UI 每帧只取快照，不在渲染里等 IO。
 
 ### 4.2 核心层 (core/)
 
 #### 4.2.1 会话管理 (session.rs)
 
-```rust
-pub struct SessionConfig {
-    pub name: String,
-    pub host: String,
-    pub port: u16,
-    pub username: String,
-    pub password: String,
-}
+`SessionConfig` 是保存下来的会话：`id`、`name`、`group`、`host`、`port`、`username`、`password`、`private_key_path`、`use_ssh_agent`，之后还有认证模式、keepalive、跳板与转发等字段。`SessionManager` 负责加载、增删、保存这些配置，落盘为加密的 JSON。
 
-pub struct SessionManager {
-    sessions: Vec<SessionConfig>,
-    sessions_file: PathBuf,
-}
-```
-
-**核心功能**:
-- 加载已保存的会话配置
-- 添加新会话
-- 删除会话
-- 持久化到 JSON 文件
+字段会随功能增加，以 [`src/core/session.rs`](../../src/core/session.rs) 为准。
 
 #### 4.2.2 SSH 连接与会话 (ssh/)
 
@@ -350,69 +252,39 @@ pub struct SessionManager {
 
 #### 4.3.1 SSH 客户端 (client.rs)
 
-```rust
-pub struct SshConfig {
-    pub host: String,
-    pub port: u16,
-    pub username: String,
-    pub password: String,
-}
+`SshConfig` 是一次连接需要的全部参数：账号密码、私钥路径、ssh-agent / Pageant、FIDO2 sk 认证模式、keepalive、ProxyJump / ProxyCommand，以及本地 / 远程 / SOCKS 三类端口转发。
 
-pub struct SshClient {
-    config: SshConfig,
-    session: Option<Session>,
-}
-```
-
-**核心方法**:
-
-| 方法 | 职责 |
-|-----|------|
-| `new()` | 创建客户端实例 |
-| `connect()` | 建立 TCP 和 SSH 连接 |
-| `authenticate()` | 密码认证 |
-| `open_shell()` | 打开 Shell 通道 |
-| `send()` | 发送数据到通道 |
-| `disconnect()` | 断开连接 |
+`SshClient` 持有 `session: Option<Session>`、`config: SshConfig` 和本会话登记的 `profile_forwards`，方法围绕"建连 → 认证 → 开通道 → 读写"展开。字段以 [`src/ssh/client.rs`](../../src/ssh/client.rs) 为准，这里不复制。
 
 #### 4.3.2 连接管理器 (manager.rs)
 
-```rust
-pub struct SshManager {
-    sessions: Arc<Mutex<Vec<SshClient>>>,
-    message_tx: Sender<SshMessage>,
-    next_session_id: usize,
-}
-```
+`SshManager` 是全局会话表：
 
-**核心功能**:
-- 管理多个 SSH 客户端实例
-- 异步连接处理
+- `sessions: Arc<Mutex<HashMap<SshSessionId, SshClient>>>`
+- `message_tx: Sender<SshMessage>`
+- `next_session_id: Arc<AtomicUsize>`
+
+UI 通过 `SshSessionHandle` 操作单个会话；后台线程把输出与事件以 `SshMessage` 送回主线程。
 - 消息通道管理
 
 ### 4.4 终端层 (terminal/)
 
-#### 4.4.1 ANSI 解析器 (emulator.rs)
+| 文件 | 职责 |
+|------|------|
+| [`alacritty.rs`](../../src/terminal/alacritty.rs) | alacritty_terminal 适配层：VTE 网格 → egui 渲染、选区、滚动、OSC 分块 |
+| [`emulator.rs`](../../src/terminal/emulator.rs) | 自带的终端模拟器：网格、滚屏历史、备用屏幕、光标与样式 |
+| [`command_block.rs`](../../src/terminal/command_block.rs) | 命令块索引、块导航与块复制 |
+| [`sem_osc.rs`](../../src/terminal/sem_osc.rs) | 语义 OSC：目录（9;9）、徽标（7501）、命令块（133）等 |
+| [`program_status.rs`](../../src/terminal/program_status.rs) | 程序状态：等待 / 完成，供侧栏与标签状态灯 |
 
-```rust
-pub enum AnsiState {
-    Normal,
-    Escape,
-    Csi,
-    CsiParam(String),
-}
+#### 4.4.1 终端模拟器 (emulator.rs)
 
-pub struct Terminal {
-    output: VecDeque<String>,
-    style: CharStyle,
-    ansi_state: AnsiState,
-}
-```
+`Terminal` 维护 `height × width` 的字符网格、滚出屏幕的 `lines` 历史、光标位置和当前样式；`AnsiState` 是解析状态机（Normal / Escape / Csi / CsiParam / Osc / CharsetDesignate）。
 
-**核心功能**:
-- 解析 ANSI 转义码
-- 维护终端状态机
-- 格式化输出缓冲
+职责：
+- 解析 ANSI 转义码与 OSC 序列，维护网格和滚屏
+- 处理 DEC 备用屏幕（vim / less 等全屏程序）与光标保存 / 恢复
+- 样式落在 `CharStyle` / `Cell` 上
 
 ---
 
@@ -420,177 +292,80 @@ pub struct Terminal {
 
 ### 5.1 连接流程
 
-```
-用户点击 Connect
+```text
+新建/选中会话（Ctrl+N 或侧栏双击）
         │
         ▼
-┌─────────────────┐
-│  填写服务器信息  │
-└─────────────────┘
+SessionConfig ──► 保存到 SessionManager（加密 JSON）
         │
         ▼
-┌─────────────────┐
-│  创建 SessionConfig
-└─────────────────┘
+SshManager 分配 session id，SshSessionHandle 交给 UI
         │
         ▼
-┌─────────────────┐
-│  保存到 SessionManager
-└─────────────────┘
+后台线程：TCP 连接（可经 ProxyJump / ProxyCommand / SOCKS）
         │
         ▼
-┌─────────────────┐
-│  添加到 ConnectionManager
-└─────────────────┘
+SSH 握手 ──► 主机密钥校验（known_hosts）──► 认证
+                                        （密码 / 密钥 / agent / FIDO2 sk）
         │
         ▼
-┌─────────────────┐
-│  启动异步连接线程
-└─────────────────┘
+开 PTY + Shell 通道 ──► 启动读泵线程
         │
-        ├─► TCP 连接
-        │       │
-        │       ▼
-        │   ┌─────────────┐
-        │   │ SSH 握手    │
-        │   └─────────────┘
-        │       │
-        │       ▼
-        │   ┌─────────────┐
-        │   │ 密码认证    │
-        │   └─────────────┘
-        │       │
-        │       ▼
-        │   ┌─────────────┐
-        │   │ 打开 Shell   │
-        │   │ 通道        │
-        │   └─────────────┘
-        │       │
-        │       ▼
-        └───► 更新状态为 Connected
-                │
-                ▼
-            UI 显示连接成功
+        ▼
+SshMessage 回主线程 ──► 标签状态转 online ──► Toast 提示
 ```
 
-### 5.2 命令执行流程
+### 5.2 键盘输入
 
-```
-用户在输入框输入命令
-        │
-        ▼
-┌─────────────────┐
-│  按 Enter 键     │
-└─────────────────┘
-        │
-        ▼
-┌─────────────────┐
-│  检测 Enter 事件 │
-└─────────────────┘
-        │
-        ▼
-┌─────────────────┐
-│  获取当前会话    │
-│  的 SSH 通道     │
-└─────────────────┘
-        │
-        ▼
-┌─────────────────┐
-│  发送命令到通道  │
-│  (带 \n 换行)   │
-└─────────────────┘
-        │
-        ▼
-┌─────────────────┐
-│  清空输入框     │
-└─────────────────┘
-```
+终端是**模拟器**，不是"输入框 + 发送按钮"：
 
-### 5.3 输出接收流程
+1. 终端有焦点时，按键直接写进 PTY（`\r` 由 Enter 产生，不是由程序拼 `\n`）。
+2. 本地命令策略开启时，Enter 前先检查当前行；命中拦截的行不发出去，留在提示符上。
+3. 全屏程序（vim / less / top）、密码提示、rz/sz 传输期间不做本地检查，按键直接放行。
+4. 终端没有焦点时，按键先给快捷键和命令面板（例如 Ctrl+K 打开面板）。
 
-```
-SSH 通道接收数据
+### 5.3 输出接收
+
+```text
+PTY 通道收到字节
         │
         ▼
-┌─────────────────┐
-│  SSH 管理器     │
-│  读取通道       │
-└─────────────────┘
+读泵线程按批读出 ──► SshMessage::Output
         │
         ▼
-┌─────────────────┐
-│  发送到消息通道 │
-└─────────────────┘
+主线程把字节喂给 VTE 解析（alacritty_terminal / Processor）
         │
         ▼
-┌─────────────────┐
-│  UI 层接收消息  │
-└─────────────────┘
+网格与命令块索引更新 ──► 语义 OSC 解析（目录 / 徽标 / 程序状态）
         │
         ▼
-┌─────────────────┐
-│  更新 Terminal   │
-│  输出缓冲       │
-└─────────────────┘
-        │
-        ▼
-┌─────────────────┐
-│  egui 重新渲染  │
-│  显示输出       │
-└─────────────────┘
+egui 下一帧重绘可见网格（只取快照，不等 IO）
 ```
 
 ---
 
-## 6. 性能优化
+## 6. 并发与内存
 
-### 6.1 并发设计
+### 6.1 线程模型
 
-```
-主线程 (UI)
-    │
-    ├─► SSH 连接线程 1
-    ├─► SSH 连接线程 2
-    └─► SSH 连接线程 N
-
-每个 SSH 连接独立线程:
-    │
-    ├─► 连接建立
-    ├─► 认证
-    └─► 通道通信
-```
-
-**优势**:
-- UI 线程不被阻塞
-- 多会话并发执行
-- 连接失败不影响其他会话
+- **UI 主线程**：egui 每帧渲染，只读写快照，不做阻塞 IO。
+- **每个会话一个读泵线程**：ssh2 是同步库，通道读取放在这条线程里，读到的字节打包成 `SshMessage` 送回主线程。
+- **tokio**：承担连接建立、SFTP、监控采集、更新检查等异步任务。
+- 会话表是 `Arc<Mutex<HashMap<SshSessionId, SshClient>>>`，一个会话失败不影响其它会话。
 
 ### 6.2 消息传递
 
-使用 `std::sync::mpsc` 进行线程间通信：
-
-```
-SSH 线程 ──► Sender ──► Receiver ──► UI 线程
+```text
+读泵线程 / tokio 任务 ──► Sender<SshMessage> ──► UI 线程（每帧 drain）
 ```
 
-**优势**:
-- 无锁设计
-- 单向数据流
-- 易于调试
+单向数据流：后台只发消息，UI 只收消息，共享可变状态尽量少。
 
-### 6.3 内存管理
+### 6.3 内存
 
-```rust
-// 使用 Arc<Mutex<T>> 共享状态
-pub struct ConnectionManager {
-    sessions: Vec<Arc<Mutex<SshSessionState>>>,
-}
-```
-
-**优势**:
-- 线程安全共享
-- 避免数据拷贝
-- 细粒度锁
+- 每个会话的网格由 VTE 持有；滚屏历史上限由 `max_lines` 控制，不会无限增长。
+- 共享会话对象用 `Arc`，锁按会话粒度分开，避免一把全局大锁拖住所有会话。
+- 输出过长的场景（批量执行、命令块复制）走截断，避免一次性拷贝整段历史。
 
 ---
 
@@ -623,64 +398,22 @@ pub struct ConnectionManager {
 
 ## 8. 部署指南
 
-### 8.1 环境要求
+构建、打包与 CI 的完整流程见 [DEPLOYMENT.md](./DEPLOYMENT.md)。这里只列环境要求：
 
 | 要求 | 版本 | 说明 |
 |-----|------|------|
-| Rust | 1.70+ | 编译工具链 |
-| libssh2 | 1.9+ | SSH 库 |
+| Rust | 1.95+ | eframe 0.37 的 MSRV |
+| libssh2 | 1.11+ | SSH 库 |
 | pkg-config | - | 依赖查找 |
 
-### 8.2 编译安装
+各平台的依赖安装、交叉编译与打包步骤写在这些文档里，不在这里重复：
 
-```bash
-# 克隆仓库
-git clone https://github.com/mistlab-dev/MistTerm.git
-cd MistTerm
-
-# 编译
-cargo build --release
-
-# 运行
-./target/release/Mist
-```
-
-### 8.3 跨平台编译
-
-```bash
-# macOS
-cargo build --release
-
-# Linux
-cargo build --release
-
-# Windows (需要交叉编译环境)
-cargo build --release --target x86_64-pc-windows-msvc
-```
-
-### 8.4 依赖安装
-
-#### macOS
-```bash
-brew install libssh2 pkg-config
-```
-
-#### Ubuntu/Debian
-```bash
-sudo apt-get install libssh2-1-dev pkg-config
-```
-
-#### CentOS/RHEL
-```bash
-sudo yum install libssh2-devel pkgconfig
-```
-
-#### Windows
-使用 vcpkg 或 conan 安装 libssh2
+- [DEPLOYMENT.md](./DEPLOYMENT.md) — 构建、打包、CI
+- [中文安装说明](../zh/INSTALL.md) / [English install guide](../en/INSTALL.md)
 
 ---
 
-## 📚 相关文档
+## 相关文档
 
 - [产品文档](../product/FUNCTIONAL_SPEC.md)
 - [模块设计](./MODULE-DESIGN.md)

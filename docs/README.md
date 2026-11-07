@@ -8,6 +8,7 @@
 
 | | |
 |---|---|
-| [HTML（推荐）](manual/MistTerm_操作手册.html) | [Markdown](manual/MistTerm_操作手册.md) |
+| [中文 HTML（推荐）](manual/MistTerm_操作手册.html) | [中文 Markdown](manual/MistTerm_操作手册.md) |
+| [English Markdown](manual/MistTerm_User_Manual_en.md) | |
 
-面向终端用户的操作说明与界面截图。窗口布局与 chrome（活动栏 / Toast）见 [product/LAYOUT.md](product/LAYOUT.md)；开发者文档在 `product/`、`tech/`。
+面向终端用户的操作说明与界面截图。窗口布局（活动栏 / Toast）见 [product/LAYOUT.md](product/LAYOUT.md)；开发者文档在 `product/`、`tech/`。

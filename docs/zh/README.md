@@ -6,7 +6,7 @@
 
 | 文档 | 内容 |
 |------|------|
-| [LAYOUT.md](../product/LAYOUT.md) | 窗口 chrome：活动栏、Toast、侧栏（当前界面） |
+| [LAYOUT.md](../product/LAYOUT.md) | 窗口布局：活动栏、Toast、侧栏（当前界面） |
 | [FUNCTIONAL_SPEC.md](../product/FUNCTIONAL_SPEC.md) | 功能规范 |
 | [SPECIFICATION_DETAILED.md](../product/SPECIFICATION_DETAILED.md) | 视觉规格 |
 | [UI-GUIDELINES.md](../product/UI-GUIDELINES.md) | 界面规范 |

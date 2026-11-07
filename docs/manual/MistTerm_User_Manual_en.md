@@ -1,10 +1,11 @@
 # MistTerm User Manual
 
-> **Version**: 1.1.2
-> **Updated**: 2026-09-03
+> **Version**: 1.3.13
+>
+> **Updated**: 2026-11-07
 > **Website**: [mistlab.dev](https://mistlab.dev) · **Download**: [GitHub Releases](https://github.com/mistlab-dev/MistTerm/releases)
 
-This manual is for users who use MistTerm to connect to servers, work in terminals, and transfer files. It does not cover compiling source code or development; for developer docs, see the `docs/` directory in the repository.
+This manual covers connecting to servers, working in the terminal, and moving files between machines. It does not cover building from source or development — for that, see the `docs/` directory in the repository.
 
 ---
 
@@ -30,7 +31,7 @@ This manual is for users who use MistTerm to connect to servers, work in termina
 
 ## 1. What is MistTerm
 
-MistTerm is an **SSH terminal client** that helps you:
+MistTerm is an **SSH terminal client**. You can use it to:
 
 - Save multiple server connections and open terminals with one click
 - Upload and download files via a graphical interface (SFTP)
@@ -39,7 +40,7 @@ MistTerm is an **SSH terminal client** that helps you:
 - Monitor server CPU, memory, disk, and more
 - Optional: AI-assisted command explanation, team-shared snippets
 
-Supports **Windows** and **macOS**.
+Supports **Windows**, **macOS**, and **Linux**.
 
 ---
 
@@ -57,7 +58,7 @@ No separate OpenSSH installation is required; you can connect to remote Linux se
 
 ### 2.2 First Launch
 
-On startup, the main window appears: the left side shows the **session list**, the center is the **workspace** (terminal appears after connecting), the top has the **menu bar**, and the bottom has the **status bar**.
+On startup, the main window appears: the left side is the **activity rail** (opens the session list and each panel), the center is the **workspace** (the terminal appears after connecting), and the top has the **menu bar**. Notices appear as a **toast** in the bottom-right corner; there is no permanent bottom bar.
 
 ![Main interface (SSH connected)](screenshots/01-main-connected.png)
 
@@ -82,7 +83,7 @@ Do not edit these files manually; use the in-app interface to make changes.
 | 2 | Fill in name, host IP/domain, port (default 22), username, password or key |
 | 3 | Click **Save & Connect**, or **double-click** the session in the sidebar |
 | 4 | Type commands in the terminal, e.g. `ls`, `cd`, `top` |
-| 5 | To transfer files: menu **View → SFTP**, or click **Files** in the bottom bar |
+| 5 | To transfer files: menu **View → SFTP**, or click **Files** in the activity rail on the left |
 
 ![New Session dialog](screenshots/02-new-session-dialog.png)
 
@@ -97,22 +98,24 @@ Do not edit these files manually; use the in-app interface to make changes.
 | Area | Location | Description |
 |------|----------|-------------|
 | Top menu bar | Top of window | **Terminal**, **Edit**, **View**, **Tools**, **Help** |
-| Session list | Left sidebar | Saved connections, supports grouping and search |
+| Activity rail | Left of window | Sessions, Snippets, Files, Port Forward, Monitor, AI, Preferences; **Ctrl+B** (Mac: **⌘B**) hides it, and the narrow strip on the left edge brings it back |
+| Session list | Activity rail, **Sessions** expanded | Saved connections, supports grouping and search (collapsed by default) |
 | Workspace | Center | Terminal tabs; type commands here after connecting |
-| Side panels | Right (on demand) | SFTP, Monitor, Snippets, AI, etc. |
-| Status bar | Bottom of window | Connection info and quick access: **AI** / **Monitor** / **Forward** / **Files** / **Snippets** |
+| Side panels | Right (on demand) | SFTP, Monitor, Snippets, AI, etc. (one at a time) |
+| Toast | Bottom-right | Temporary notices and confirmations (no permanent bottom bar) |
 
 ### 4.2 Common Actions
 
 | What you want | How to open |
 |----------------|-------------|
 | New/Edit connection | **Ctrl+N** / select in sidebar then **Ctrl+E** |
-| Open SFTP | **View → SFTP** or bottom bar **Files** |
-| View CPU/Memory | **View → Monitor** or bottom bar **Monitor** |
+| Open SFTP | **View → SFTP** or activity rail **Files** |
+| View CPU/Memory | **View → Monitor** or activity rail **Monitor** |
 | Command palette | **Ctrl+K** when the terminal is not focused (Mac: **⌘K**). Fuzzy-search sessions, snippets, history, and app actions |
-| Command snippets | Bottom bar **Snippets**, or type a snippet name in the command palette |
-| AI Assistant | **Ctrl+Shift+A** or bottom bar **AI** |
-| Preferences | **Ctrl+,** |
+| Command snippets | Activity rail **Snippets**, or type a snippet name in the command palette |
+| AI Assistant | **Ctrl+Shift+A** or activity rail **AI** |
+| Show/hide activity rail | **Ctrl+B** (Mac: **⌘B**) or the **View** menu |
+| Preferences | **Ctrl+,** or the settings entry at the bottom of the activity rail |
 | Help & shortcuts | **Help → Quick Start / Keyboard Shortcuts / About** |
 
 ![Sidebar session list](screenshots/20-sidebar-sessions.png)
@@ -199,7 +202,7 @@ Shortest steps differ by OS. All three can complete a login. This covers securit
 - **Connect**: click a session in the sidebar → **Ctrl+T** for a new tab, or **double-click** the session
 - **Search sessions**: **Ctrl+J** focuses the sidebar search box when the terminal is not focused (while it is focused, Ctrl+J goes to the shell)
 - **Auto-reconnect**: enable KeepAlive / auto-reconnect in session settings
-- The bottom bar shows `username@host · Connected` when successful
+- When the connection succeeds the tab shows an online dot; notices appear as a toast in the bottom-right corner
 
 ### 5.4 Local Data Security
 
@@ -307,14 +310,14 @@ A copy keeps at most the first **4000** lines and **200000** characters. Longer 
 
 ### 7.1 SFTP Panel (Recommended)
 
-**Open via**: menu **View → SFTP**, or bottom bar **Files**.
+**Open via**: menu **View → SFTP**, or **Files** in the activity rail on the left.
 
 The interface has two panes — **Local** and **Remote**:
 
 1. Use the path input at the top to navigate directories (press Enter to go)
 2. Click to select files or folders
 3. Use toolbar buttons or right-click menu: **Upload**, **Download**, **Delete**, **New Folder**, **Rename**
-4. Results are shown in the **bottom status bar**
+4. Results appear as a **toast** in the bottom-right corner
 
 ![SFTP dual-pane browser](screenshots/04-sftp-panel.png)
 
@@ -361,12 +364,12 @@ A snippet is one searchable command. To send several lines, in order, into the o
 |--------|-------------|
 | **Ctrl+K** | Open the command palette and run a snippet (only when the terminal is not focused; when it is, the key goes to the shell and deletes to the end of the line. Mac: **⌘K**) |
 | **Ctrl+Shift+J** | Quick snippet selector (only when the terminal is not focused) |
-| Bottom bar **Snippets** | Open the snippet side panel |
+| Activity rail **Snippets** | Open the snippet side panel |
 | **Tools → Snippet Library** | Manage, create, and edit snippets |
 
-![Snippets bottom bar panel](screenshots/11-panel-snippets.png)
+![Snippets panel in the side dock](screenshots/11-panel-snippets.png)
 
-*Fig 8-1: Snippet panel opened from bottom bar*
+*Fig 8-1: Snippet panel opened from the activity rail*
 
 ![Snippet Library](screenshots/16-fragment-library.png)
 
@@ -395,7 +398,7 @@ Team snippets support **admin / editor / viewer** roles, with optional per-membe
 ### 9.1 Host Monitoring
 
 1. First establish an SSH connection
-2. Open **View → Monitor** or bottom bar **Monitor**
+2. Open **View → Monitor** or **Monitor** in the activity rail
 3. View CPU, memory, disk, load charts (data is read-only, collected from the remote server)
 
 ![Host monitoring panel](screenshots/09-panel-monitor.png)
@@ -406,7 +409,7 @@ Team snippets support **admin / editor / viewer** roles, with optional per-membe
 
 ### 9.2 Port Forwarding
 
-1. Open bottom bar **Port Forward** or **View → Port Forwarding**
+1. Open **Port Forward** in the activity rail, or **View → Port Forwarding**
 2. Add rules (format similar to OpenSSH):
    - **Local forward**: `local_port:target_host:target_port`
    - **Remote forward**: `remote_port:target_host:target_port`
@@ -610,7 +613,7 @@ For the complete list, refer to the in-app **Help → Keyboard Shortcuts**.
 - Check host, port, username, password/key
 - Confirm your network can reach the target IP (try `ssh` from your system first)
 - If a jump host is needed, configure ProxyJump in session advanced options
-- Check the bottom bar for error messages
+- Check the toast in the bottom-right corner for error messages
 
 ### Terminal is blank or shows garbled text after connecting
 
@@ -644,4 +647,4 @@ Go to [GitHub Issues](https://github.com/mistlab-dev/MistTerm/issues) and descri
 
 ---
 
-*MistTerm v1.1.2 User Manual · MistLab*
+*MistTerm v1.3.13 User Manual · MistLab*

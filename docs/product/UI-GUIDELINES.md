@@ -458,7 +458,7 @@
 | 显示 | 以 `SidePanel::right` 注册 |
 | 响应式 | `RIGHT_DOCK_OPEN_ALLOWED` 阈值 `RESP_LAYOUT_WIDE_MIN_PX`（1200px）以下不能打开 |
 | 位置记录 | `right_dock_outer_left_x: Option<f32>` |
-| 顺序注册 | 右侧面板须先于底栏与 CentralPanel 注册，避免叠绘错位 |
+| 顺序注册 | 右侧面板须先于 CentralPanel 注册，避免叠绘错位 |
 | Central 盖住右栏 | egui 同层后绘问题；命令片段栏用「占位 SidePanel + Foreground 重绘」。**实现与排障见 [`LAYOUT.md` §八](LAYOUT.md#八central-盖住右栏白膜--裁切--可点穿)** |
 
 ### 7.2 监控面板 (`monitor_panel`)
@@ -573,41 +573,29 @@ pub struct MonitorPanel {
 
 ---
 
-## 八、状态栏
+## 八、Toast（提示）
 
 ### 8.1 位置
 
-`TopBottomPanel::bottom("status_bar")`，紧接在 CentralPanel 下方。
+右下角浮层，画在 CentralPanel 之上，不占布局高度（`status_bar_height` 已归 0）。实现：`status_message` → `tick_status_toast` → `paint_status_toast`。
 
 ### 8.2 规范
 
 | 属性 | 值 |
 |------|-----|
-| 高度 | `status_bar_height()` |
-| 背景 | `bg_tab_bar_color()` |
+| 容器 | 圆角卡片 + 投影，宽度按可用宽度 clamp |
+| 背景 | 由 `bg_tab_bar_color()` 派生 |
 | 字号 | `font_size_small()` |
 | 文字颜色 | `fg_low_color()` |
 
-### 8.3 布局
+### 8.3 两种形态
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│ ● 连接名  |  📊 CPU · MEM  |  ↻ 自动重连  |  📝 日志          │
-└─────────────────────────────────────────────────────────────────┘
-```
+| 形态 | 行为 |
+|------|------|
+| 瞬时 | 约 3 秒后自动消失；鼠标悬停时暂停计时 |
+| 需确认 | 带操作按钮（如「撤销」「关闭」），点掉才消失 |
 
-| 区域 | 元素 | 说明 |
-|------|------|------|
-| 左端 | ● 连接名 | 当前连接状态圆点 + 名称 |
-| 中间区 | 📊 CPU 23% · MEM 1.2G/4G | 系统资源占用（来自 monitor_panel） |
-| | ↻ 自动重连 | 自动重连启用状态 |
-| | 📝 日志 | 日志录制状态（文件日期） |
-| 右端 | 工具图标 | `status_tool_glyph()` — 📊 监控 / 🔍 搜索 / 📤 导出 |
-
-右侧工具图标:
-- 📊 → `show_monitor_panel = true`
-- 🔍 → 搜索功能
-- 📤 → 数据导出
+布局与注册顺序以 [LAYOUT.md](./LAYOUT.md) 为准。
 
 ---
 
@@ -740,5 +728,5 @@ SFTP 文件类型色用 `color_sftp_file_name` / `color_sftp_badge`（`theme_sft
 |------|------|
 | [SPECIFICATION_DETAILED.md](./SPECIFICATION_DETAILED.md) | 定义颜色体系、字号、圆角的具体值；本文档引用 theme 令牌名 |
 | [FUNCTIONAL_SPEC.md](./FUNCTIONAL_SPEC.md) | 定义功能逻辑与边界条件；本文档描述 UI 布局与交互 |
-| [LAYOUT.md](./LAYOUT.md) | 窗口布局（egui 区域、间距、底栏） |
+| [LAYOUT.md](./LAYOUT.md) | 窗口布局（egui 区域、间距、Toast 与活动栏） |
 | .cursor/rules/ui-affordance-density.mdc | Agent 改 src/ui/** 时强制执行的可辨识度/密度细则 |

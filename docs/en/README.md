@@ -1,6 +1,6 @@
 # MistTerm Documentation
 
-Entry points for product and engineering docs. End-user guide (with screenshots): [User manual](../manual/MistTerm_操作手册.html).
+Entry points for product and engineering docs. End-user guide (with screenshots): [User manual (EN)](../manual/MistTerm_User_Manual_en.md) · [中文手册](../manual/MistTerm_操作手册.html).
 
 ## Product
 
@@ -12,7 +12,8 @@ Entry points for product and engineering docs. End-user guide (with screenshots)
 | [UI-GUIDELINES.md](../product/UI-GUIDELINES.md) | UI guidelines |
 | [fragments-analytics.md](../product/fragments-analytics.md) | Command snippets & analytics |
 | [oauth-desktop-callback.html](../product/oauth-desktop-callback.html) | OAuth bridge page |
-| [User manual](../manual/MistTerm_操作手册.html) | End-user guide (ZH, with screenshots) |
+| [User manual (EN)](../manual/MistTerm_User_Manual_en.md) | End-user guide (EN, with screenshots) |
+| [中文手册](../manual/MistTerm_操作手册.html) | End-user guide (ZH, with screenshots) |
 
 ## Technical
 
