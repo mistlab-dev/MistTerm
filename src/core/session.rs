@@ -155,10 +155,10 @@ pub fn session_tab_label(session: &SessionConfig) -> String {
         } else {
             format!("{}@{}", session.username, host)
         }
-    } else if name.eq_ignore_ascii_case(&host) || name.contains(&session.host) {
-        name.to_string()
     } else {
-        format!("{name} · {host}")
+        // 自定义名字优先：起过名的会话标签只显示名字，不再追加 `· host`。
+        // 需要带上地址时，把地址写进名字即可（侧栏仍显示 host/port）。
+        name.to_string()
     }
 }
 

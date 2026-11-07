@@ -93,7 +93,11 @@ impl Sidebar {
         }
         let panel_h = ui.available_height().max(120.0);
         let panel = crate::ui::chrome::sidebar_panel_frame(theme).show(ui, |ui| {
-            ui.set_width(sidebar_width);
+            // 内容宽必须等于面板内实际可用宽：`set_width(sidebar_width)` 只改 desired
+            // size，Frame 底色仍按 `available_rect` 铺满，两者差几像素就会在标题带右端
+            // 留下一条比带底色更亮的竖缝(被看成「多出来一条线」)。
+            let inner_w = ui.available_width().max(120.0);
+            ui.set_width(inner_w);
             ui.set_min_height(panel_h);
             ui.set_height(panel_h);
             Self::show(
@@ -114,6 +118,24 @@ impl Sidebar {
             )
         });
         let shell = panel.response.rect;
+        // 标题带右端补齐。
+        //
+        // `frame_right_dock_header_band` 的内边距(6) 比面板内边距(4) 大，带底色的填充
+        // 右端比面板右边缘短 6px，标题行右端于是漏出一条比带底色亮一档的竖缝，单独看
+        // 就像「多出来一条线」。面板 rect 这时已确定，按同一底色把这段补上（该 6px 内
+        // 只有背景，不压标题与收起钮）。
+        let sliver_w = theme.spacing_panel_title_pad_x();
+        let band_top = shell.top() - theme.spacing_right_dock_pad_y();
+        let band_bottom = band_top + theme.size_panel_header_row_h();
+        if shell.width() > sliver_w * 2.0 {
+            let sliver = egui::Rect::from_min_max(
+                egui::pos2(shell.right() - sliver_w, band_top),
+                egui::pos2(shell.right(), band_bottom),
+            );
+            ui.painter()
+                .with_clip_rect(shell.expand(1.0))
+                .rect_filled(sliver, 0.0, theme.color_panel_header_band_fill());
+        }
         crate::ui::chrome::paint_region_panel_shell_border(ui.painter(), shell, theme, true);
         (panel.inner, actions)
     }
@@ -161,7 +183,7 @@ impl Sidebar {
             |ui| {
                 ui.set_min_height(body_h);
                 ui.set_height(body_h);
-                    theme.frame_right_dock_header_band().show(ui, |ui| {
+                let _ = theme.frame_right_dock_header_band().show(ui, |ui| {
                         crate::ui::chrome::dock_header_horizontal(ui, theme, |ui| {
                             ui.spacing_mut().item_spacing.x = theme.spacing_status_left_gap();
                             let ctx = ui.ctx().clone();
@@ -191,30 +213,39 @@ impl Sidebar {
                 // 与命令片段面板一致：分隔线后留出一段呼吸空间，再进入搜索区
                 ui.add_space(theme.spacing_dock_section_gap());
 
-                // #376 #6：「+ 新建」放搜索行右侧（标题行只留收起钮）。
-                // 搜索框占满除按钮外的宽度，同一行右对齐蓝色实心主按钮。
-                let search_row_w = width.max(120.0);
-                let new_btn_min_w = theme.size_panel_header_btn_min_w();
+                // 搜索框 + 「＋新建」同一行：搜索框吃掉按钮和间距之外的全部宽度。
+                // 按钮宽度必须取真实值(panel_header_new_button_width)，
+                // 用 size_panel_header_btn_min_w 扣减会低估，行超宽 → 侧栏被顶宽。
+                let row_w = width.max(120.0);
                 let ctx = ui.ctx().clone();
+                let new_label = crate::i18n::tr(&ctx, "New", "新建");
+                let new_btn_w = crate::ui::chrome::panel_header_new_button_width(ui, theme, &new_label);
+                // 横间距与上下留白同一档(dock_control_gap)，3px 的工具按钮间距在这里贴得太紧，
+                // 灰框与蓝按钮几乎共用一条边。
+                let btn_gap = theme.spacing_dock_control_gap();
+                let search_w = (row_w - new_btn_w - btn_gap).max(96.0);
+                let hint = crate::i18n::tr(
+                    ui.ctx(),
+                    "Search server name / IP",
+                    "搜索服务器名称 / IP",
+                );
                 ui.horizontal(|ui| {
-                    let btn_gap = theme.spacing_tool_btn_gap();
-                    let search_w = (search_row_w - new_btn_min_w - btn_gap).max(96.0);
-                    crate::ui::chrome::search_field(
+                    ui.set_max_width(row_w);
+                    ui.spacing_mut().item_spacing.x = btn_gap;
+                    crate::ui::chrome::search_field_boxed(
                         ui,
                         theme,
                         search_field_id,
                         search_query,
-                        crate::i18n::tr(
-                            ui.ctx(),
-                            "Search server name / IP",
-                            "搜索服务器名称 / IP",
-                        ),
+                        hint,
                         search_w,
                     );
-                    let new_btn = crate::ui::chrome::panel_header_new_button_with_label(
+                    // 按钮要跟搜索框同高：输入框行高 28 > 按钮标准 26，差 2px 会一高一低。
+                    let new_btn = crate::ui::chrome::panel_header_new_button_with_label_h(
                         ui,
                         theme,
-                        crate::i18n::tr(&ctx, "New", "新建"),
+                        &new_label,
+                        theme.size_form_field_h(),
                     )
                     .on_hover_text(format!(
                         "{} · {}",

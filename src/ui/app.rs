@@ -1198,7 +1198,7 @@ impl MistTermApp {
             monitor_last_tab: None,
             monitor_panel: MonitorPanel::new(),
             ai_panel: AiPanel::new(),
-            sftp_panel: SftpPanel::new(app_settings.sftp_drag_hint_dismissed),
+            sftp_panel: SftpPanel::new(),
             port_forward_panel: PortForwardPanel::new(),
             credential_panel: CredentialPanel::new(),
             cloud_sync_panel: CloudSyncPanel::new(),
@@ -4621,6 +4621,13 @@ impl MistTermApp {
             .is_some_and(|t| t.is_local_shell());
         if was_local {
             crate::local_shell::set_repaint_context(ctx);
+            // #392：重连会换掉 TerminalView，未发出的启动 `cd` 须跟着搬走，否则失败重试丢继承目录。
+            let pending_cwd = self
+                .tabs
+                .get(idx)
+                .and_then(|t| t.active_terminal())
+                .and_then(|t| t.pending_startup_directory())
+                .map(|s| s.to_string());
             let mut terminal = self.new_terminal_view();
             if let Err(e) = terminal.connect_local_shell() {
                 self.notify_error(match crate::i18n::language(ctx) {
@@ -4643,6 +4650,9 @@ impl MistTermApp {
             );
             pane.terminal = terminal;
             pane.ssh_temp_key = None;
+            if let Some(cwd) = pending_cwd.as_deref() {
+                pane.terminal.arm_startup_directory(cwd);
+            }
             self.notify_auto(
                 crate::i18n::tr(ctx, "Reconnecting local shell…", "正在重新打开本机终端…")
                     .to_string(),
@@ -4650,7 +4660,7 @@ impl MistTermApp {
             ctx.request_repaint();
             return;
         }
-        let (sid, offline) = {
+        let (sid, offline, pending_cwd) = {
             let Some(pane) = self.tabs.get_mut(idx).and_then(|t| t.active_pane_mut()) else {
                 return;
             };
@@ -4660,8 +4670,13 @@ impl MistTermApp {
             }
             let sid = pane.session_id.clone();
             let offline = pane.terminal.offline_input_snapshot();
+            // #392：首连失败后「重试」会走到这里，未发出的启动 `cd` 必须带进新 TerminalView。
+            let pending_cwd = pane
+                .terminal
+                .pending_startup_directory()
+                .map(|s| s.to_string());
             pane.terminal.disconnect();
-            (sid, offline)
+            (sid, offline, pending_cwd)
         };
         let Some(session) = self.session_manager.get_session(&sid).cloned() else {
             self.notify_auto(
@@ -4682,6 +4697,9 @@ impl MistTermApp {
         };
         pane.terminal = terminal;
         pane.ssh_temp_key = temp_key;
+        if let Some(cwd) = pending_cwd.as_deref() {
+            pane.terminal.arm_startup_directory(cwd);
+        }
         pane.terminal
             .restore_offline_input_snapshot(offline.0, offline.1);
         pane.title = crate::core::session_tab_label(&session);
@@ -6094,8 +6112,7 @@ impl MistTermApp {
             self.open_right_dock_panel(ActiveRightDock::Sftp);
             self.sftp_last_tab = None;
             if !self.current_terminal().is_some_and(|t| t.is_local_shell()) {
-                self.sftp_panel
-                    .request_list_on_open(self.app_settings.sftp_drag_hint_dismissed);
+                self.sftp_panel.request_list_on_open();
             }
         }
     }
@@ -6121,7 +6138,7 @@ impl MistTermApp {
             self.sftp_last_tab = None;
         }
         self.sftp_panel.jump_to_remote_dir(std::path::PathBuf::from(dir));
-        self.sftp_panel.request_list_on_open(self.app_settings.sftp_drag_hint_dismissed);
+        self.sftp_panel.request_list_on_open();
     }
 
     /// 切换右侧命令片段侧栏。
@@ -7855,11 +7872,45 @@ impl MistTermApp {
             return;
         }
 
-        let old_password = self
-            .session_manager
-            .get_session(&session_id)
-            .map(|s| s.password.clone())
-            .unwrap_or_default();
+        // 编辑前的端点快照：既用来判断「端口改没改」，也用来找出被列表去重藏起来的同端点副本。
+        let old = self.session_manager.get_session(&session_id).map(|s| {
+            (
+                s.host.clone(),
+                s.port,
+                s.username.clone(),
+                s.password.clone(),
+            )
+        });
+        let old_host = old.as_ref().map(|o| o.0.clone()).unwrap_or_default();
+        let old_port = old.as_ref().map(|o| o.1).unwrap_or(0);
+        let old_username = old.as_ref().map(|o| o.2.clone()).unwrap_or_default();
+        let old_password = old.as_ref().map(|o| o.3.clone()).unwrap_or_default();
+
+        // 连接列表按 host+port+user 合并行：同端点的重复保存记录被折叠成一行显示。
+        // 编辑只落到「代表」那一条时，副本仍留旧端点，保存后端点不同就会冒出一行同名旧记录。
+        // 这里把被折叠的副本端点一并同步（只同步端点，不动 name/group，避免改掉另一份配置）。
+        let hidden_dup_ids: Vec<String> = if old_port == 0 {
+            Vec::new()
+        } else {
+            self.session_manager
+                .list_sessions()
+                .iter()
+                .filter(|s| {
+                    s.id != session_id
+                        && s.port == old_port
+                        && s.host.eq_ignore_ascii_case(&old_host)
+                        && s.username.eq_ignore_ascii_case(&old_username)
+                })
+                .map(|s| s.id.clone())
+                .collect()
+        };
+        // 端口改动不会影响已经连着的窗口：只在重连时才用新端点，得说清楚。
+        let has_live_tab = self.tabs.iter().any(|t| {
+            t.panes
+                .iter()
+                .any(|p| p.session_id == session_id && p.terminal.is_connected())
+        });
+
         let trimmed = self.edit_session_form.password.trim();
         let password_to_store = if trimmed.is_empty() || trimmed == "****" {
             old_password
@@ -7914,13 +7965,44 @@ impl MistTermApp {
                 .with_session(&session_id)
                 .with_host(&self.edit_session_form.host),
             );
-            self.notify_auto(format!(
+            // 被折叠的同端点副本跟着换端点，否则列表会分裂出同名旧行。
+            for dup_id in &hidden_dup_ids {
+                let host = self.edit_session_form.host.clone();
+                let port = self.edit_session_form.port;
+                let username = self.edit_session_form.username.clone();
+                let _ = self.session_manager.patch_session(dup_id, |s| {
+                    s.host = host.clone();
+                    s.port = port;
+                    s.username = username.clone();
+                });
+            }
+            let port_changed = old_port != 0 && self.edit_session_form.port != old_port;
+            let mut toast = format!(
                 "{} {}",
                 crate::i18n::tr(ctx, "Session updated:", "已更新会话："),
                 self.edit_session_form.name
-            ));
+            );
+            if port_changed && has_live_tab {
+                toast.push_str(&format!(
+                    " · {}",
+                    crate::i18n::tr(
+                        ctx,
+                        "port change applies after reconnect",
+                        "端口已保存，已连接的标签仍是旧端口，重连后生效"
+                    )
+                ));
+            }
+            self.notify_auto(toast);
             if self.selected_session_id.as_deref() == Some(session_id.as_str()) {
-                self.select_session(ctx, &session_id);
+                // 保存配置不该顺带发起一次连接：这里只刷新选中态，已有标签才切过去。
+                // （select_session 在没有标签时会新建并连接，改个端口就把人拽进重连，不合适。）
+                if let Some(idx) = self
+                    .tabs
+                    .iter()
+                    .position(|t| t.primary_session_id() == session_id)
+                {
+                    self.active_tab = Some(idx);
+                }
             }
             self.dialog_flags.edit_session = false;
         } else {
@@ -10532,37 +10614,43 @@ impl MistTermApp {
             .size_panel_header_row_h()
             .max(theme.size_control_btn_h())
             .max(36.0);
+        let label_open = crate::i18n::tr(&ctx, "Open existing connection", "打开已有连接");
+        let label_local = crate::i18n::tr(&ctx, "Local terminal", "本机终端");
+        let label_new = crate::i18n::tr(&ctx, "New connection", "新建连接");
+        let gap = 12.0;
+        // 三个按钮宽度不等（`+新建`带图标），先按真实宽度量出整行，再补左侧留白。
+        // `Layout::with_main_align` 在 left_to_right 布局里不参与排版，靠它居中会整行贴左。
+        let row_w = (if has_saved_hosts {
+            crate::ui::chrome::panel_action_button_size(&card, &theme, label_open).x + gap
+        } else {
+            0.0
+        })
+            + crate::ui::chrome::panel_action_button_size(&card, &theme, label_local).x
+            + gap
+            + crate::ui::chrome::panel_header_new_button_width(&card, &theme, label_new);
+        let lead = ((card.available_width() - row_w) * 0.5).max(0.0);
         card.allocate_ui_with_layout(
             egui::vec2(card.available_width(), row_h + 4.0),
-            egui::Layout::left_to_right(egui::Align::Center).with_main_align(egui::Align::Center),
+            egui::Layout::left_to_right(egui::Align::Center),
             |ui| {
-                ui.spacing_mut().item_spacing.x = 12.0;
+                ui.spacing_mut().item_spacing.x = 0.0;
+                ui.add_space(lead);
                 if has_saved_hosts
-                    && crate::ui::chrome::panel_action_button(
-                        ui,
-                        &theme,
-                        crate::i18n::tr(&ctx, "Open existing connection", "打开已有连接"),
-                    )
-                    .clicked()
+                    && crate::ui::chrome::panel_action_button(ui, &theme, label_open).clicked()
                 {
-                    self.dialog_flags.open_existing_connection = true;
+                    // 「打开已有连接」直接展开左侧连接栏（并聚焦搜索框），不再另弹一层选主机的窗口。
+                    self.focus_sidebar_connection_search(&ctx);
                 }
-                if crate::ui::chrome::panel_action_button(
-                    ui,
-                    &theme,
-                    crate::i18n::tr(&ctx, "Local terminal", "本机终端"),
-                )
-                .clicked()
+                ui.add_space(gap);
+                if crate::ui::chrome::panel_action_button(ui, &theme, label_local)
+                    .clicked()
                 {
                     self.open_local_shell_tab(&ctx);
                     self.collapse_connection_sidebar();
                 }
-                if crate::ui::chrome::panel_header_new_button_with_label(
-                    ui,
-                    &theme,
-                    crate::i18n::tr(&ctx, "New connection", "新建连接"),
-                )
-                .clicked()
+                ui.add_space(gap);
+                if crate::ui::chrome::panel_header_new_button_with_label(ui, &theme, label_new)
+                    .clicked()
                 {
                     self.dialog_flags.new_session = true;
                     self.sidebar_collapsed = false;
@@ -10574,8 +10662,8 @@ impl MistTermApp {
         card.label(
             egui::RichText::new(crate::i18n::tr(
                 &ctx,
-                "Tip: local SSH works without a mistlab.dev account.",
-                "提示：本地 SSH 无需 mistlab.dev 账号。",
+                "Tip: the local terminal needs no sign-in; a server only needs its address and credentials.",
+                "提示：本机终端无需登录即可使用；连接服务器只需地址与账号。",
             ))
             .font(caption_font)
             .color(theme.text_tertiary()),

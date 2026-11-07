@@ -422,6 +422,21 @@ pub fn finite_content_width(ui: &egui::Ui) -> f32 {
     finite_content_width_inset(ui, CONTENT_CAP_TRIM * 0.5, fallback_mid, cap)
 }
 
+/// 模态表单列宽：铺满弹窗内容区(右侧不留死区)，窄窗口时按可用宽度收紧。
+/// 与 `finite_content_width_inset` 的区别：上限 480 且不会因为下限把窄弹窗撑破。
+#[inline]
+pub fn modal_form_width(ui: &egui::Ui) -> f32 {
+    let mut avail = ui.available_width();
+    if !avail.is_finite() || avail > HUGE {
+        avail = ui.max_rect().width();
+    }
+    if !avail.is_finite() || avail < 32.0 {
+        avail = 480.0;
+    }
+    // 8 留给竖直滚动条与描边。
+    (avail - 8.0).clamp(220.0, 480.0)
+}
+
 /// 从当前 `Ui` 取可用宽度，减去左右 `inset`，失败时用 `fallback`，并夹在 `[80, max_width]`。
 #[inline]
 pub fn finite_content_width_inset(

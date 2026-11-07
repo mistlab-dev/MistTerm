@@ -21,7 +21,7 @@ impl MistTermApp {
                 .show(ctx, |ui| {
                     let required_missing =
                         self.new_session_form.name.trim().is_empty() || self.new_session_form.host.trim().is_empty();
-                    let form_w = layout_util::finite_content_width_inset(ui, 4.0, 300.0, 340.0);
+                    let form_w = layout_util::modal_form_width(ui);
 
                     crate::ui::chrome::modal_content_frame(theme).show(ui, |ui| {
                             ui.push_id("new_session_form", |ui| {
@@ -57,7 +57,7 @@ impl MistTermApp {
 
                             ui.horizontal(|ui| {
                                 ui.spacing_mut().item_spacing.x = 10.0;
-                                let row_w = layout_util::finite_content_width_inset(ui, 4.0, 300.0, 340.0);
+                                let row_w = form_w;
                                 let host_w = (row_w - 98.0).max(160.0);
                                 ui.vertical(|ui| {
                                     ui.set_width(host_w);
@@ -96,7 +96,7 @@ impl MistTermApp {
 
                             ui.horizontal(|ui| {
                                 ui.spacing_mut().item_spacing.x = 10.0;
-                                let row_w = layout_util::finite_content_width_inset(ui, 4.0, 300.0, 340.0);
+                                let row_w = form_w;
                                 let half = ((row_w - 10.0) / 2.0).max(140.0);
                                 ui.vertical(|ui| {
                                     ui.set_width(half);

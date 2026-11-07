@@ -211,13 +211,11 @@ pub struct SftpPanel {
     pending_terminal_cmd: Option<String>,
     flux_details_open: bool,
     diff: DirDiffUi,
-    /// #250：底部「拖到对侧即可传输」一次性提示已关掉。
-    drag_hint_dismissed: bool,
 }
 
 impl Default for SftpPanel {
     fn default() -> Self {
-        Self::new(false)
+        Self::new()
     }
 }
 
@@ -2071,8 +2069,7 @@ impl SftpPanel {
         (half.max(min_list), (list_total - half).max(min_list))
     }
 
-    /// `drag_hint_dismissed` 由 app 层从内存中的 AppSettings 下发（避免 UI 路径整份读盘）。
-    pub fn new(drag_hint_dismissed: bool) -> Self {
+    pub fn new() -> Self {
         let local_root = crate::core::local_dir::current().dir;
         Self {
             last_local_by_host: std::collections::HashMap::new(),
@@ -2131,13 +2128,10 @@ impl SftpPanel {
             pending_terminal_cmd: None,
             flux_details_open: false,
             diff: DirDiffUi::default(),
-            drag_hint_dismissed,
         }
     }
 
-    pub fn request_list_on_open(&mut self, drag_hint_dismissed: bool) {
-        // #312：打开面板时由 app 层用内存中的 settings 下发，避免本实例显示已被关闭的提示。
-        self.drag_hint_dismissed = drag_hint_dismissed;
+    pub fn request_list_on_open(&mut self) {
         self.pending_auto_list = true;
     }
 
@@ -3876,7 +3870,7 @@ impl SftpPanel {
         ui.spacing_mut().item_spacing.y = 0.0;
         theme.frame_right_dock_header_band().show(ui, |ui| {
             ui.set_max_width(content_w);
-            header_closed = crate::ui::chrome::dock_panel_title_close_only(
+            header_closed = crate::ui::chrome::dock_panel_title_close_with_help(
                 ui,
                 theme,
                 crate::ui::icons::IconId::Folder,
@@ -3885,6 +3879,11 @@ impl SftpPanel {
                     ctx,
                     "Hide panel · reopen from Activity Rail or View menu",
                     "隐藏面板 · 可从活动栏或「视图」菜单再打开",
+                ),
+                crate::i18n::tr(
+                    ctx,
+                    "Tip: drag files to the other side to transfer.",
+                    "提示：把文件拖到对侧即可传输。",
                 ),
             );
         });
@@ -5082,9 +5081,7 @@ impl SftpPanel {
             self.kick_xfer_queue(&handle, ctx);
         }
 
-        if !self.diff.open {
-            self.paint_drag_transfer_hint(ui, ctx, theme);
-        }
+        // #312 的拖拽传输提示已收进标题行「?」，不再占正文一行。
 
         let strip_action = paint_xfer_strip(
             ui,
@@ -5109,50 +5106,6 @@ impl SftpPanel {
                 .small()
                 .color(theme.text_tertiary()),
             );
-        }
-    }
-
-    /// #250 / #312：底部一句拖拽提示（可关掉；对齐 #215 一次性短提示，写入 settings.json）。
-    fn paint_drag_transfer_hint(
-        &mut self,
-        ui: &mut egui::Ui,
-        ctx: &egui::Context,
-        theme: &Theme,
-    ) {
-        if self.drag_hint_dismissed {
-            return;
-        }
-        ui.add_space(theme.spacing_xs());
-        let hide_tip = crate::i18n::tr(ctx, "Hide this tip", "关闭这条提示");
-        let mut dismissed = false;
-        ui.horizontal(|ui| {
-            ui.label(
-                egui::RichText::new(crate::i18n::tr(
-                    ctx,
-                    "Tip: drag files to the other side to transfer.",
-                    "提示：把文件拖到对侧即可传输。",
-                ))
-                .size(theme.font_size_caption())
-                .color(theme.text_tertiary()),
-            );
-            let dismiss = crate::i18n::tr(ctx, "Got it", "知道了");
-            if crate::ui::chrome::panel_action_primary_button(ui, theme, dismiss)
-                .on_hover_text(hide_tip)
-                .clicked()
-            {
-                dismissed = true;
-            }
-            if ui.small_button("×").on_hover_text(hide_tip).clicked() {
-                dismissed = true;
-            }
-        });
-        if dismissed {
-            self.drag_hint_dismissed = true;
-            let mut settings = crate::core::app_settings::AppSettings::load();
-            settings.sftp_drag_hint_dismissed = true;
-            if let Err(e) = settings.save() {
-                log::warn!("persist sftp drag hint dismissed: {e}");
-            }
         }
     }
 

@@ -2036,6 +2036,14 @@ impl Theme {
         }
     }
 
+    /// 表单 / 搜索输入框的行高。
+    ///
+    /// 输入框至少 28(「偏好设置」里那套输入框的实测基准)，而按钮标准行高 modern 只有 26；
+    /// 两者并排时需要把按钮抬到这个值，否则同一行会出现 2px 高差。
+    pub fn size_form_field_h(&self) -> f32 {
+        self.size_control_btn_h().max(28.0)
+    }
+
     /// AI 面板底部操作栏纯图标按钮边长(设计稿 28×28)
     pub fn size_ai_action_btn(&self) -> f32 {
         28.0

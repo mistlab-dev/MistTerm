@@ -1647,6 +1647,11 @@ impl TerminalView {
         self.pending_startup_cd = Some(cwd.to_string());
     }
 
+    /// 尚未发出的启动 `cd` 目标目录（重连替换 TerminalView 时须搬运）。
+    pub(crate) fn pending_startup_directory(&self) -> Option<&str> {
+        self.pending_startup_cd.as_deref()
+    }
+
     fn maybe_send_startup_cd(&mut self) {
         if self.pending_startup_cd.is_none() {
             return;

@@ -122,6 +122,73 @@ pub fn close_icon_button(ui: &mut Ui, theme: &Theme) -> Response {
     close_icon_button_with_tooltip(ui, theme, crate::i18n::tr(ui.ctx(), "Close", "关闭"))
 }
 
+/// 标题行「?」帮助按钮：与 × 同级点击区，悬停出说明，不占正文版面。
+/// 用于把「一次性说明横幅」收进提示里（横幅要占一整块 + 还要「不再显示」「知道了」）。
+pub fn help_icon_button(ui: &mut Ui, theme: &Theme, tip: &str) -> Response {
+    let hit = theme.size_panel_header_control_h();
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(hit, hit), Sense::click());
+    let hovered = response.hovered();
+    if hovered {
+        ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+        ui.painter().rect_filled(
+            rect,
+            theme.radius_list_item(),
+            theme.color_tab_bar_icon_btn_hover_fill(),
+        );
+    }
+    let color = if hovered {
+        theme.text_primary()
+    } else {
+        theme.color_sidebar_header_icon()
+    };
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        "?",
+        egui::FontId::proportional(theme.size_icon_glyph()),
+        color,
+    );
+    if tip.is_empty() {
+        response
+    } else {
+        response.on_hover_text(tip)
+    }
+}
+
+/// 弹窗标题行(标题 + 右侧 ? 帮助 + ×)。说明文字走悬停提示，正文不再铺横幅。
+pub fn modal_header_with_help(
+    ui: &mut Ui,
+    theme: &Theme,
+    title: &str,
+    help_tip: &str,
+) -> bool {
+    let mx = theme.spacing_modal_content_x();
+    let my = theme.spacing_modal_content_y();
+    let mut closed = false;
+    let band = theme
+        .frame_modal_title_band()
+        .outer_margin(egui::Margin {
+            left: -mx as i8,
+            right: -mx as i8,
+            top: -my as i8,
+            bottom: 0,
+        })
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(rich_modal_title(theme, title));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if close_icon_button(ui, theme).clicked() {
+                        closed = true;
+                    }
+                    help_icon_button(ui, theme, help_tip);
+                });
+            });
+        });
+    paint_modal_header_bottom_divider(ui, theme, band.response.rect);
+    ui.add_space(theme.spacing_modal_header_after_sep());
+    closed
+}
+
 /// 右 dock 标题栏关闭(与 [`close_icon_button_with_tooltip`] 相同尺寸；`tooltip` 仅设置一次，避免叠两条提示)
 pub fn dock_close_icon_button(ui: &mut Ui, theme: &Theme, tooltip: &str) -> Response {
     close_icon_button_with_tooltip(ui, theme, tooltip)
@@ -165,6 +232,20 @@ pub fn panel_header_new_button(ui: &mut Ui, theme: &Theme) -> Response {
 
 /// 带可见标签的新建按钮；`label` 为空时仅显示「＋」。
 pub fn panel_header_new_button_with_label(ui: &mut Ui, theme: &Theme, label: &str) -> Response {
+    panel_header_new_button_with_label_h(ui, theme, label, theme.size_control_btn_h())
+}
+
+/// 带可见标签的新建按钮，并把行高抬到 `min_h`。
+///
+/// 按钮标准行高(`size_control_btn_h`，modern 26) 比表单/搜索输入框行高
+/// ([`Theme::size_form_field_h`]，28) 矮 2px；两者并排时会一高一低，用 `min_h`
+/// 把按钮补到与输入框同高。
+pub fn panel_header_new_button_with_label_h(
+    ui: &mut Ui,
+    theme: &Theme,
+    label: &str,
+    min_h: f32,
+) -> Response {
     if label.is_empty() {
         let h = theme
             .size_panel_header_control_h()
@@ -193,15 +274,41 @@ pub fn panel_header_new_button_with_label(ui: &mut Ui, theme: &Theme, label: &st
         return response;
     }
     // 标题行主操作：实心 accent，勿用 ToolbarPrimary 的灰底描边(与整体蓝强调脱节)。
-    paint_control_button(
+    let mut size = control_button_size(
+        ui,
+        theme,
+        label,
+        true,
+        theme.size_panel_header_btn_min_w(),
+    );
+    size.y = size.y.max(min_h);
+    paint_control_button_sized(
         ui,
         theme,
         label,
         Some(IconId::Plus),
         ControlButtonVariant::Primary,
-        theme.size_panel_header_btn_min_w(),
+        size,
         true,
     )
+}
+
+/// 「＋新建」按钮的实际占位宽度(供同行排版先算再排)。
+///
+/// 必须用它而不是 `size_panel_header_btn_min_w()`：后者只是下限(约 2 字宽 + 内边距)，
+/// 远小于带标签按钮的真实宽度(图标 + 4 + 文字 + 2×pad_x)。按 min_w 扣减搜索框宽度，
+///
+/// 会让"搜索框 + 新建"这一行的最小内容宽大于面板宽，行被算宽后侧栏跟着变宽
+/// (且每帧用新的 available 重新算，会逐帧继续变宽)。这里返回真实宽度，行刚好装满。
+pub fn panel_header_new_button_width(ui: &Ui, theme: &Theme, label: &str) -> f32 {
+    control_button_size(
+        ui,
+        theme,
+        label,
+        true,
+        theme.size_panel_header_btn_min_w(),
+    )
+    .x
 }
 
 /// [`panel_header_new_button`] 别名(侧栏)
@@ -1224,6 +1331,34 @@ fn pointer_hovers_tab_close_slot(ctx: &egui::Context, inner: egui::Rect, close_s
         .is_some_and(|p| close_rect.contains(p))
 }
 
+/// 状态圆点半径上限（needs_attention 时 3.0，其余 2.5）。
+const STATUS_DOT_R_MAX: f32 = 3.0;
+/// 进度环半径与描边：`OUTER` 含半个描边，是环的外缘。
+const PROGRESS_RING_RADIUS: f32 = 3.5;
+const PROGRESS_RING_STROKE: f32 = 1.5;
+const PROGRESS_RING_OUTER: f32 = PROGRESS_RING_RADIUS + PROGRESS_RING_STROKE * 0.5;
+/// 圆点与进度环之间的间隙。
+const PROGRESS_RING_GAP: f32 = 1.0;
+/// 圆点占据的横向槽位（圆心 2.5 + 最大半径），环从它右侧开始排。
+const STATUS_DOT_SLOT: f32 = 2.5 + STATUS_DOT_R_MAX;
+/// 环圆心相对 `inner.min.x` 的偏移：紧贴圆点外侧，左缘不与点边界相交。
+const PROGRESS_RING_OFFSET_X: f32 =
+    STATUS_DOT_SLOT + PROGRESS_RING_GAP + PROGRESS_RING_OUTER;
+
+/// 标签左侧状态槽位宽度：无进度时只放圆点，有进度时右侧再并排放一个不重叠的环。
+fn status_slot_width(has_progress: bool) -> f32 {
+    if has_progress {
+        PROGRESS_RING_OFFSET_X + PROGRESS_RING_OUTER + 0.5
+    } else {
+        5.0
+    }
+}
+
+/// 进度环圆心（绝对 x）：与圆点同一条中线，横向并排不重叠。
+fn progress_ring_center_x(inner_min_x: f32) -> f32 {
+    inner_min_x + PROGRESS_RING_OFFSET_X
+}
+
 /// `needs_attention`：#93 未聚焦标签有 BEL / SessionEnded 时画 accent 圆点。
 pub fn session_tab_chip(
     ui: &mut Ui,
@@ -1257,8 +1392,9 @@ pub fn session_tab_chip(
             label_color,
         )
     });
-    // 宽度随内容：圆点 + 标题 + 间距 + ×，避免固定 min_w 时标题与 × 重叠。
-    let content_w = 5.0 + gap_dot + label_galley.size().x + gap_close + close_slot;
+    // 宽度随内容：状态槽位（圆点，有进度时再加一个独立的进度环）+ 标题 + 间距 + ×。
+    let slot_w = status_slot_width(progress.is_some());
+    let content_w = slot_w + gap_dot + label_galley.size().x + gap_close + close_slot;
     let tab_w = (content_w + pad_x * 2.0).max(72.0);
     let size = egui::vec2(tab_w, theme.size_tab_min_h());
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
@@ -1345,24 +1481,26 @@ pub fn session_tab_chip(
     };
     let dot_center = egui::pos2(inner.min.x + 2.5, cy);
     ui.painter().circle_filled(dot_center, status_r, status_color);
-    // #392：OSC 9;4 进度指示——圆点右上叠一个微型进度环；error/warning 用对应色。
+    // #392：OSC 9;4 进度指示——圆点右侧独立槽位里的微型环，与圆点同高居中；
+    // error/warning 用对应色。以前贴在点的右上角（cx+5 / cy-4），外缘 4.25 会压住
+    // 半径为 3.0 的圆点，且整体比文字行高 4px，所以改成并排 + 居中对齐。
     if let Some(p) = progress {
         let ring_c = match p.state {
             crate::terminal::sem_osc::ProgressState::Error => theme.red_color(),
             crate::terminal::sem_osc::ProgressState::Warning => theme.amber_color(),
             _ => theme.accent_color(),
         };
-        let ring_cx = dot_center.x + 5.0;
-        let ring_cy = cy - 4.0;
+        let ring_cx = progress_ring_center_x(inner.min.x);
+        let ring_cy = cy;
         match p.progress {
             Some(pct) => {
                 // 确定进度：底环淡色 + 进度弧。
-                let radius = 3.5;
+                let radius = PROGRESS_RING_RADIUS;
                 let bg = Color32::from_rgba_unmultiplied(ring_c.r(), ring_c.g(), ring_c.b(), 60);
                 ui.painter().circle_stroke(
                     egui::pos2(ring_cx, ring_cy),
                     radius,
-                    egui::Stroke::new(1.5, bg),
+                    egui::Stroke::new(PROGRESS_RING_STROKE, bg),
                 );
                 let frac = pct as f32 / 100.0;
                 let start = std::f32::consts::FRAC_PI_2; // 12 点方向起
@@ -1377,13 +1515,16 @@ pub fn session_tab_chip(
                     .collect();
                 ui.painter().add(egui::Shape::line(
                     pts,
-                    egui::Stroke::new(1.5, ring_c),
+                    egui::Stroke::new(PROGRESS_RING_STROKE, ring_c),
                 ));
             }
             None => {
-                // 不定进度：小转圈占位（静态三点，闪烁动画成本高不做）。
-                ui.painter()
-                    .circle_filled(egui::pos2(ring_cx, ring_cy), 2.5, ring_c);
+                // 不定进度：实心小圆点占位（静态，闪烁动画成本高不做）。
+                ui.painter().circle_filled(
+                    egui::pos2(ring_cx, ring_cy),
+                    PROGRESS_RING_RADIUS - PROGRESS_RING_STROKE * 0.5,
+                    ring_c,
+                );
             }
         }
     }
@@ -1393,7 +1534,7 @@ pub fn session_tab_chip(
         .map(|r| r.visuals.mesh_bounds)
         .filter(|b| b.is_positive())
         .unwrap_or_else(|| egui::Rect::from_min_size(egui::Pos2::ZERO, label_galley.size()));
-    let label_x = inner.min.x + 5.0 + gap_dot;
+    let label_x = inner.min.x + slot_w + gap_dot;
     let label_w = label_galley.size().x;
     ui.painter().galley(
         egui::pos2(label_x, cy - ink.center().y),
@@ -1612,6 +1753,19 @@ fn paint_control_button(
     can_activate: bool,
 ) -> Response {
     let size = control_button_size(ui, theme, label, icon.is_some(), min_w);
+    paint_control_button_sized(ui, theme, label, icon, variant, size, can_activate)
+}
+
+/// 与 [`paint_control_button`] 相同，但尺寸由调用方给定(用于需要与同一行输入框对齐高度的场景)。
+fn paint_control_button_sized(
+    ui: &mut Ui,
+    theme: &Theme,
+    label: &str,
+    icon: Option<IconId>,
+    variant: ControlButtonVariant,
+    size: egui::Vec2,
+    can_activate: bool,
+) -> Response {
     let rounding = theme.radius_card();
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
     let hovered = response.hovered();
@@ -2374,6 +2528,29 @@ pub fn dock_panel_title_close_only(
             if dock_close_icon_button(ui, theme, close_tooltip).clicked() {
                 closed = true;
             }
+        });
+    });
+    closed
+}
+
+/// 仅标题 + 右侧 ? 帮助 + 关闭 ×：把右 dock 的一次性说明收进悬停提示。
+pub fn dock_panel_title_close_with_help(
+    ui: &mut Ui,
+    theme: &Theme,
+    icon: IconId,
+    title: &str,
+    close_tooltip: &str,
+    help_tip: &str,
+) -> bool {
+    let mut closed = false;
+    dock_header_horizontal(ui, theme, |ui| {
+        panel_header_title_leading(ui, theme, icon, title);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.add_space(theme.spacing_dock_panel_trailing_pad());
+            if dock_close_icon_button(ui, theme, close_tooltip).clicked() {
+                closed = true;
+            }
+            help_icon_button(ui, theme, help_tip);
         });
     });
     closed
@@ -3562,6 +3739,30 @@ pub fn labeled_slider_f32(
     resp
 }
 
+/// 铺满可用宽度的滑块(不显示数值，数值由调用方在上一行展示)。
+///
+/// 窄面板(右 dock ~250px)里 [`labeled_slider_f32`] 把滑轨/数值/文本挤在同一行，
+/// 滑轨只剩几十像素；这一支让滑轨独占一行铺满正文宽。
+pub fn slider_full_width_f32(
+    ui: &mut Ui,
+    theme: &Theme,
+    value: &mut f32,
+    range: std::ops::RangeInclusive<f32>,
+) -> Response {
+    let prev_inactive = ui.visuals().widgets.inactive.bg_fill;
+    let prev_slider_w = ui.spacing().slider_width;
+    ui.visuals_mut().widgets.inactive.bg_fill = theme.color_slider_rail_fill();
+    ui.spacing_mut().slider_width = (ui.available_width() - 6.0).max(60.0);
+    let resp = ui.add(
+        egui::Slider::new(value, range)
+            .show_value(false)
+            .trailing_fill(true),
+    );
+    ui.visuals_mut().widgets.inactive.bg_fill = prev_inactive;
+    ui.spacing_mut().slider_width = prev_slider_w;
+    resp
+}
+
 /// 带可见滑轨的水平滑块(`f64` 版本，如刷新间隔秒数)。
 pub fn labeled_slider_f64(
     ui: &mut Ui,
@@ -3600,8 +3801,95 @@ pub fn selectable_readonly_monospace(
     )
 }
 
-/// 搜索框(左侧 🔍 + 与表单相同的底/描边/字号)；`desired_width` 为外框总宽(含描边)。
+/// 搜索框内容行(🔍 + 单行输入)，两种外框共用。
+fn search_field_contents(
+    ui: &mut Ui,
+    theme: &Theme,
+    id: egui::Id,
+    query: &mut String,
+    hint: &str,
+    font: f32,
+    text_w: f32,
+    max_w: f32,
+) -> Response {
+    ui.horizontal(|ui| {
+        ui.set_max_width(max_w);
+        ui.spacing_mut().item_spacing.x = theme.spacing_sm();
+        let (r, _) = ui.allocate_exact_size(egui::vec2(font, font), egui::Sense::hover());
+        icons::paint_icon(ui, r, IconId::Search, theme.text_tertiary(), font);
+        let prev_override = ui.style_mut().visuals.override_text_color;
+        ui.style_mut().visuals.override_text_color = Some(theme.color_form_hint());
+        let response = ui.add(
+            egui::TextEdit::singleline(query)
+                .id(id)
+                .frame(egui::Frame::NONE)
+                .hint_text(hint_rich(theme, hint, font))
+                .text_color(theme.color_text_input_text())
+                .font(egui::FontId::proportional(font))
+                .desired_width(text_w),
+        );
+        ui.style_mut().visuals.override_text_color = prev_override;
+        response
+    })
+    .inner
+}
+
+/// 面板/对话框内搜索框(下划线式，跟随主题输入样式)。
 pub fn search_field(
+    ui: &mut Ui,
+    theme: &Theme,
+    id: egui::Id,
+    query: &mut String,
+    hint: &str,
+    desired_width: f32,
+) -> Response {
+    let focused = ui.memory(|m| m.has_focus(id));
+    // modern 主题是"透明底 + 底边线"：底边线由 form_singleline_field 补画，
+    // 这里若不补，搜索框在色板上会完全没有边框也没有下划线，看着不像输入框。
+    let underline = theme.uses_underline_inputs();
+    let font = theme.font_size_control_input();
+    let pad_y = theme.spacing_search_input_y();
+    let pad_x = theme.spacing_search_input_x();
+    let stroke = theme.stroke_width_panel();
+    let row_h = font + pad_y * 2.0 + stroke * 2.0;
+    let mut outer_w = desired_width;
+    if ui.max_rect().width().is_finite() {
+        outer_w = outer_w.min(ui.max_rect().width());
+    }
+    outer_w = outer_w.min(ui.available_width()).max(72.0);
+    let text_w = (outer_w - font - theme.spacing_sm() - pad_x * 2.0 - stroke * 2.0).max(48.0);
+
+    let out = ui.allocate_ui_with_layout(
+        egui::vec2(outer_w, row_h),
+        egui::Layout::top_down(egui::Align::LEFT),
+        |ui| {
+            ui.set_width(outer_w);
+            theme
+                .frame_form_text_input(focused)
+                .show(ui, |ui| {
+                    ui.set_width(outer_w);
+                    with_underline_field_visuals(ui, theme, |ui| {
+                        search_field_contents(ui, theme, id, query, hint, font, text_w, outer_w)
+                    })
+                })
+                .inner
+        },
+    );
+    if underline {
+        paint_form_field_underline(ui, theme, out.response.rect, focused);
+    }
+    out.inner
+}
+
+/// 面板内搜索框(实心底 + 描边，与「偏好设置」等表单输入框同一套样式)。
+///
+/// 尺寸/配色刻意与 [`form_singleline_field_boxed`] 对齐：底 `color_form_input_fill()`
+/// (`#1e1e1e`)、1px 描边 `color_form_input_stroke()`(`#3c3c3c`)、圆角 `radius_search_input()`、
+/// 行高 `size_control_btn_h().max(28.0)`；聚焦描边换强调色。区别只在左侧多了搜索图标、文字左对齐。
+///
+/// 描边宽度必须写死 1.0：`theme.stroke_width_panel()` 在 modern 调色板下是 0.0，
+/// 用它画等于没描边，整个框会消失。填充也不要自制更亮的色，那样会和其它输入框不是一套。
+pub fn search_field_boxed(
     ui: &mut Ui,
     theme: &Theme,
     id: egui::Id,
@@ -3613,51 +3901,39 @@ pub fn search_field(
     let font = theme.font_size_control_input();
     let pad_y = theme.spacing_search_input_y();
     let pad_x = theme.spacing_search_input_x();
-    let stroke = theme.stroke_width_panel();
-    let row_h = font + pad_y * 2.0 + stroke * 2.0;
+    let stroke = 1.0_f32;
+    let row_h = theme.size_form_field_h();
     let mut outer_w = desired_width;
     if ui.max_rect().width().is_finite() {
         outer_w = outer_w.min(ui.max_rect().width());
     }
     outer_w = outer_w.min(ui.available_width()).max(72.0);
+    let text_w = (outer_w - font - theme.spacing_sm() - pad_x * 2.0 - stroke * 2.0).max(40.0);
 
-    ui.allocate_ui_with_layout(
-        egui::vec2(outer_w, row_h),
-        egui::Layout::top_down(egui::Align::LEFT),
-        |ui| {
-            ui.set_width(outer_w);
-            theme
-                .frame_form_text_input(focused)
-                .show(ui, |ui| {
-                    ui.set_width(outer_w);
-                    ui.horizontal(|ui| {
-                        ui.set_max_width(outer_w);
-                        ui.spacing_mut().item_spacing.x = theme.spacing_sm();
-                        let (r, _) =
-                            ui.allocate_exact_size(egui::vec2(font, font), egui::Sense::hover());
-                        icons::paint_icon(ui, r, IconId::Search, theme.text_tertiary(), font);
-                        let text_w =
-                            (outer_w - font - theme.spacing_sm() - pad_x * 2.0 - stroke * 2.0)
-                                .max(48.0);
-                        let prev_override = ui.style_mut().visuals.override_text_color;
-                        ui.style_mut().visuals.override_text_color = Some(theme.color_form_hint());
-                        let response = ui.add(
-                            egui::TextEdit::singleline(query)
-                                .id(id)
-                                .frame(egui::Frame::NONE)
-                                .hint_text(hint_rich(theme, hint, font))
-                                .text_color(theme.color_text_input_text())
-                                .font(egui::FontId::proportional(font))
-                                .desired_width(text_w),
-                        );
-                        ui.style_mut().visuals.override_text_color = prev_override;
-                        response
-                    })
-                    .inner
-                })
-                .inner
-        },
-    )
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(outer_w, row_h), egui::Sense::hover());
+    let line = if focused {
+        theme.accent_color()
+    } else {
+        theme.color_form_input_stroke()
+    };
+    ui.painter().rect(
+        rect,
+        theme.radius_search_input(),
+        theme.color_form_input_fill(),
+        egui::Stroke::new(stroke, line),
+        egui::StrokeKind::Inside,
+    );
+    let inner = egui::Rect::from_min_max(
+        egui::pos2(rect.left() + pad_x, rect.top() + pad_y),
+        egui::pos2(rect.right() - pad_x, rect.bottom() - pad_y),
+    );
+    ui.scope_builder(egui::UiBuilder::new().max_rect(inner), |ui| {
+        ui.set_min_size(inner.size());
+        ui.set_max_size(inner.size());
+        with_underline_field_visuals(ui, theme, |ui| {
+            search_field_contents(ui, theme, id, query, hint, font, text_w, inner.width())
+        })
+    })
     .inner
 }
 
@@ -4726,6 +5002,17 @@ pub fn panel_action_primary_icon_button_ex(
 /// 面板 / dock 内行内次要按钮(与排序芯片、弹窗「取消」同族)
 pub fn panel_action_button(ui: &mut Ui, theme: &Theme, label: &str) -> Response {
     panel_action_button_ex(ui, theme, label, true)
+}
+
+/// [`panel_action_button`] 的实际尺寸(供同一行内先量再排，例如空态三钮居中)。
+pub fn panel_action_button_size(ui: &Ui, theme: &Theme, label: &str) -> egui::Vec2 {
+    control_button_size(
+        ui,
+        theme,
+        label,
+        false,
+        theme.size_control_btn_min_w(),
+    )
 }
 
 /// 带启用态的面板次要按钮

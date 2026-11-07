@@ -189,7 +189,7 @@ impl MistTermApp {
             if self.sftp_last_tab != self.active_tab {
                 self.sftp_last_tab = self.active_tab;
                 self.sftp_panel.reset();
-                self.sftp_panel.request_list_on_open(self.app_settings.sftp_drag_hint_dismissed);
+                self.sftp_panel.request_list_on_open();
             }
             self.sftp_panel.show_side_panel(
                 ctx,
@@ -1043,7 +1043,7 @@ impl MistTermApp {
                                 .auto_shrink([false, false])
                                 .max_height(scroll_h)
                                 .show(ui, |ui| {
-                            let form_w = layout_util::finite_content_width_inset(ui, 4.0, 300.0, 340.0);
+                            let form_w = layout_util::modal_form_width(ui);
                             ui.spacing_mut().item_spacing = egui::vec2(10.0, 8.0);
                             Self::ui_field_label(ui, theme, crate::i18n::tr(ctx, "Session name", "会话名称"));
                             Self::ui_form_singleline(
@@ -1058,7 +1058,7 @@ impl MistTermApp {
 
                             ui.horizontal(|ui| {
                                 ui.spacing_mut().item_spacing.x = 10.0;
-                                let row_w = layout_util::finite_content_width_inset(ui, 4.0, 300.0, 340.0);
+                                let row_w = form_w;
                                 let host_w = (row_w - 98.0).max(160.0);
                                 ui.vertical(|ui| {
                                     ui.set_width(host_w);
@@ -1089,7 +1089,7 @@ impl MistTermApp {
 
                             ui.horizontal(|ui| {
                                 ui.spacing_mut().item_spacing.x = 10.0;
-                                let row_w = layout_util::finite_content_width_inset(ui, 4.0, 300.0, 340.0);
+                                let row_w = form_w;
                                 let half = ((row_w - 10.0) / 2.0).max(140.0);
                                 ui.vertical(|ui| {
                                     ui.set_width(half);

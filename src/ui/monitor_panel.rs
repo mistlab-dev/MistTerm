@@ -592,6 +592,9 @@ impl MonitorPanel {
         show_dock_frame(ui, theme.frame_inset_section(), dock_w, |ui| {
             ui.vertical(|ui| {
                 layout_util::set_width_to_available(ui);
+                // 工具条原本是「快照 / 自动刷新 / 刷新」三个控件排一行：面板正文宽只有 ~250px，
+                // 三项加起来(~270px)超出，最右的「刷新」被面板右边界裁掉，挤在一起。
+                // 现在拆两行：①快照(左) / 刷新(右对齐)；②自动刷新(左) / 当前间隔值(右)。
                 ui.horizontal(|ui| {
                     // #376 P2：「快照发送到 AI」从标题栏下移到此处工具条，可带说明。
                     if self.monitor.is_some() {
@@ -615,33 +618,59 @@ impl MonitorPanel {
                             self.pending_send_to_ai = true;
                         }
                     }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if crate::ui::chrome::panel_toolbar_button_with_icon_or_busy(
+                            ui,
+                            theme,
+                            crate::ui::icons::IconId::Refresh,
+                            crate::i18n::tr(ui.ctx(), "Refresh", "刷新"),
+                            crate::i18n::tr(ui.ctx(), "Collecting…", "采集中…"),
+                            self.pending_raw.is_some(),
+                        )
+                        .clicked()
+                        {
+                            self.refresh();
+                        }
+                    });
+                });
+                ui.add_space(theme.spacing_sm());
+                ui.horizontal(|ui| {
                     crate::ui::chrome::form_checkbox(
                         ui,
                         theme,
                         &mut self.auto_refresh,
                         crate::i18n::tr(ui.ctx(), "Auto refresh", "自动刷新"),
                     );
-                    if crate::ui::chrome::panel_toolbar_button_with_icon_or_busy(
-                        ui,
-                        theme,
-                        crate::ui::icons::IconId::Refresh,
-                        crate::i18n::tr(ui.ctx(), "Refresh", "刷新"),
-                        crate::i18n::tr(ui.ctx(), "Collecting…", "采集中…"),
-                        self.pending_raw.is_some(),
-                    )
-                    .clicked()
-                    {
-                        self.refresh();
+                    if self.auto_refresh {
+                        ui.with_layout(
+                            egui::Layout::right_to_left(egui::Align::Center),
+                            |ui| {
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "{} {:.1} {}",
+                                        crate::i18n::tr(ui.ctx(), "Interval", "间隔"),
+                                        self.refresh_interval_secs,
+                                        crate::i18n::tr(ui.ctx(), "s", "秒")
+                                    ))
+                                    .size(theme.font_size_small())
+                                    .color(theme.text_secondary()),
+                                )
+                                .on_hover_text(crate::i18n::tr(
+                                    ui.ctx(),
+                                    "Auto refresh interval",
+                                    "自动刷新间隔",
+                                ));
+                            },
+                        );
                     }
                 });
                 if self.auto_refresh {
-                    crate::ui::chrome::labeled_slider_f32(
+                    // 滑块独占一行铺满正文宽：跟数值/单位挤在一行时滑轨只剩 ~100px。
+                    crate::ui::chrome::slider_full_width_f32(
                         ui,
                         theme,
                         &mut self.refresh_interval_secs,
                         1.0..=30.0,
-                        crate::i18n::tr(ui.ctx(), "Interval (s)", "间隔（秒）"),
-                        "",
                     );
                 }
             });

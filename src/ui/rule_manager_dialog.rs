@@ -59,11 +59,6 @@ pub struct RuleManagerDialog {
     cmd_priority: i32,
     cmd_enabled: bool,
     cmd_personal_enabled: bool,
-    /// #215 一次性短提示：是否正在展示；勾选「不再显示」写进 AppSettings。
-    intro_open: bool,
-    intro_dont_show_again: bool,
-    /// 本轮对话框打开期间是否已尝试弹出短提示（避免关闭后每帧重弹）。
-    intro_offered_this_open: bool,
     /// #283 输出触发页：简单模式（关键词列表）还是高级模式（正则）。
     ot_simple_mode: bool,
     ot_keywords: String,
@@ -105,9 +100,6 @@ impl Default for RuleManagerDialog {
             cmd_priority: 100,
             cmd_enabled: true,
             cmd_personal_enabled: false,
-            intro_open: false,
-            intro_dont_show_again: false,
-            intro_offered_this_open: false,
             ot_simple_mode: true,
             ot_keywords: String::new(),
             link_simple_mode: true,
@@ -183,14 +175,7 @@ impl RuleManagerDialog {
         app_settings: &mut crate::core::app_settings::AppSettings,
     ) {
         if !self.open {
-            self.intro_open = false;
-            self.intro_offered_this_open = false;
             return;
-        }
-        if !app_settings.rules_intro_dismissed && !self.intro_offered_this_open {
-            self.intro_open = true;
-            self.intro_dont_show_again = false;
-            self.intro_offered_this_open = true;
         }
         match self.tab {
             RuleManagerTab::OutputTrigger => self.ensure_selection(store),
@@ -214,11 +199,15 @@ impl RuleManagerDialog {
             .fixed_size(modal_sz)
             .show(ctx, |ui| {
                 crate::ui::chrome::modal_content_frame(theme).show(ui, |ui| {
-                    if crate::ui::chrome::modal_header(
+                    if crate::ui::chrome::modal_header_with_help(
                         ui,
                         theme,
                         crate::i18n::tr(ctx, "Automation Rules", "自动化规则"),
-                        theme.font_size_modal_title(),
+                        crate::i18n::tr(
+                            ctx,
+                            "Automation rules react when a command is about to run or when output matches. Personal rules are editable; Built-in and Team rules are read-only. Turn the module on in Preferences for rules to run.",
+                            "自动化规则在命令发出前或输出出现时自动处理。个人规则可编辑；内置规则、团队规则只读。规则要在偏好里打开对应模块后才会生效。",
+                        ),
                     ) {
                         should_close = true;
                     }
@@ -286,10 +275,7 @@ impl RuleManagerDialog {
                             .size(theme.font_size_caption())
                             .color(theme.text_tertiary()),
                     );
-                    // #283：首次短提示改为对话框内嵌引导，不再弹独立窗口。
-                    if self.intro_open {
-                        self.paint_intro_banner(ui, theme, ctx, app_settings);
-                    }
+                    // #283 的首次说明横幅已收进标题行「?」：只读说明不再占正文版面。
                     ui.separator();
                     match self.tab {
                         RuleManagerTab::OutputTrigger => {
@@ -308,59 +294,6 @@ impl RuleManagerDialog {
             should_close = true;
         }
         self.open = keep_open && !should_close;
-        if !self.open {
-            self.intro_open = false;
-            self.intro_offered_this_open = false;
-        }
-    }
-
-    /// #283：首次短提示内嵌在对话框顶部，用背景块 + 「知道了」就地关闭。
-    fn paint_intro_banner(
-        &mut self,
-        ui: &mut egui::Ui,
-        theme: &Theme,
-        ctx: &egui::Context,
-        app_settings: &mut crate::core::app_settings::AppSettings,
-    ) {
-        egui::Frame::NONE
-            .fill(theme.surface_elevated())
-            .stroke(egui::Stroke::new(1.0, theme.color_form_input_stroke()))
-            .corner_radius(theme.radius_search_input())
-            .inner_margin(egui::Margin::symmetric(theme.spacing_xs() as i8, theme.spacing_xs() as i8))
-            .show(ui, |ui| {
-                ui.set_min_width(crate::ui::layout_util::finite_content_width(ui));
-                ui.label(
-                    egui::RichText::new(crate::i18n::tr(
-                        ctx,
-                        "Automation rules react when a command is about to run or when output matches. Personal rules are editable; Built-in and Team rules are read-only. Turn the module on in Preferences for rules to run.",
-                        "自动化规则在命令发出前或输出出现时自动处理。个人规则可编辑；内置规则、团队规则只读。规则要在偏好里打开对应模块后才会生效。",
-                    ))
-                    .size(theme.font_size_body()),
-                );
-                ui.add_space(theme.spacing_xs());
-                ui.horizontal(|ui| {
-                    crate::ui::chrome::form_checkbox(
-                        ui,
-                        theme,
-                        &mut self.intro_dont_show_again,
-                        crate::i18n::tr(ctx, "Don't show again", "不再显示"),
-                    );
-                    if crate::ui::chrome::panel_action_primary_button(
-                        ui,
-                        theme,
-                        crate::i18n::tr(ctx, "Got it", "知道了"),
-                    )
-                    .clicked()
-                    {
-                        if self.intro_dont_show_again {
-                            app_settings.rules_intro_dismissed = true;
-                            let _ = app_settings.save();
-                        }
-                        self.intro_open = false;
-                    }
-                });
-            });
-        ui.add_space(theme.spacing_sm());
     }
 
     fn ensure_selection(&mut self, store: &OutputTriggerStore) {
