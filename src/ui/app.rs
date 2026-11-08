@@ -4702,7 +4702,8 @@ impl MistTermApp {
         }
         pane.terminal
             .restore_offline_input_snapshot(offline.0, offline.1);
-        pane.title = crate::core::session_tab_label(&session);
+        pane.title =
+            crate::core::session_tab_label_with(&session, self.app_settings.tab_label_show_host);
         self.session_manager.mark_session_connected(&sid);
         if self.show_monitor_panel {
             self.sync_monitor_panel_to_active_tab();
@@ -5063,7 +5064,8 @@ impl MistTermApp {
 
     /// 标签标题：`名称 · host`；同一会话多开时追加 `#2`。
     fn next_tab_title_for_session(&self, session: &SessionConfig) -> String {
-        let base = crate::core::session_tab_label(session);
+        let base =
+            crate::core::session_tab_label_with(session, self.app_settings.tab_label_show_host);
         let dup = self
             .tabs
             .iter()
@@ -5731,7 +5733,10 @@ impl MistTermApp {
             terminal.arm_startup_directory(cwd);
         }
         let n = self.tabs[idx].panes.len() + 1;
-        let title2 = format!("{} ({n})", crate::core::session_tab_label(&session));
+        let title2 = format!(
+            "{} ({n})",
+            crate::core::session_tab_label_with(&session, self.app_settings.tab_label_show_host)
+        );
         let mut pane2 = TerminalPane::new(session.id.clone(), title2, terminal);
         pane2.ssh_temp_key = temp_key;
         let tab = &mut self.tabs[idx];

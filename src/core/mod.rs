@@ -74,6 +74,7 @@ pub use session::{
     SessionAuthMode, SessionConfig, SessionManager,
     SESSION_COLOR_TAGS,
     session_color_tag_accent_rgb, session_color_tag_rgb, session_tab_label,
+    session_tab_label_with,
 };
 pub use ssh_config_importer::{
     candidate_to_session, default_ssh_config_path, is_already_imported, parse_ssh_config_file,

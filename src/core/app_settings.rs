@@ -51,6 +51,10 @@ pub struct AppSettings {
     /// #312：SFTP 拖拽传输「知道了」一次性提示已关闭。
     #[serde(default)]
     pub sftp_drag_hint_dismissed: bool,
+    /// #398：终端标签标题在自定义名后追加 `· host[:port]`（默认开，便于同名会话区分）。
+    /// 关闭后标签只显示会话名（09fb707 行为）；侧栏始终显示 host/port 不受影响。
+    #[serde(default = "default_true")]
+    pub tab_label_show_host: bool,
     /// #251：监控告警推送（声音 / 系统通知 / 仅面板）。
     #[serde(default)]
     pub monitor_alert: MonitorAlertSettings,
@@ -77,6 +81,7 @@ impl Default for AppSettings {
             reconnect_on_foreground: false,
             rules_intro_dismissed: false,
             sftp_drag_hint_dismissed: false,
+            tab_label_show_host: true,
             monitor_alert: MonitorAlertSettings::default(),
         }
     }

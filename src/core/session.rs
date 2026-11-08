@@ -142,7 +142,9 @@ pub fn is_local_session_id(session_id: &str) -> bool {
 }
 
 /// 终端标签标题：`名称 · host[:port]`，便于多开时区分。
-pub fn session_tab_label(session: &SessionConfig) -> String {
+/// `show_host`：自定义名后是否追加 `· host[:port]`（#398，AppSettings::tab_label_show_host）。
+/// 关闭后标签只显示会话名；侧栏始终显示 host/port，不受此开关影响。
+pub fn session_tab_label_with(session: &SessionConfig, show_host: bool) -> String {
     let host = if session.port != DEFAULT_SSH_PORT {
         format!("{}:{}", session.host, session.port)
     } else {
@@ -155,11 +157,16 @@ pub fn session_tab_label(session: &SessionConfig) -> String {
         } else {
             format!("{}@{}", session.username, host)
         }
+    } else if show_host {
+        format!("{name} · {host}")
     } else {
-        // 自定义名字优先：起过名的会话标签只显示名字，不再追加 `· host`。
-        // 需要带上地址时，把地址写进名字即可（侧栏仍显示 host/port）。
         name.to_string()
     }
+}
+
+/// 终端标签标题（默认追加 host）。无设置上下文的调用点用这个。
+pub fn session_tab_label(session: &SessionConfig) -> String {
+    session_tab_label_with(session, true)
 }
 
 pub const SESSION_COLOR_TAGS: &[(&str, &str)] = &[
@@ -962,6 +969,27 @@ mod tests {
         let config = SessionConfig::default();
         assert_eq!(config.name, "New Session");
         assert_eq!(config.port, 22);
+    }
+
+    #[test]
+    fn session_tab_label_show_host_toggle() {
+        // #398：同名会话区分 vs 纯净标题，两档都要对。
+        let mut s = SessionConfig::default();
+        s.name = "生产机".to_string();
+        s.host = "10.0.0.5".to_string();
+        s.port = 22;
+        s.username = "root".to_string();
+        // 开（默认）：追加 · host。
+        assert_eq!(session_tab_label_with(&s, true), "生产机 · 10.0.0.5");
+        // 非默认端口带端口号。
+        s.port = 2222;
+        assert_eq!(session_tab_label_with(&s, true), "生产机 · 10.0.0.5:2222");
+        // 关：只显示名字。
+        assert_eq!(session_tab_label_with(&s, false), "生产机");
+        // 名字为空时两档都回落 user@host（不受开关影响）。
+        s.name = String::new();
+        assert_eq!(session_tab_label_with(&s, true), "root@10.0.0.5:2222");
+        assert_eq!(session_tab_label_with(&s, false), "root@10.0.0.5:2222");
     }
 
     #[test]
