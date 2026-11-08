@@ -761,6 +761,29 @@ impl MistTermApp {
             label_color,
             false,
             |ui| {
+                // #398：终端标签标题是否在自定义名后追加 `· host`。
+                let mut show_host = self.app_settings.tab_label_show_host;
+                if crate::ui::chrome::form_checkbox(
+                    ui,
+                    theme,
+                    &mut show_host,
+                    crate::i18n::tr(
+                        ctx,
+                        "Show host in terminal tab title",
+                        "终端标签标题显示主机地址",
+                    ),
+                )
+                .on_hover_text(crate::i18n::tr(
+                    ctx,
+                    "Appends \u{b7} host:port after a custom session name so same-named sessions are distinguishable. Sidebar always shows host/port. Takes effect on new tabs; connected tabs keep the old title until reconnected.",
+                    "在自定义会话名后追加「· 主机:端口」，便于区分同名会话。侧栏始终显示主机地址。对新开标签生效；已连接标签重连后更新。",
+                ))
+                .changed()
+                {
+                    self.app_settings.tab_label_show_host = show_host;
+                    let _ = self.app_settings.save();
+                }
+                Self::preferences_row_divider(ui, theme);
                 let mut ar = self.auto_reconnect_enabled;
                 if crate::ui::chrome::form_checkbox(
                     ui,
