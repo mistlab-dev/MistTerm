@@ -1024,6 +1024,8 @@ impl MistTermApp {
     fn new_terminal_view(&self) -> TerminalView {
         let mut terminal = TerminalView::new();
         terminal.set_font_size(self.terminal_font_size);
+        // #401 方案 B：连接后是否向远端 shell 注入目录上报钩子（偏好可关）。
+        terminal.set_shell_hook_enabled(self.app_settings.shell_integration_hook);
         // 与偏好开关、发送门闩、输出触发、display-link 共用同一 registry（#117 / #119 / #120 / #121）。
         // 关模块 = 之后各窗格都不再收到对应钩子。
         terminal.set_module_registry(std::sync::Arc::clone(&self.module_registry));

@@ -511,6 +511,14 @@ pub struct TerminalView {
     shell_cwd: Option<String>,
     /// SSH 新窗格看到提示符后要执行的 `cd`（本机窗格直接以该目录启动，不走这里）。
     pending_startup_cd: Option<String>,
+    /// #401 方案 B：是否允许连接后注入目录上报钩子（偏好设置，默认开）。
+    shell_hook_enabled: bool,
+    /// 已探测到 shell 类型、等提示符就绪再发的注入命令。
+    pending_shell_hook: Option<String>,
+    /// shell 类型探测的异步回执（走 shell 泵线程的 exec 通道，不经过用户终端）。
+    shell_probe_rx: Option<std::sync::mpsc::Receiver<Result<String, String>>>,
+    /// 本次连接已排过探测，避免重连路径重复入队。
+    shell_probe_sent: bool,
     broadcast_targets: Vec<BroadcastTarget>,
     broadcast_suppress: bool,
     /// 进行中的发送序列标记。0 表示没有。用来在标签换位后仍只写这一个窗格。
@@ -1128,6 +1136,10 @@ impl TerminalView {
             typed_line_buffer: String::new(),
             shell_cwd: None,
             pending_startup_cd: None,
+            shell_hook_enabled: true,
+            pending_shell_hook: None,
+            shell_probe_rx: None,
+            shell_probe_sent: false,
             broadcast_targets: Vec::new(),
             broadcast_suppress: false,
             replay_mark: 0,
@@ -1671,10 +1683,86 @@ impl TerminalView {
         self.broadcast_suppress = false;
     }
 
-    fn note_cwd_from_screen(&mut self) {
-        if let Some(cwd) = parse_prompt_cwd(&self.terminal.cursor_line_text()) {
-            self.shell_cwd = Some(cwd);
+    /// #401 方案 B：偏好开关，连接前由宿主按 `AppSettings` 写入。
+    pub fn set_shell_hook_enabled(&mut self, on: bool) {
+        self.shell_hook_enabled = on;
+    }
+
+    /// 连接成功后向 shell 泵线程排一次 shell 类型探测。
+    ///
+    /// 走 exec 通道意味着输出**不经过用户终端**，用户看不到探测过程；
+    /// 探测失败（关掉了 exec、ForceCommand、非 POSIX shell）直接静默放弃，
+    /// 退化到"只听 OSC 7"的被动模式，不影响任何已有功能。
+    fn start_shell_hook_probe(&mut self) {
+        if !self.shell_hook_enabled || self.shell_probe_sent || self.is_local_shell() {
+            return;
         }
+        let Some(handle) = self.ssh_handle.as_ref() else {
+            return;
+        };
+        match handle.enqueue_remote_exec(crate::terminal::shell_integration::detect_command()) {
+            Ok(rx) => {
+                self.shell_probe_rx = Some(rx);
+                self.shell_probe_sent = true;
+            }
+            Err(e) => {
+                // 队列满/泵已停：这不是错误路径，只是这次没探到，下一帧不再重试（避免刷屏）。
+                log::debug!("shell integration probe skipped: {e}");
+            }
+        }
+    }
+
+    /// 非阻塞取探测结果，命中就备好注入命令。
+    fn poll_shell_hook_probe(&mut self) {
+        let Some(rx) = self.shell_probe_rx.as_ref() else {
+            return;
+        };
+        use std::sync::mpsc::TryRecvError;
+        match rx.try_recv() {
+            Ok(Ok(out)) => {
+                self.shell_probe_rx = None;
+                let kind = crate::terminal::shell_integration::kind_from_probe_output(&out);
+                match crate::terminal::shell_integration::injection_command(kind) {
+                    Some(cmd) => self.pending_shell_hook = Some(cmd.to_string()),
+                    None => log::debug!("shell integration: unsupported shell {:?}, skip", kind),
+                }
+            }
+            Ok(Err(e)) => {
+                self.shell_probe_rx = None;
+                log::debug!("shell integration probe failed: {e}");
+            }
+            Err(TryRecvError::Empty) => {}
+            Err(TryRecvError::Disconnected) => {
+                self.shell_probe_rx = None;
+            }
+        }
+    }
+
+    /// 等提示符就绪再注入，避免命令被打进 MOTD / banner 输出流里。
+    ///
+    /// 与 `maybe_send_startup_cd` 共用同一判据；注入排在 `cd` 之前（两条命令同帧发出，
+    /// shell 按顺序执行，所以目录继承时钩子已经生效）。
+    fn maybe_send_shell_hook(&mut self) {
+        if self.pending_shell_hook.is_none() {
+            return;
+        }
+        if !self.connected || !self.has_pty_writer() {
+            return;
+        }
+        if !prompt_ready_for_cd(&self.terminal.cursor_line_text()) {
+            return;
+        }
+        let Some(cmd) = self.pending_shell_hook.take() else {
+            return;
+        };
+        let mut bytes = cmd.into_bytes();
+        bytes.push(b'\n');
+        self.broadcast_suppress = true;
+        if let Err(e) = self.send_pty_input(&bytes) {
+            log::debug!("shell integration inject: {e}");
+        }
+        self.broadcast_suppress = false;
+        log::debug!("shell integration hook injected");
     }
 
     fn note_typed_cd(&mut self, line: &str) {
@@ -1786,6 +1874,10 @@ impl TerminalView {
                 self.agent_audit_degraded = false;
                 self.agent_audit_banner_dismissed = false;
                 self.connection_target = Some((username.to_string(), host.to_string()));
+                // #401：新连接重新探测 shell（换机器/换账号都可能有另一种 shell）。
+                self.shell_probe_sent = false;
+                self.shell_probe_rx = None;
+                self.pending_shell_hook = None;
             }
             Err(e) => {
                 let msg = format_ssh_connect_error(
@@ -1812,6 +1904,10 @@ impl TerminalView {
             crate::local_shell::spawn_local_shell_in(self.cols, self.rows, &dir)?;
         self.shell_cwd = Some(cwd_text);
         self.pending_startup_cd = None;
+        // #401：本机 shell 不走注入（PowerShell/ConPTY 的 prompt 由本进程控制）。
+        self.shell_probe_sent = false;
+        self.shell_probe_rx = None;
+        self.pending_shell_hook = None;
         self.buffer_input_while_disconnected = false;
         self.disconnected_input_buffer.clear();
         self.resend_offline_input_dialog_open = false;
@@ -3301,7 +3397,10 @@ impl TerminalView {
                             self.dispatch_output_to_modules(&display_data);
                             self.terminal.feed(&display_data);
                             vte_dirty = true;
-                            self.note_cwd_from_screen();
+                            // #401：目录只认 shell 主动上报（OSC 7/9;9）与用户敲的 cd，
+                            // 不再从提示符文本反推——PS1 拆路径是 #396/#400 的坑源。
+                            self.poll_shell_hook_probe();
+                            self.maybe_send_shell_hook();
                             self.maybe_send_startup_cd();
                         }
                     }
@@ -3341,6 +3440,9 @@ impl TerminalView {
                                                 self.pending_post_connect_command = Some(cmd);
                                             }
                                         }
+                                        // #401 方案 B：shell 已起来，排一次类型探测。
+                                        // 连服务器装了 integration 也可能没装，主动补一份。
+                                        self.start_shell_hook_probe();
                                     }
                                     Err(e) => {
                                         let msg = format_ssh_connect_error(
@@ -5254,6 +5356,11 @@ impl TerminalView {
         self.resend_offline_input_dialog_open = false;
         // #177：断线丢弃未执行的恢复命令，避免旧命令跨会话泄漏
         self.pending_post_connect_command = None;
+        // #401：断线丢弃未注入的钩子与探测回执；shell_probe_sent 复位，
+        // 重连后要重新探测（新会话可能是另一台机器/另一种 shell）。
+        self.pending_shell_hook = None;
+        self.shell_probe_rx = None;
+        self.shell_probe_sent = false;
         self.post_connect_fire_at = None;
     }
 
@@ -5621,53 +5728,9 @@ fn prompt_ready_for_cd(line: &str) -> bool {
         || t.ends_with('>')
 }
 
-/// 从常见提示符里取出当前目录。认不出来就返回 `None`。
-fn parse_prompt_cwd(line: &str) -> Option<String> {
-    let t = line.trim();
-    if let Some(rest) = t.strip_prefix("PS ") {
-        let path = rest.trim().trim_end_matches('>').trim();
-        if looks_like_dir(path) {
-            return Some(path.to_string());
-        }
-    }
-    if t.ends_with('>') {
-        let path = t.trim_end_matches('>').trim();
-        if looks_like_dir(path) {
-            return Some(path.to_string());
-        }
-        if let Some(path) = last_path_token(path) {
-            return Some(path);
-        }
-    }
-    if t.ends_with('$') || t.ends_with('#') || t.ends_with('%') {
-        let body = t
-            .trim_end_matches(|c| c == '$' || c == '#' || c == '%' || c == ' ')
-            .trim();
-        if let Some(idx) = body.rfind(':') {
-            let path = body[idx + 1..].trim();
-            if path.starts_with('/') || path.starts_with('~') {
-                return Some(path.to_string());
-            }
-        }
-        // macOS zsh 常见 `user@host ~/src %`，Linux 自定义提示符也可能不带冒号。
-        if let Some(path) = last_path_token(body) {
-            return Some(path);
-        }
-    }
-    None
-}
-
-fn last_path_token(body: &str) -> Option<String> {
-    body.split_whitespace()
-        .rev()
-        .find(|token| looks_like_dir(token))
-        .map(|token| token.to_string())
-}
-
-fn looks_like_dir(path: &str) -> bool {
-    looks_like_win_path(path) || path.starts_with('/') || path.starts_with('~')
-}
-
+/// #401：PS1 文本反推目录的路径已整体废弃（`parse_prompt_cwd` 删除）。
+/// 目录来源只剩两条：shell 主动上报的 OSC 7/9;9，以及用户手敲 `cd` 的命令语义解析
+/// （`apply_cd_line`，精确命令而非猜字符串）。
 fn looks_like_win_path(path: &str) -> bool {
     let b = path.as_bytes();
     b.len() >= 3 && b[1] == b':' && (b[2] == b'\\' || b[2] == b'/')
@@ -6345,32 +6408,7 @@ mod selection_extend_tests {
 
 #[cfg(test)]
 mod cwd_tests {
-    use super::{apply_cd_line, join_dir, parse_prompt_cwd, startup_cd_payload};
-
-    #[test]
-    fn prompt_paths() {
-        assert_eq!(
-            parse_prompt_cwd("PS C:\\Users\\Admin>"),
-            Some("C:\\Users\\Admin".into())
-        );
-        assert_eq!(
-            parse_prompt_cwd("admin@host:~/src$"),
-            Some("~/src".into())
-        );
-        assert_eq!(
-            parse_prompt_cwd("admin@MacBook-Pro ~/src %"),
-            Some("~/src".into())
-        );
-        assert_eq!(
-            parse_prompt_cwd("root@debian:/var/log#"),
-            Some("/var/log".into())
-        );
-        assert_eq!(
-            parse_prompt_cwd("alice@host ~/work>"),
-            Some("~/work".into())
-        );
-        assert_eq!(parse_prompt_cwd("echo hello"), None);
-    }
+    use super::{apply_cd_line, join_dir, startup_cd_payload};
 
     #[test]
     fn cd_joins_relative_and_parent() {
