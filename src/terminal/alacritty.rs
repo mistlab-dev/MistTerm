@@ -223,6 +223,16 @@ impl Terminal {
             .contains(alacritty_terminal::term::TermMode::ALT_SCREEN)
     }
 
+    /// #402：强制清掉 bracketed paste 模式（断线重连路径用）。
+    /// 远端 vim 崩溃前开着 DECSET 2004 → 断线 → 重连复用同一 Terminal 时，
+    /// 新 shell 没开 2004，残留状态会把粘贴包成包裹串打进命令行。
+    /// 实现走正常解析器喂 DECSET 2004l——状态机语义与远端真实关闭一致。
+    pub fn clear_bracketed_paste(&mut self) {
+        const RESET_2004: &[u8] = b"\x1b[?2004l";
+        // 直接推 VTE，不经 feed()（不走 OscSplitter/命令块采样，纯状态复位）。
+        self.parser.advance(&mut self.term, RESET_2004);
+    }
+
     /// 远端程序是否开启了 bracketed paste（DECSET 2004，bash/zsh/vim 等会开）。
     pub fn is_bracketed_paste(&self) -> bool {
         self.term
@@ -1639,6 +1649,20 @@ mod bracketed_paste_tests {
         assert!(t.is_bracketed_paste());
         t.feed(b"\x1b[?2004l");
         assert!(!t.is_bracketed_paste());
+    }
+
+    #[test]
+    fn clear_bracketed_paste_resets_after_disconnect() {
+        // #402：远端 vim 崩溃前开着 2004 → 断线 → 重连复用同一 Terminal，
+        // 断线路径必须强制清模式，否则粘贴被打成包裹串。
+        let mut t = Terminal::new(80, 24);
+        t.feed(b"\x1b[?2004h");
+        assert!(t.is_bracketed_paste());
+        t.clear_bracketed_paste();
+        assert!(!t.is_bracketed_paste());
+        // 再喂 2004h 仍能正常开启（状态机未被破坏）。
+        t.feed(b"\x1b[?2004h");
+        assert!(t.is_bracketed_paste());
     }
 }
 

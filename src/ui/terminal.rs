@@ -384,6 +384,10 @@ pub struct TerminalView {
     
     /// VT100/ANSI 终端模拟器(含光标、屏幕、滚动历史)
     terminal: VtTerminal,
+    /// #403：resize 节流——待发送的 PTY 尺寸（快速拖拽时合并中间态，只发最新）。
+    pending_resize: Option<(u32, u32)>,
+    /// #403：上次实际发送 PTY resize 的时刻。
+    last_resize_sent: Option<std::time::Instant>,
     
     /// 连接状态
     connected: bool,
@@ -1063,6 +1067,8 @@ impl TerminalView {
             local_handle: None,
             connection_kind: ConnectionKind::Ssh,
             terminal: VtTerminal::new(80, 24),
+            pending_resize: None,
+            last_resize_sent: None,
             connected: false,
             error_message: None,
             connecting_fido2: false,
@@ -2972,6 +2978,8 @@ impl TerminalView {
 
     /// `viewport`：ScrollArea **内容区**(inner)的宽 × 可视区高度(与 `max_height(scroll_h)` 一致)，已不含 Frame inner_margin 与纵向滚动条占位。
     fn sync_pty_size_with_ui(&mut self, ui: &egui::Ui, viewport: egui::Vec2, theme: &Theme) {
+        // #403：节流窗口边界到了就发 pending 的最终尺寸（每帧检查一次）。
+        self.flush_pending_resize();
         let usable_width = Self::text_width_in_scroll_viewport(viewport.x).max(120.0);
         let usable_height = viewport.y.max(48.0);
 
@@ -5178,6 +5186,36 @@ impl TerminalView {
             self.visual_layout_cache = None;
         }
 
+        // #403：PTY 尺寸同步走 100ms 节流。egui 每帧都可能调 resize，
+        // 快速拖拽时高频 SIGWINCH 会让远端全屏程序（vim/htop）重绘卡顿。
+        // 本地网格已即时生效；PTY 只在节流窗口边界发最终值。
+        self.pending_resize = Some((cols, rows));
+        self.flush_pending_resize();
+    }
+
+    /// #403：距上次 PTY resize 不足 100ms 则只记 pending，等帧循环边界再发。
+    pub fn flush_pending_resize(&mut self) {
+        let Some((cols, rows)) = self.pending_resize else {
+            return;
+        };
+        if let Some(last) = self.last_resize_sent {
+            if last.elapsed() < std::time::Duration::from_millis(100) {
+                return;
+            }
+        }
+        self.pending_resize = None;
+        self.send_pty_resize_now(cols, rows);
+    }
+
+    /// #403：绕过节流立即同步 PTY 尺寸（ZMODEM 结束后的强制同步等场景）。
+    pub fn resize_now(&mut self) {
+        if let Some((cols, rows)) = self.pending_resize.take() {
+            self.send_pty_resize_now(cols, rows);
+        }
+    }
+
+    fn send_pty_resize_now(&mut self, cols: u32, rows: u32) {
+        self.last_resize_sent = Some(std::time::Instant::now());
         if self.is_local_shell() {
             if let Some(ref handle) = self.local_handle {
                 if let Err(e) = handle.resize_pty(cols, rows) {
@@ -5195,6 +5233,8 @@ impl TerminalView {
                     cols,
                     rows
                 );
+                // #403：传输结束后由 flush_ssh_pty_size_after_transfer 直发，此处保留请求不丢。
+                self.pending_resize = Some((cols, rows));
                 return;
             }
             if let Err(e) = handle.resize_pty(cols, rows) {
@@ -5226,6 +5266,9 @@ impl TerminalView {
         self.pending_rz_upload = false;
         self.end_rz_handshake_capture();
         self.clear_rz_control_mode();
+        // #402：远端开着 DECSET 2004 时断线（vim 崩溃等），残留模式会让
+        // 重连后的粘贴被打成包裹串。断线即清，新会话由远端重新 DECSET。
+        self.terminal.clear_bracketed_paste();
         self.connected = false;
         self.ssh_handle = None;
         self.local_handle = None;
@@ -5272,6 +5315,9 @@ impl TerminalView {
         self.pending_rz_upload = false;
         self.end_rz_handshake_capture();
         self.clear_rz_control_mode();
+        // #402：远端开着 DECSET 2004 时断线（vim 崩溃等），残留模式会让
+        // 重连后的粘贴被打成包裹串。断线即清，新会话由远端重新 DECSET。
+        self.terminal.clear_bracketed_paste();
         self.connected = false;
         self.ssh_handle = None;
         self.local_handle = None;
@@ -5312,6 +5358,9 @@ impl TerminalView {
         self.pending_rz_upload = false;
         self.end_rz_handshake_capture();
         self.clear_rz_control_mode();
+        // #402：远端开着 DECSET 2004 时断线（vim 崩溃等），残留模式会让
+        // 重连后的粘贴被打成包裹串。断线即清，新会话由远端重新 DECSET。
+        self.terminal.clear_bracketed_paste();
         self.ssh_handle = None;
         self.ssh_manager = None;
         self.release_ssh_rx_after_drain = true;
