@@ -5774,8 +5774,19 @@ fn startup_cd_payload(path: &str) -> Vec<u8> {
         let esc = path.replace('\'', "''");
         format!("Set-Location -LiteralPath '{esc}'\r").into_bytes()
     } else {
-        let esc = path.replace('\'', "'\\''");
-        format!("cd -- '{esc}'\r").into_bytes()
+        // #400：提示符解析出的路径常带 `~` 前缀（如 `~/src`）。单引号里 `~`
+        // 不展开，`cd -- '~/src'` 会报 No such file 或落到字面 `~` 目录。
+        // 把前导 `~` 挪到引号外用 $HOME 展开，其余段保持引号转义。
+        if path == "~" {
+            return b"cd -- $HOME\r".to_vec();
+        }
+        if let Some(rest) = path.strip_prefix("~/") {
+            let esc = rest.replace('\'', "'\\''");
+            format!("cd -- \"$HOME/\"'{esc}'\r").into_bytes()
+        } else {
+            let esc = path.replace('\'', "'\\''");
+            format!("cd -- '{esc}'\r").into_bytes()
+        }
     }
 }
 
@@ -6385,6 +6396,12 @@ mod cwd_tests {
         assert!(win.contains("Set-Location"));
         assert!(win.contains("O''Brien"));
         let posix = String::from_utf8(startup_cd_payload("/tmp/a b")).unwrap();
+        // #400：~ 前缀必须在引号外展开，否则 cd -- '~' 报错落回 home。
+        assert_eq!(
+            String::from_utf8(startup_cd_payload("~/src")).unwrap(),
+            "cd -- \"$HOME/\"'src'\r"
+        );
+        assert_eq!(String::from_utf8(startup_cd_payload("~")).unwrap(), "cd -- $HOME\r");
         assert!(posix.starts_with("cd -- "));
     }
 }
