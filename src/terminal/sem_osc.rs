@@ -59,14 +59,15 @@ impl ProgressReport {
     }
 }
 
-/// 当前目录汇报：OSC 7（`file://host/path`）与 OSC 9;9（裸路径）统一产物。
+/// 当前目录汇报：OSC 7（`file://host/path`）、OSC 9;9（裸路径）、
+/// OSC 1337 `CurrentDir=`（iTerm2，裸路径）统一产物。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CwdReport {
     pub path: String,
-    /// #401: OSC 7 载荷里的主机段（`file://host/path`），用于判断"是否同一台机器"
-    /// 再决定新标签/分屏能不能继承目录。OSC 9;9 不带主机 → `None`。
-    /// 解析层面只做净化不做语义判断：hostname 与配置里的地址字段本来就不保证一致
-    /// （域名 vs 短名 vs 大小写），比对由上层按宽松规则做。
+    /// #401: OSC 7 载荷里的主机段（`file://host/path`）。解析层面只做净化不做语义判断：
+    /// hostname 与配置里的地址字段本来就不保证一致（域名 vs 短名 vs 大小写）。
+    /// 继承判定实际用的是连接后探测到的身份（host + 登录名），这里只把字段留住，
+    /// 免得解析层丢信息。OSC 9;9 / 1337 不带主机 → `None`。
     pub host: Option<String>,
 }
 

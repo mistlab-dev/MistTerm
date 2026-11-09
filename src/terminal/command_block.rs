@@ -14,7 +14,9 @@
 //! | D | `OSC 133 ; D [; 退出码]` 或 `OSC 633 ; D [; 退出码]` | 命令结束 |
 //!
 //! 字母后的附加参数（iTerm `cl=` / `aid=` 等）忽略。`D` 的第一段十进制数记为退出码。
-//! 不认 OSC 1337（iTerm 专有属性）、OSC 133 ; P、标题 OSC 0/2。
+//! 命令块不认 OSC 1337（iTerm 专有属性），但它下面 `CurrentDir=` 这一种例外——
+//! #401 把它当目录汇报收进 `Cwd`，其余 1337 子类照旧透传。
+//! 标题 OSC 0/2 走 `Title`，`OSC 133 ; P` 不认。
 //!
 //! ## 块模型
 //!
@@ -656,6 +658,16 @@ fn parse_sem_osc(raw: &[u8]) -> Option<SplitItem> {
             payload: rest.to_string(),
             is_osc7: true,
         },
+        // #401：iTerm2 专有的 `1337;CurrentDir=/abs/path`。同一个 tag 下还有 SetMark、
+        // RemoteCommand 等语种，只认 CurrentDir，其余照旧透传。
+        "1337" => {
+            let dir = rest.trim().strip_prefix("CurrentDir=")?;
+            SplitItem::Cwd {
+                raw: raw.to_vec(),
+                payload: dir.to_string(),
+                is_osc7: false,
+            }
+        }
         "0" | "2" => SplitItem::Title {
             raw: raw.to_vec(),
             payload: rest.to_string(),
@@ -754,8 +766,21 @@ mod tests {
             other => panic!("expected Cwd, got {other:?}"),
         }
         out.clear();
-        splitter.push(b"\x1b]7;file://myhost/home/u\x07", &mut out);
+        // #401：iTerm2 的 CurrentDir 也当目录汇报收（裸路径，后续交给 parse_osc99）。
+        splitter.push(b"\x1b]1337;CurrentDir=/srv/app\x07", &mut out);
         match &out[0] {
+            SplitItem::Cwd { payload, is_osc7, .. } => {
+                assert_eq!(payload, "/srv/app");
+                assert!(!is_osc7);
+            }
+            other => panic!("expected Cwd(1337), got {other:?}"),
+        }
+        out.clear();
+        // 同一个 tag 下的其它子类不认，仍原样透传。
+        splitter.push(b"\x1b]1337;SetMark\x07", &mut out);
+        assert!(matches!(&out[0], SplitItem::Bytes(_)));
+        out.clear();
+        splitter.push(b"\x1b]7;file://myhost/home/u\x07", &mut out);        match &out[0] {
             SplitItem::Cwd { payload, is_osc7, .. } => {
                 assert_eq!(payload, "file://myhost/home/u");
                 assert!(*is_osc7);
@@ -779,7 +804,7 @@ mod tests {
         assert!(out.is_empty(), "序列未完不产出");
         splitter.push(b"\x07rest", &mut out);
         assert!(matches!(&out[0], SplitItem::Progress { payload, .. } if payload == "3"));
-        // 其它 OSC（如 52 剪贴板、1337）不受影响，仍走 Bytes。
+        // 其它 OSC（52 剪贴板、1337 的非 CurrentDir 子类）不受影响，仍走 Bytes。
         // （#392 合入后 OSC 0/2 归 Title 分支，「不受影响」例子须选语义外的编号。）
         let mut splitter = OscSplitter::default();
         let mut out = Vec::new();
