@@ -1,0 +1,47 @@
+name: Mirror Smoke Test
+
+on:
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    name: Smoke test MIST_DEPLOY_KEY rsync path
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check secret present
+        id: key
+        run: |
+          if [ -z "${{ secrets.MIST_DEPLOY_KEY }}" ]; then
+            echo "MISSING"
+            exit 1
+          fi
+          echo "secret present"
+      - name: Install key
+        env:
+          MIST_DEPLOY_KEY: ${{ secrets.MIST_DEPLOY_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$MIST_DEPLOY_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H 85.137.247.166 >> ~/.ssh/known_hosts 2>/dev/null
+      - name: Prepare test payload
+        run: |
+          mkdir -p smoke
+          echo "mirror smoke $(date -u +%Y-%m-%dT%H:%M:%SZ)" > smoke/probe.txt
+      - name: Rsync to mistlab.dev .smoke-test/
+        run: |
+          rsync -az -e "ssh -i ~/.ssh/id_ed25519" smoke/ \
+            mist-deploy@85.137.247.166:/var/www/mistlab/downloads/mistterm/.smoke-test/
+      - name: Verify public URL
+        run: |
+          sleep 2
+          body=$(curl -fsSL "https://mistlab.dev/downloads/mistterm/.smoke-test/probe.txt")
+          echo "probe body: $body"
+          case "$body" in *mirror\ smoke*) echo "VERIFY OK";; *) echo "VERIFY FAILED"; exit 1;; esac
+      - name: Cleanup
+        if: always()
+        run: |
+          mkdir -p empty
+          rsync -az --delete -e "ssh -i ~/.ssh/id_ed25519" empty/ \
+            mist-deploy@85.137.247.166:/var/www/mistlab/downloads/mistterm/.smoke-test/
+          echo "cleaned"
