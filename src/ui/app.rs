@@ -1024,6 +1024,8 @@ impl MistTermApp {
     fn new_terminal_view(&self) -> TerminalView {
         let mut terminal = TerminalView::new();
         terminal.set_font_size(self.terminal_font_size);
+        // #401 方案 B：连接后是否向远端 shell 注入目录上报钩子（偏好可关）。
+        terminal.set_shell_hook_enabled(self.app_settings.shell_integration_hook);
         // 与偏好开关、发送门闩、输出触发、display-link 共用同一 registry（#117 / #119 / #120 / #121）。
         // 关模块 = 之后各窗格都不再收到对应钩子。
         terminal.set_module_registry(std::sync::Arc::clone(&self.module_registry));
@@ -5041,8 +5043,26 @@ impl MistTermApp {
         let inherited_cd = self.pending_new_tab_cwd.take();
         // #392 复审：复用 TerminalView::arm_startup_directory——等 shell 提示符
         // 就绪才发 `cd -- '…'`（避免打进 MOTD/banner 输出流），与分屏继承同机制。
+        //
+        // #401 第 4 条：换会话继承时，源窗格和目标连接未必是同一台机器/同一个账号，
+        // 所以带上源窗格探到的远端身份，让新连接连上、探到自己的身份后再决定发不发。
+        // 源标签就是这条会话时不用比——目录本来就是它自己的。
+        let source = self
+            .active_tab
+            .and_then(|i| self.tabs.get(i))
+            .and_then(|t| t.panes.get(t.active_pane));
+        let same_session = source.map(|p| p.session_id == session.id).unwrap_or(false);
+        let origin = if same_session {
+            None
+        } else {
+            source.and_then(|p| p.terminal.remote_identity())
+        };
         if let Some(cwd) = inherited_cd.as_deref() {
-            terminal.arm_startup_directory(cwd);
+            if same_session {
+                terminal.arm_startup_directory(cwd);
+            } else {
+                terminal.arm_startup_directory_cross_session(cwd, origin);
+            }
         }
         self.tabs.push(TerminalTab::single(TerminalPane::new(
             session.id.clone(),

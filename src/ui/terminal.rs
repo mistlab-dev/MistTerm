@@ -362,6 +362,19 @@ pub enum ConnectionKind {
     Local,
 }
 
+/// 启动目录继承的可信度（#401 方案 C 第 4 条）。
+///
+/// 继承目录本质是"把 A 的 PWD 拿到 B 上去 cd"，所以要先回答 A 和 B 是不是同一台机器、
+/// 同一个账号。`session_id` 相等只说明用的是同一套连接配置，跨会话就失效了；
+/// 这里改用连接后探到的远端身份（host + 登录名）来判定。
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum StartupCdPolicy {
+    /// 同会话（重连、分屏）：目录本来就是这条连接自己的，直接发。
+    Unconditional,
+    /// 从别的会话继承：等本连接探到远端身份，一致才发；不一致或探不到就放弃。
+    Match(crate::terminal::shell_integration::RemoteIdentity),
+}
+
 /// 终端视图组件
 pub struct TerminalView {
     /// 会话 ID
@@ -515,6 +528,20 @@ pub struct TerminalView {
     shell_cwd: Option<String>,
     /// SSH 新窗格看到提示符后要执行的 `cd`（本机窗格直接以该目录启动，不走这里）。
     pending_startup_cd: Option<String>,
+    /// #401 方案 B：是否允许连接后注入目录上报钩子（偏好设置，默认开）。
+    shell_hook_enabled: bool,
+    /// 已探测到 shell 类型、等提示符就绪再发的注入命令。
+    pending_shell_hook: Option<String>,
+    /// shell 类型探测的异步回执（走 shell 泵线程的 exec 通道，不经过用户终端）。
+    shell_probe_rx: Option<std::sync::mpsc::Receiver<Result<String, String>>>,
+    /// 本次连接已排过探测，避免重连路径重复入队。
+    shell_probe_sent: bool,
+    /// 本连接探测到的远端身份（host + 登录名），用于跨会话继承判定。
+    remote_identity: Option<crate::terminal::shell_integration::RemoteIdentity>,
+    /// 待发启动 `cd` 的继承策略，与 `pending_startup_cd` 同生命周期。
+    startup_cd_policy: Option<StartupCdPolicy>,
+    /// 身份判定的截止时间：到点还没探到就放弃这次继承（宁可不 cd 也不猜）。
+    startup_cd_deadline: Option<Instant>,
     broadcast_targets: Vec<BroadcastTarget>,
     broadcast_suppress: bool,
     /// 进行中的发送序列标记。0 表示没有。用来在标签换位后仍只写这一个窗格。
@@ -1134,6 +1161,13 @@ impl TerminalView {
             typed_line_buffer: String::new(),
             shell_cwd: None,
             pending_startup_cd: None,
+            shell_hook_enabled: true,
+            pending_shell_hook: None,
+            shell_probe_rx: None,
+            shell_probe_sent: false,
+            remote_identity: None,
+            startup_cd_policy: None,
+            startup_cd_deadline: None,
             broadcast_targets: Vec::new(),
             broadcast_suppress: false,
             replay_mark: 0,
@@ -1645,12 +1679,59 @@ impl TerminalView {
     }
 
     pub(crate) fn arm_startup_directory(&mut self, cwd: &str) {
+        self.arm_startup_directory_for(cwd, None);
+    }
+
+    /// #401：跨会话继承目录时带上源窗格的远端身份，等本连接探到身份再决定发不发。
+    ///
+    /// `origin = None` 表示"这条命令本来就是我自己的目录"（同会话重连、分屏），直接发。
+    pub(crate) fn arm_startup_directory_for(
+        &mut self,
+        cwd: &str,
+        origin: Option<crate::terminal::shell_integration::RemoteIdentity>,
+    ) {
         let cwd = cwd.trim();
         if cwd.is_empty() {
             return;
         }
         self.shell_cwd = Some(cwd.to_string());
         self.pending_startup_cd = Some(cwd.to_string());
+        self.startup_cd_policy = Some(match origin {
+            Some(o) => StartupCdPolicy::Match(o),
+            None => StartupCdPolicy::Unconditional,
+        });
+        // 身份探测走异步 exec，给它 6s；探不到就放弃这次继承。
+        self.startup_cd_deadline = Some(Instant::now() + Duration::from_secs(6));
+    }
+
+    /// #401：跨会话继承目录。源窗格的身份未知时干脆不继承——
+    /// 拿不到身份就无法确认目标机器/账号，硬 `cd` 过去只会换一种方式报错。
+    pub(crate) fn arm_startup_directory_cross_session(
+        &mut self,
+        cwd: &str,
+        origin: Option<crate::terminal::shell_integration::RemoteIdentity>,
+    ) {
+        let Some(origin) = origin else {
+            log::debug!("startup cd skipped: cross-session source identity unknown");
+            return;
+        };
+        self.arm_startup_directory_for(cwd, Some(origin));
+    }
+
+    /// 本连接探测到的远端身份（本机 shell 或探测未回时为 `None`）。
+    pub(crate) fn remote_identity(
+        &self,
+    ) -> Option<crate::terminal::shell_integration::RemoteIdentity> {
+        self.remote_identity.clone()
+    }
+
+    /// 丢掉这次待发的启动 `cd`：既清待发目标，也清掉可能不可信的目录缓存
+    /// （留着会让下一次继承把错路径再传播出去）。
+    fn drop_startup_cd(&mut self) {
+        self.pending_startup_cd = None;
+        self.startup_cd_policy = None;
+        self.startup_cd_deadline = None;
+        self.shell_cwd = None;
     }
 
     /// 尚未发出的启动 `cd` 目标目录（重连替换 TerminalView 时须搬运）。
@@ -1662,6 +1743,30 @@ impl TerminalView {
         if self.pending_startup_cd.is_none() {
             return;
         }
+        // #401 第 4 条：跨会话继承得先确认"同一台机器、同一个登录账号"，否则不搬。
+        // 同机不同账号硬搬会 cd 进对方无权访问的目录——那正是 #400 那类报错的来源。
+        if let Some(StartupCdPolicy::Match(expect)) = self.startup_cd_policy.as_ref() {
+            match self.remote_identity.as_ref() {
+                Some(actual) if actual == expect => {}
+                Some(_) => {
+                    log::debug!("startup cd dropped: identity mismatch");
+                    self.drop_startup_cd();
+                    return;
+                }
+                None => {
+                    // 还没探到：等。超过截止时间就放弃，宁可没有也不猜。
+                    let expired = self
+                        .startup_cd_deadline
+                        .map(|d| Instant::now() >= d)
+                        .unwrap_or(true);
+                    if expired {
+                        log::debug!("startup cd dropped: identity unknown");
+                        self.drop_startup_cd();
+                    }
+                    return;
+                }
+            }
+        }
         let line = self.terminal.cursor_line_text();
         if !prompt_ready_for_cd(&line) {
             return;
@@ -1669,6 +1774,8 @@ impl TerminalView {
         let Some(path) = self.pending_startup_cd.take() else {
             return;
         };
+        self.startup_cd_policy = None;
+        self.startup_cd_deadline = None;
         let bytes = startup_cd_payload(&path);
         self.broadcast_suppress = true;
         if let Err(e) = self.send_pty_input(&bytes) {
@@ -1677,10 +1784,96 @@ impl TerminalView {
         self.broadcast_suppress = false;
     }
 
-    fn note_cwd_from_screen(&mut self) {
-        if let Some(cwd) = parse_prompt_cwd(&self.terminal.cursor_line_text()) {
-            self.shell_cwd = Some(cwd);
+    /// #401 方案 B：偏好开关，连接前由宿主按 `AppSettings` 写入。
+    pub fn set_shell_hook_enabled(&mut self, on: bool) {
+        self.shell_hook_enabled = on;
+    }
+
+    /// 连接成功后向 shell 泵线程排一次探测：登录 shell 类型 + 远端身份。
+    ///
+    /// 走 exec 通道意味着输出**不经过用户终端**，用户看不到探测过程；
+    /// 探测失败（关掉了 exec、ForceCommand、非 POSIX shell）直接静默放弃，
+    /// 退化到"只听 OSC 7"的被动模式，不影响任何已有功能。
+    ///
+    /// 注意这里**不**看 `shell_hook_enabled`：身份探测还给跨会话继承判定用，
+    /// 关掉注入钩子的人一样需要它——否则新标签会照着旧目录乱 `cd`。
+    fn start_shell_hook_probe(&mut self) {
+        if self.shell_probe_sent || self.is_local_shell() {
+            return;
         }
+        let Some(handle) = self.ssh_handle.as_ref() else {
+            return;
+        };
+        match handle.enqueue_remote_exec(crate::terminal::shell_integration::detect_command()) {
+            Ok(rx) => {
+                self.shell_probe_rx = Some(rx);
+                self.shell_probe_sent = true;
+            }
+            Err(e) => {
+                // 队列满/泵已停：这不是错误路径，只是这次没探到，下一帧不再重试（避免刷屏）。
+                log::debug!("shell integration probe skipped: {e}");
+            }
+        }
+    }
+
+    /// 非阻塞取探测结果：填远端身份（继承判定用），顺带备好注入命令（受偏好开关控制）。
+    fn poll_shell_hook_probe(&mut self) {
+        let Some(rx) = self.shell_probe_rx.as_ref() else {
+            return;
+        };
+        use std::sync::mpsc::TryRecvError;
+        match rx.try_recv() {
+            Ok(Ok(out)) => {
+                self.shell_probe_rx = None;
+                let probe = crate::terminal::shell_integration::parse_probe_output(&out);
+                // 身份探测是终端自己的事（跨会话继承要不要 cd），与注入开关无关：
+                // 关掉注入的用户也需要"别 cd 错目录"这层保护。
+                self.remote_identity = probe.identity;
+                if self.shell_hook_enabled {
+                    match crate::terminal::shell_integration::injection_command(probe.shell) {
+                        Some(cmd) => self.pending_shell_hook = Some(cmd.to_string()),
+                        None => {
+                            log::debug!("shell integration: {:?} 不支持，跳过注入", probe.shell)
+                        }
+                    }
+                }
+            }
+            Ok(Err(e)) => {
+                self.shell_probe_rx = None;
+                log::debug!("shell integration probe failed: {e}");
+            }
+            Err(TryRecvError::Empty) => {}
+            Err(TryRecvError::Disconnected) => {
+                self.shell_probe_rx = None;
+            }
+        }
+    }
+
+    /// 等提示符就绪再注入，避免命令被打进 MOTD / banner 输出流里。
+    ///
+    /// 与 `maybe_send_startup_cd` 共用同一判据；注入排在 `cd` 之前（两条命令同帧发出，
+    /// shell 按顺序执行，所以目录继承时钩子已经生效）。
+    fn maybe_send_shell_hook(&mut self) {
+        if self.pending_shell_hook.is_none() {
+            return;
+        }
+        if !self.connected || !self.has_pty_writer() {
+            return;
+        }
+        if !prompt_ready_for_cd(&self.terminal.cursor_line_text()) {
+            return;
+        }
+        let Some(cmd) = self.pending_shell_hook.take() else {
+            return;
+        };
+        let mut bytes = cmd.into_bytes();
+        bytes.push(b'\n');
+        self.broadcast_suppress = true;
+        if let Err(e) = self.send_pty_input(&bytes) {
+            log::debug!("shell integration inject: {e}");
+        }
+        self.broadcast_suppress = false;
+        log::debug!("shell integration hook injected");
     }
 
     fn note_typed_cd(&mut self, line: &str) {
@@ -1792,6 +1985,13 @@ impl TerminalView {
                 self.agent_audit_degraded = false;
                 self.agent_audit_banner_dismissed = false;
                 self.connection_target = Some((username.to_string(), host.to_string()));
+                // #401：新连接重新探测 shell（换机器/换账号都可能有另一种 shell）。
+                self.shell_probe_sent = false;
+                self.shell_probe_rx = None;
+                self.pending_shell_hook = None;
+                self.remote_identity = None;
+                self.startup_cd_policy = None;
+                self.startup_cd_deadline = None;
             }
             Err(e) => {
                 let msg = format_ssh_connect_error(
@@ -1818,6 +2018,13 @@ impl TerminalView {
             crate::local_shell::spawn_local_shell_in(self.cols, self.rows, &dir)?;
         self.shell_cwd = Some(cwd_text);
         self.pending_startup_cd = None;
+        // #401：本机 shell 不走注入（PowerShell/ConPTY 的 prompt 由本进程控制）。
+        self.shell_probe_sent = false;
+        self.shell_probe_rx = None;
+        self.pending_shell_hook = None;
+        self.remote_identity = None;
+        self.startup_cd_policy = None;
+        self.startup_cd_deadline = None;
         self.buffer_input_while_disconnected = false;
         self.disconnected_input_buffer.clear();
         self.resend_offline_input_dialog_open = false;
@@ -3309,7 +3516,10 @@ impl TerminalView {
                             self.dispatch_output_to_modules(&display_data);
                             self.terminal.feed(&display_data);
                             vte_dirty = true;
-                            self.note_cwd_from_screen();
+                            // #401：目录只认 shell 主动上报（OSC 7/9;9）与用户敲的 cd，
+                            // 不再从提示符文本反推——PS1 拆路径是 #396/#400 的坑源。
+                            self.poll_shell_hook_probe();
+                            self.maybe_send_shell_hook();
                             self.maybe_send_startup_cd();
                         }
                     }
@@ -3349,6 +3559,9 @@ impl TerminalView {
                                                 self.pending_post_connect_command = Some(cmd);
                                             }
                                         }
+                                        // #401 方案 B：shell 已起来，排一次类型探测。
+                                        // 连服务器装了 integration 也可能没装，主动补一份。
+                                        self.start_shell_hook_probe();
                                     }
                                     Err(e) => {
                                         let msg = format_ssh_connect_error(
@@ -5297,6 +5510,14 @@ impl TerminalView {
         self.resend_offline_input_dialog_open = false;
         // #177：断线丢弃未执行的恢复命令，避免旧命令跨会话泄漏
         self.pending_post_connect_command = None;
+        // #401：断线丢弃未注入的钩子与探测回执；shell_probe_sent 复位，
+        // 重连后要重新探测（新会话可能是另一台机器/另一种 shell）。
+        self.pending_shell_hook = None;
+        self.shell_probe_rx = None;
+        self.shell_probe_sent = false;
+        self.remote_identity = None;
+        self.startup_cd_policy = None;
+        self.startup_cd_deadline = None;
         self.post_connect_fire_at = None;
     }
 
@@ -5670,53 +5891,9 @@ fn prompt_ready_for_cd(line: &str) -> bool {
         || t.ends_with('>')
 }
 
-/// 从常见提示符里取出当前目录。认不出来就返回 `None`。
-fn parse_prompt_cwd(line: &str) -> Option<String> {
-    let t = line.trim();
-    if let Some(rest) = t.strip_prefix("PS ") {
-        let path = rest.trim().trim_end_matches('>').trim();
-        if looks_like_dir(path) {
-            return Some(path.to_string());
-        }
-    }
-    if t.ends_with('>') {
-        let path = t.trim_end_matches('>').trim();
-        if looks_like_dir(path) {
-            return Some(path.to_string());
-        }
-        if let Some(path) = last_path_token(path) {
-            return Some(path);
-        }
-    }
-    if t.ends_with('$') || t.ends_with('#') || t.ends_with('%') {
-        let body = t
-            .trim_end_matches(|c| c == '$' || c == '#' || c == '%' || c == ' ')
-            .trim();
-        if let Some(idx) = body.rfind(':') {
-            let path = body[idx + 1..].trim();
-            if path.starts_with('/') || path.starts_with('~') {
-                return Some(path.to_string());
-            }
-        }
-        // macOS zsh 常见 `user@host ~/src %`，Linux 自定义提示符也可能不带冒号。
-        if let Some(path) = last_path_token(body) {
-            return Some(path);
-        }
-    }
-    None
-}
-
-fn last_path_token(body: &str) -> Option<String> {
-    body.split_whitespace()
-        .rev()
-        .find(|token| looks_like_dir(token))
-        .map(|token| token.to_string())
-}
-
-fn looks_like_dir(path: &str) -> bool {
-    looks_like_win_path(path) || path.starts_with('/') || path.starts_with('~')
-}
-
+/// #401：PS1 文本反推目录的路径已整体废弃（`parse_prompt_cwd` 删除）。
+/// 目录来源只剩两条：shell 主动上报的 OSC 7/9;9，以及用户手敲 `cd` 的命令语义解析
+/// （`apply_cd_line`，精确命令而非猜字符串）。
 fn looks_like_win_path(path: &str) -> bool {
     let b = path.as_bytes();
     b.len() >= 3 && b[1] == b':' && (b[2] == b'\\' || b[2] == b'/')
@@ -6394,32 +6571,7 @@ mod selection_extend_tests {
 
 #[cfg(test)]
 mod cwd_tests {
-    use super::{apply_cd_line, join_dir, parse_prompt_cwd, startup_cd_payload};
-
-    #[test]
-    fn prompt_paths() {
-        assert_eq!(
-            parse_prompt_cwd("PS C:\\Users\\Admin>"),
-            Some("C:\\Users\\Admin".into())
-        );
-        assert_eq!(
-            parse_prompt_cwd("admin@host:~/src$"),
-            Some("~/src".into())
-        );
-        assert_eq!(
-            parse_prompt_cwd("admin@MacBook-Pro ~/src %"),
-            Some("~/src".into())
-        );
-        assert_eq!(
-            parse_prompt_cwd("root@debian:/var/log#"),
-            Some("/var/log".into())
-        );
-        assert_eq!(
-            parse_prompt_cwd("alice@host ~/work>"),
-            Some("~/work".into())
-        );
-        assert_eq!(parse_prompt_cwd("echo hello"), None);
-    }
+    use super::{apply_cd_line, join_dir, startup_cd_payload};
 
     #[test]
     fn cd_joins_relative_and_parent() {

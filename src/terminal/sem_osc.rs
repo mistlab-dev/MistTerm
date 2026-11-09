@@ -59,22 +59,35 @@ impl ProgressReport {
     }
 }
 
-/// 当前目录汇报：OSC 7（`file://host/path`）与 OSC 9;9（裸路径）统一产物。
+/// 当前目录汇报：OSC 7（`file://host/path`）、OSC 9;9（裸路径）、
+/// OSC 1337 `CurrentDir=`（iTerm2，裸路径）统一产物。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CwdReport {
     pub path: String,
+    /// #401: OSC 7 载荷里的主机段（`file://host/path`）。解析层面只做净化不做语义判断：
+    /// hostname 与配置里的地址字段本来就不保证一致（域名 vs 短名 vs 大小写）。
+    /// 继承判定实际用的是连接后探测到的身份（host + 登录名），这里只把字段留住，
+    /// 免得解析层丢信息。OSC 9;9 / 1337 不带主机 → `None`。
+    pub host: Option<String>,
 }
 
-/// OSC 7 载荷（如 `file://myhost/home/u` 或 `file:///home/u`）→ 路径。
-/// hostname 与本端/远端未必一致，一律以路径为准（spec 宽容处理）。
+/// OSC 7 载荷（如 `file://myhost/home/u` 或 `file:///home/u`）→ 路径 + 主机名。
 pub fn parse_osc7(payload: &str) -> Option<CwdReport> {
     let rest = payload.strip_prefix("file://")?;
-    // file://host/path → 去掉 host 段；file:///path → host 为空。
-    let path = match rest.split_once('/') {
-        Some((_host, path)) => format!("/{path}"),
+    // file://host/path → 主机段 + 路径；file:///path → 主机为空。
+    let (host, path) = match rest.split_once('/') {
+        Some((host, path)) => (host, format!("/{path}")),
         None => return None,
     };
-    sanitize(percent_decode(&path))
+    let path = sanitize(percent_decode(&path))?;
+    // #401: 主机段仅作继承判定参考，坏值退化为 None 而不是整条拒绝——
+    // 路径本身仍然可用，丢掉一条 cwd 汇报对用户毫无收益。
+    let host = if host.is_empty() || host.chars().any(char::is_control) {
+        None
+    } else {
+        Some(host.to_string())
+    };
+    Some(CwdReport { path, host })
 }
 
 /// OSC 9;9 载荷是裸路径（可能有引号包裹）。
@@ -83,15 +96,18 @@ pub fn parse_osc99(payload: &str) -> Option<CwdReport> {
         .strip_prefix('"')
         .and_then(|s| s.strip_suffix('"'))
         .unwrap_or(payload);
-    sanitize(payload.to_string())
+    Some(CwdReport {
+        path: sanitize(payload.to_string())?,
+        host: None,
+    })
 }
 
-fn sanitize(path: String) -> Option<CwdReport> {
+fn sanitize(path: String) -> Option<String> {
     // 复审软注：与标题同口径，拒一切控制字符（不只 \0）。
     if !path.starts_with('/') || path.chars().any(char::is_control) {
         return None;
     }
-    Some(CwdReport { path })
+    Some(path)
 }
 
 /// #392 软注：OSC 7 载荷做百分号解码（`%20` 等）——常见空格目录原样失败。
@@ -161,10 +177,22 @@ mod tests {
     fn osc7_variants() {
         let got = parse_osc7("file://myhost/home/u/proj").unwrap();
         assert_eq!(got.path, "/home/u/proj");
+        assert_eq!(got.host.as_deref(), Some("myhost"), "主机段要留下来给继承判定");
         let got = parse_osc7("file:///home/u").unwrap();
         assert_eq!(got.path, "/home/u");
+        assert_eq!(got.host, None, "file:///path 形式没有主机名");
         assert!(parse_osc7("not-a-file-url").is_none());
         assert!(parse_osc7("file://hostonly").is_none(), "无路径段拒绝");
+    }
+
+    #[test]
+    fn cwd_host_is_optional_not_fatal() {
+        // 主机段含控制字符：路径照收，主机名丢弃（不因参考信息不合规就丢整条 cwd）。
+        let got = parse_osc7("file://bad\u{7}host/home/u").unwrap();
+        assert_eq!(got.path, "/home/u");
+        assert_eq!(got.host, None);
+        // OSC 9;9 裸路径永远没有主机名。
+        assert_eq!(parse_osc99("/var/log").unwrap().host, None);
     }
 
     #[test]

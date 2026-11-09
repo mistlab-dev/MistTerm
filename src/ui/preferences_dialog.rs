@@ -784,6 +784,29 @@ impl MistTermApp {
                     let _ = self.app_settings.save();
                 }
                 Self::preferences_row_divider(ui, theme);
+                // #401 方案 B：连接后向远端 shell 注入目录上报钩子。
+                let mut shell_hook = self.app_settings.shell_integration_hook;
+                if crate::ui::chrome::form_checkbox(
+                    ui,
+                    theme,
+                    &mut shell_hook,
+                    crate::i18n::tr(
+                        ctx,
+                        "Install directory-reporting hook on connect",
+                        "连接后注入目录上报钩子",
+                    ),
+                )
+                .on_hover_text(crate::i18n::tr(
+                    ctx,
+                    "Sends one short line to the remote shell so it reports its working directory (OSC 7) — only needed when the server has no shell integration installed. Touches the current session only: nothing is written to disk and it disappears on disconnect. Applies to new connections.",
+                    "连上后向远端 shell 发一行钩子，让它主动上报当前目录（OSC 7）——只有服务器没装 shell integration 时才用得上。仅改当前会话，不写服务器文件，断开即失效；对新建立的连接生效。",
+                ))
+                .changed()
+                {
+                    self.app_settings.shell_integration_hook = shell_hook;
+                    let _ = self.app_settings.save();
+                }
+                Self::preferences_row_divider(ui, theme);
                 let mut ar = self.auto_reconnect_enabled;
                 if crate::ui::chrome::form_checkbox(
                     ui,

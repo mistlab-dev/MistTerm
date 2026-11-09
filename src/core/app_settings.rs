@@ -55,6 +55,13 @@ pub struct AppSettings {
     /// 关闭后标签只显示会话名（09fb707 行为）；侧栏始终显示 host/port 不受影响。
     #[serde(default = "default_true")]
     pub tab_label_show_host: bool,
+    /// #401 方案 B：连接成功后向远端 shell 注入目录上报钩子（OSC 7），默认开。
+    ///
+    /// 只在 SSH 会话生效、只改当前会话的 shell 变量（不落盘、断开即失效），
+    /// 且幂等——即同一会话反复重连也只挂一份钩子。关闭后只保留被动监听，
+    /// 服务器没装 shell integration 时新标签不再继承目录。
+    #[serde(default = "default_true")]
+    pub shell_integration_hook: bool,
     /// #251：监控告警推送（声音 / 系统通知 / 仅面板）。
     #[serde(default)]
     pub monitor_alert: MonitorAlertSettings,
@@ -82,6 +89,7 @@ impl Default for AppSettings {
             rules_intro_dismissed: false,
             sftp_drag_hint_dismissed: false,
             tab_label_show_host: true,
+            shell_integration_hook: true,
             monitor_alert: MonitorAlertSettings::default(),
         }
     }
