@@ -914,17 +914,66 @@ jobs:
           fail_on_unmatched_files: true
           body_path: ${{ steps.body.outputs.path }}
 
-  # 镜像文件的 rsync 还没做。清单里的下载地址已经指向 mistlab.dev（镜像优先）。
-  # MIST_MIRROR_ENABLED=true 时这个 job 会跑，但只打印 notice，不以失败结束，避免把 tag 发版标红。
-  # TODO(Tian)：配好只能写 /var/www/mistlab/downloads/mistterm/ 的部署密钥后，在这里实现 rsync
-  # （先传安装包，再传 latest.json / .minisig，保证用户永远看不到「清单已更新、文件还没到」）。
+  # 镜像同步到 mistlab.dev（#398）。
+  # 安全模型：仓库 Secret MIST_DEPLOY_KEY 是一把只在生产机 authorized_keys 里被
+  # command= 锁定到 /usr/local/bin/mist-deploy-verify.sh 的专用 ed25519 key——
+  # 只能对 /var/www/mistlab/downloads/mistterm* 做 rsync --server，登不了 shell。
+  # 顺序（workflow 注释既有约定）：先安装包、后 latest.json/.minisig，
+  # 保证用户永远看不到「清单已更新、文件还没到」。
+  # MIST_MIRROR_ENABLED=true 时执行；缺失 Secret 时只降级为 notice，不把发版标红。
   mirror:
-    name: Mirror to mistlab.dev (notice only)
+    name: Mirror to mistlab.dev
     needs: release
     if: startsWith(github.ref, 'refs/tags/v') && vars.MIST_MIRROR_ENABLED == 'true'
     runs-on: ubuntu-24.04
     steps:
-      - name: Skip until rsync upload exists
+      - name: Check deploy key present
+        id: key
         run: |
-          echo "::notice title=Mirror upload not implemented::rsync to mistlab.dev is not implemented yet. latest.json already lists https://mistlab.dev/downloads/mistterm/ before GitHub. This job does not fail the release. See docs/release/AUTO_UPDATE.md."
-          exit 0
+          if [ -z "${{ secrets.MIST_DEPLOY_KEY }}" ]; then
+            echo "::notice title=Mirror skipped::MIST_DEPLOY_KEY secret not set. Upload assets to mistlab.dev manually. See docs/release/AUTO_UPDATE.md."
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Download release assets
+        if: steps.key.outputs.present == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ github.ref_name }}
+        run: |
+          mkdir -p dist
+          gh release download "$VERSION" --repo "$GITHUB_REPOSITORY" --dir dist
+          ls -la dist
+      - name: Install deploy key
+        if: steps.key.outputs.present == 'true'
+        env:
+          MIST_DEPLOY_KEY: ${{ secrets.MIST_DEPLOY_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$MIST_DEPLOY_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H 85.137.247.166 >> ~/.ssh/known_hosts 2>/dev/null
+      - name: Rsync installers first (no manifest yet)
+        if: steps.key.outputs.present == 'true'
+        run: |
+          rsync -az --info=progress2 \
+            -e "ssh -i ~/.ssh/id_ed25519" \
+            dist/ \
+            mist-deploy@85.137.247.166:/var/www/mistlab/downloads/mistterm/v${GITHUB_REF_NAME#v}/
+      - name: Rsync manifest last (flip stable pointer)
+        if: steps.key.outputs.present == 'true'
+        run: |
+          rsync -az --info=progress2 \
+            -e "ssh -i ~/.ssh/id_ed25519" \
+            dist/latest.json dist/latest.json.minisig \
+            mist-deploy@85.137.247.166:/var/www/mistlab/downloads/mistterm/stable/
+      - name: Verify public manifest
+        if: steps.key.outputs.present == 'true'
+        run: |
+          sleep 3
+          got=$(curl -fsSL "https://mistlab.dev/downloads/mistterm/stable/latest.json" | grep -o '"version": *"[^"]*"' | head -1)
+          echo "public manifest: $got (expect ${{ github.ref_name }})"
+          echo "$got" | grep -q "${GITHUB_REF_NAME#v}" || {
+            echo "::warning::public manifest does not reflect ${GITHUB_REF_NAME} yet (CDN cache?)"
+          }
