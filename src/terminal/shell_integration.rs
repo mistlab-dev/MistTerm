@@ -16,12 +16,31 @@
 //! 输出不经用户终端，用户看不到探测过程。
 
 /// 远端交互 shell 的类型。只覆盖能稳定注入的三种；其余一律 `Unknown` = 不注入。
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ShellKind {
     Bash,
     Zsh,
     Fish,
+    #[default]
     Unknown,
+}
+
+/// 远端身份：`host` 与 OSC 7 载荷里的是同一个值（系统 nodename），`user` 是登录名。
+///
+/// 用途只有一处：判断"源窗格报的目录，搬到这条新连接上还站不站得住"。主机名相同但
+/// 登录用户不同时不能搬——那多半会 `cd` 进对方无权访问的目录（#400 那类报错）。
+/// 所以这里坚持 `host + user` 一起比，而不是 issue 原本写的只比主机名。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RemoteIdentity {
+    pub host: String,
+    pub user: String,
+}
+
+/// 一次探测的完整结果：shell 类型 + 远端身份（身份可能缺失）。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ProbeResult {
+    pub shell: ShellKind,
+    pub identity: Option<RemoteIdentity>,
 }
 
 /// 钩子函数名，同时用作"是否已注入"的哨兵。
@@ -31,13 +50,20 @@ const HOOK_FN: &str = "__mist_cwd_report";
 
 /// 探测命令：跑在独立 exec 通道（无 TTY），输出对用户不可见。
 ///
-/// 取 `/etc/passwd` 里的登录 shell —— sshd 就是按这个字段启动交互 shell 的，比 `$SHELL`
-/// 更接近真相（`$SHELL` 在非登录环境里可能为空或仍是旧值）。
-/// 用 `awk` 读本地文件而不是 `getent`：LDAP/NIS 环境下 `getent` 可能卡在网络上，
-/// 而这条命令跑在 shell 泵线程里、期间 PTY 读写是暂停的，不能赌它多快。
-/// 读不到（NIS/LDAP 账户不在本地 passwd）再回落 `$SHELL`。
+/// 一行拿三样东西：登录 shell、登录名、主机名。
+///
+/// - 登录 shell 取 `/etc/passwd` 里的字段 —— sshd 就是按它启动交互 shell 的，比 `$SHELL`
+///   更接近真相（`$SHELL` 在非登录环境里可能为空或仍是旧值）。用 `awk` 读本地文件而不是
+///   `getent`：LDAP/NIS 环境下 `getent` 可能卡在网络上，而这条命令跑在 shell 泵线程里、
+///   期间 PTY 读写是暂停的，不能赌它多快。读不到再回落 `$SHELL`。
+/// - 主机名用 `${HOSTNAME:-$(uname -n)}`，与注入钩子里上报的值保持同一个来源，
+///   否则判定时会拿两个拼写不同的名字互相比。
 pub fn detect_command() -> &'static str {
-    r#"p=$(awk -F: -v u="$(id -un)" '$1==u{print $7; exit}' /etc/passwd 2>/dev/null); [ -n "$p" ] || p=${SHELL:-}; printf '%s' "$p""#
+    concat!(
+        r#"p=$(awk -F: -v u="$(id -un)" '$1==u{print $7; exit}' /etc/passwd 2>/dev/null); "#,
+        r#"[ -n "$p" ] || p=${SHELL:-}; "#,
+        r#"printf 'shell=%s\nuser=%s\nhost=%s\n' "$p" "$(id -un)" "${HOSTNAME:-$(uname -n 2>/dev/null)}""#
+    )
 }
 
 /// `/bin/bash`、`/usr/local/bin/zsh` → 对应类型；`sh`/`dash`/`tcsh`/空 → `Unknown`。
@@ -51,16 +77,42 @@ pub fn kind_from_path(path: &str) -> ShellKind {
     }
 }
 
-/// 从探测命令的原始输出（可能带尾随换行/空白）解析出类型。
+/// 解析探测命令的输出（`shell=` / `user=` / `host=` 三行，顺序无关）。
+///
+/// 兼容只有一行路径的老格式：那种情况按最后一条非空行当 shell 路径。
+pub fn parse_probe_output(raw: &str) -> ProbeResult {
+    let mut shell_path = String::new();
+    let mut user = String::new();
+    let mut host = String::new();
+    for line in raw.lines().map(str::trim) {
+        if let Some(v) = line.strip_prefix("shell=") {
+            shell_path = v.trim().to_string();
+        } else if let Some(v) = line.strip_prefix("user=") {
+            user = v.trim().to_string();
+        } else if let Some(v) = line.strip_prefix("host=") {
+            host = v.trim().to_string();
+        }
+    }
+    if shell_path.is_empty() {
+        // exec 通道里可能先冒出一行诊断噪音（awk: not found），取最后一条非空行最稳。
+        if let Some(last) = raw.lines().map(str::trim).filter(|l| !l.is_empty()).next_back() {
+            shell_path = last.to_string();
+        }
+    }
+    let identity = if user.is_empty() || host.is_empty() {
+        None
+    } else {
+        Some(RemoteIdentity { host, user })
+    };
+    ProbeResult {
+        shell: kind_from_path(&shell_path),
+        identity,
+    }
+}
+
+/// 旧签名保留：只要 shell 类型。
 pub fn kind_from_probe_output(raw: &str) -> ShellKind {
-    // exec 通道输出多行时取最后一条非空行：getent 失败时的诊断噪音不影响判定。
-    let last = raw
-        .lines()
-        .map(str::trim)
-        .filter(|l| !l.is_empty())
-        .next_back()
-        .unwrap_or("");
-    kind_from_path(last)
+    parse_probe_output(raw).shell
 }
 
 /// 该类型对应的注入命令（单行，调用方负责补 `\n` 触发执行）。
@@ -132,6 +184,52 @@ mod tests {
     }
 
     #[test]
+    fn probe_parses_shell_and_identity() {
+        let raw = "shell=/usr/bin/zsh\nuser=deploy\nhost=opencloudos\n";
+        let pr = parse_probe_output(raw);
+        assert_eq!(pr.shell, ShellKind::Zsh);
+        assert_eq!(
+            pr.identity,
+            Some(RemoteIdentity {
+                host: "opencloudos".into(),
+                user: "deploy".into()
+            })
+        );
+
+        // 顺序无关：探针输出被前置诊断噪音插队也照样认。
+        let raw = "awk: line 1\nhost=box\nuser=root\nshell=/bin/bash\n";
+        let pr = parse_probe_output(raw);
+        assert_eq!(pr.shell, ShellKind::Bash);
+        assert_eq!(pr.identity.unwrap().user, "root");
+
+        // 身份缺一半就当没有：只有 host 不足以判断该不该继承目录。
+        assert!(parse_probe_output("shell=/bin/bash\nhost=box\n").identity.is_none());
+        assert!(parse_probe_output("shell=/bin/bash\nuser=root\n").identity.is_none());
+        assert!(parse_probe_output("").identity.is_none());
+    }
+
+    #[test]
+    fn identity_compares_host_and_user() {
+        // 同机不同账号不能算同一身份——继承过去会 cd 进无权目录。
+        let a = RemoteIdentity {
+            host: "box".into(),
+            user: "alice".into(),
+        };
+        let b = RemoteIdentity {
+            host: "box".into(),
+            user: "bob".into(),
+        };
+        assert_ne!(a, b);
+        assert_eq!(
+            a,
+            RemoteIdentity {
+                host: "box".into(),
+                user: "alice".into()
+            }
+        );
+    }
+
+    #[test]
     fn unknown_shell_never_injects() {
         assert!(injection_command(ShellKind::Unknown).is_none());
         assert!(injection_command(ShellKind::Bash).is_some());
@@ -188,6 +286,11 @@ mod tests {
         let cmd = detect_command();
         assert!(cmd.contains("/etc/passwd"), "优先读本地 passwd，不依赖可能卡网络的 getent");
         assert!(cmd.contains("${SHELL:-}"), "读不到时回落 $SHELL");
+        assert!(
+            cmd.contains(r#"${HOSTNAME:-$(uname -n"#),
+            "主机名要和钩子上报的取值同源，否则身份永远比不上"
+        );
+        assert!(cmd.contains("user=") && cmd.contains("host="), "要一并带出身份");
         assert!(!cmd.contains('\n'), "探测命令也走单行");
     }
 }

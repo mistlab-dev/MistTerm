@@ -362,6 +362,19 @@ pub enum ConnectionKind {
     Local,
 }
 
+/// 启动目录继承的可信度（#401 方案 C 第 4 条）。
+///
+/// 继承目录本质是"把 A 的 PWD 拿到 B 上去 cd"，所以要先回答 A 和 B 是不是同一台机器、
+/// 同一个账号。`session_id` 相等只说明用的是同一套连接配置，跨会话就失效了；
+/// 这里改用连接后探到的远端身份（host + 登录名）来判定。
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum StartupCdPolicy {
+    /// 同会话（重连、分屏）：目录本来就是这条连接自己的，直接发。
+    Unconditional,
+    /// 从别的会话继承：等本连接探到远端身份，一致才发；不一致或探不到就放弃。
+    Match(crate::terminal::shell_integration::RemoteIdentity),
+}
+
 /// 终端视图组件
 pub struct TerminalView {
     /// 会话 ID
@@ -519,6 +532,12 @@ pub struct TerminalView {
     shell_probe_rx: Option<std::sync::mpsc::Receiver<Result<String, String>>>,
     /// 本次连接已排过探测，避免重连路径重复入队。
     shell_probe_sent: bool,
+    /// 本连接探测到的远端身份（host + 登录名），用于跨会话继承判定。
+    remote_identity: Option<crate::terminal::shell_integration::RemoteIdentity>,
+    /// 待发启动 `cd` 的继承策略，与 `pending_startup_cd` 同生命周期。
+    startup_cd_policy: Option<StartupCdPolicy>,
+    /// 身份判定的截止时间：到点还没探到就放弃这次继承（宁可不 cd 也不猜）。
+    startup_cd_deadline: Option<Instant>,
     broadcast_targets: Vec<BroadcastTarget>,
     broadcast_suppress: bool,
     /// 进行中的发送序列标记。0 表示没有。用来在标签换位后仍只写这一个窗格。
@@ -1140,6 +1159,9 @@ impl TerminalView {
             pending_shell_hook: None,
             shell_probe_rx: None,
             shell_probe_sent: false,
+            remote_identity: None,
+            startup_cd_policy: None,
+            startup_cd_deadline: None,
             broadcast_targets: Vec::new(),
             broadcast_suppress: false,
             replay_mark: 0,
@@ -1651,12 +1673,59 @@ impl TerminalView {
     }
 
     pub(crate) fn arm_startup_directory(&mut self, cwd: &str) {
+        self.arm_startup_directory_for(cwd, None);
+    }
+
+    /// #401：跨会话继承目录时带上源窗格的远端身份，等本连接探到身份再决定发不发。
+    ///
+    /// `origin = None` 表示"这条命令本来就是我自己的目录"（同会话重连、分屏），直接发。
+    pub(crate) fn arm_startup_directory_for(
+        &mut self,
+        cwd: &str,
+        origin: Option<crate::terminal::shell_integration::RemoteIdentity>,
+    ) {
         let cwd = cwd.trim();
         if cwd.is_empty() {
             return;
         }
         self.shell_cwd = Some(cwd.to_string());
         self.pending_startup_cd = Some(cwd.to_string());
+        self.startup_cd_policy = Some(match origin {
+            Some(o) => StartupCdPolicy::Match(o),
+            None => StartupCdPolicy::Unconditional,
+        });
+        // 身份探测走异步 exec，给它 6s；探不到就放弃这次继承。
+        self.startup_cd_deadline = Some(Instant::now() + Duration::from_secs(6));
+    }
+
+    /// #401：跨会话继承目录。源窗格的身份未知时干脆不继承——
+    /// 拿不到身份就无法确认目标机器/账号，硬 `cd` 过去只会换一种方式报错。
+    pub(crate) fn arm_startup_directory_cross_session(
+        &mut self,
+        cwd: &str,
+        origin: Option<crate::terminal::shell_integration::RemoteIdentity>,
+    ) {
+        let Some(origin) = origin else {
+            log::debug!("startup cd skipped: cross-session source identity unknown");
+            return;
+        };
+        self.arm_startup_directory_for(cwd, Some(origin));
+    }
+
+    /// 本连接探测到的远端身份（本机 shell 或探测未回时为 `None`）。
+    pub(crate) fn remote_identity(
+        &self,
+    ) -> Option<crate::terminal::shell_integration::RemoteIdentity> {
+        self.remote_identity.clone()
+    }
+
+    /// 丢掉这次待发的启动 `cd`：既清待发目标，也清掉可能不可信的目录缓存
+    /// （留着会让下一次继承把错路径再传播出去）。
+    fn drop_startup_cd(&mut self) {
+        self.pending_startup_cd = None;
+        self.startup_cd_policy = None;
+        self.startup_cd_deadline = None;
+        self.shell_cwd = None;
     }
 
     /// 尚未发出的启动 `cd` 目标目录（重连替换 TerminalView 时须搬运）。
@@ -1668,6 +1737,30 @@ impl TerminalView {
         if self.pending_startup_cd.is_none() {
             return;
         }
+        // #401 第 4 条：跨会话继承得先确认"同一台机器、同一个登录账号"，否则不搬。
+        // 同机不同账号硬搬会 cd 进对方无权访问的目录——那正是 #400 那类报错的来源。
+        if let Some(StartupCdPolicy::Match(expect)) = self.startup_cd_policy.as_ref() {
+            match self.remote_identity.as_ref() {
+                Some(actual) if actual == expect => {}
+                Some(_) => {
+                    log::debug!("startup cd dropped: identity mismatch");
+                    self.drop_startup_cd();
+                    return;
+                }
+                None => {
+                    // 还没探到：等。超过截止时间就放弃，宁可没有也不猜。
+                    let expired = self
+                        .startup_cd_deadline
+                        .map(|d| Instant::now() >= d)
+                        .unwrap_or(true);
+                    if expired {
+                        log::debug!("startup cd dropped: identity unknown");
+                        self.drop_startup_cd();
+                    }
+                    return;
+                }
+            }
+        }
         let line = self.terminal.cursor_line_text();
         if !prompt_ready_for_cd(&line) {
             return;
@@ -1675,6 +1768,8 @@ impl TerminalView {
         let Some(path) = self.pending_startup_cd.take() else {
             return;
         };
+        self.startup_cd_policy = None;
+        self.startup_cd_deadline = None;
         let bytes = startup_cd_payload(&path);
         self.broadcast_suppress = true;
         if let Err(e) = self.send_pty_input(&bytes) {
@@ -1688,13 +1783,16 @@ impl TerminalView {
         self.shell_hook_enabled = on;
     }
 
-    /// 连接成功后向 shell 泵线程排一次 shell 类型探测。
+    /// 连接成功后向 shell 泵线程排一次探测：登录 shell 类型 + 远端身份。
     ///
     /// 走 exec 通道意味着输出**不经过用户终端**，用户看不到探测过程；
     /// 探测失败（关掉了 exec、ForceCommand、非 POSIX shell）直接静默放弃，
     /// 退化到"只听 OSC 7"的被动模式，不影响任何已有功能。
+    ///
+    /// 注意这里**不**看 `shell_hook_enabled`：身份探测还给跨会话继承判定用，
+    /// 关掉注入钩子的人一样需要它——否则新标签会照着旧目录乱 `cd`。
     fn start_shell_hook_probe(&mut self) {
-        if !self.shell_hook_enabled || self.shell_probe_sent || self.is_local_shell() {
+        if self.shell_probe_sent || self.is_local_shell() {
             return;
         }
         let Some(handle) = self.ssh_handle.as_ref() else {
@@ -1712,7 +1810,7 @@ impl TerminalView {
         }
     }
 
-    /// 非阻塞取探测结果，命中就备好注入命令。
+    /// 非阻塞取探测结果：填远端身份（继承判定用），顺带备好注入命令（受偏好开关控制）。
     fn poll_shell_hook_probe(&mut self) {
         let Some(rx) = self.shell_probe_rx.as_ref() else {
             return;
@@ -1721,10 +1819,17 @@ impl TerminalView {
         match rx.try_recv() {
             Ok(Ok(out)) => {
                 self.shell_probe_rx = None;
-                let kind = crate::terminal::shell_integration::kind_from_probe_output(&out);
-                match crate::terminal::shell_integration::injection_command(kind) {
-                    Some(cmd) => self.pending_shell_hook = Some(cmd.to_string()),
-                    None => log::debug!("shell integration: unsupported shell {:?}, skip", kind),
+                let probe = crate::terminal::shell_integration::parse_probe_output(&out);
+                // 身份探测是终端自己的事（跨会话继承要不要 cd），与注入开关无关：
+                // 关掉注入的用户也需要"别 cd 错目录"这层保护。
+                self.remote_identity = probe.identity;
+                if self.shell_hook_enabled {
+                    match crate::terminal::shell_integration::injection_command(probe.shell) {
+                        Some(cmd) => self.pending_shell_hook = Some(cmd.to_string()),
+                        None => {
+                            log::debug!("shell integration: {:?} 不支持，跳过注入", probe.shell)
+                        }
+                    }
                 }
             }
             Ok(Err(e)) => {
@@ -1878,6 +1983,9 @@ impl TerminalView {
                 self.shell_probe_sent = false;
                 self.shell_probe_rx = None;
                 self.pending_shell_hook = None;
+                self.remote_identity = None;
+                self.startup_cd_policy = None;
+                self.startup_cd_deadline = None;
             }
             Err(e) => {
                 let msg = format_ssh_connect_error(
@@ -1908,6 +2016,9 @@ impl TerminalView {
         self.shell_probe_sent = false;
         self.shell_probe_rx = None;
         self.pending_shell_hook = None;
+        self.remote_identity = None;
+        self.startup_cd_policy = None;
+        self.startup_cd_deadline = None;
         self.buffer_input_while_disconnected = false;
         self.disconnected_input_buffer.clear();
         self.resend_offline_input_dialog_open = false;
@@ -5361,6 +5472,9 @@ impl TerminalView {
         self.pending_shell_hook = None;
         self.shell_probe_rx = None;
         self.shell_probe_sent = false;
+        self.remote_identity = None;
+        self.startup_cd_policy = None;
+        self.startup_cd_deadline = None;
         self.post_connect_fire_at = None;
     }
 
