@@ -53,6 +53,10 @@ jobs:
         shell: bash
         run: python3 scripts/measure-linux-gui-archive.py --self-test
 
+      - name: Self-test release mirror planner
+        shell: bash
+        run: python3 scripts/sync-release-mirror.py --self-test
+
   # Linux、Windows、macOS arm64、macOS x86_64 并行。单元测试 + 集成测试仅在 Linux
   # （mold + 系统 OpenSSL，最快）；Windows / macOS 只 release 构建 + 打包，依赖 rust-cache。
   # macOS 不再打 universal（#127）：arm64 是主下载，x86_64 是可选下载。
@@ -914,66 +918,63 @@ jobs:
           fail_on_unmatched_files: true
           body_path: ${{ steps.body.outputs.path }}
 
-  # 镜像同步到 mistlab.dev（#398）。
-  # 安全模型：仓库 Secret MIST_DEPLOY_KEY 是一把只在生产机 authorized_keys 里被
-  # command= 锁定到 /usr/local/bin/mist-deploy-verify.sh 的专用 ed25519 key——
-  # 只能对 /var/www/mistlab/downloads/mistterm* 做 rsync --server，登不了 shell。
-  # 顺序（workflow 注释既有约定）：先安装包、后 latest.json/.minisig，
-  # 保证用户永远看不到「清单已更新、文件还没到」。
-  # MIST_MIRROR_ENABLED=true 时执行；缺失 Secret 时只降级为 notice，不把发版标红。
+  # 镜像同步到 mistlab.dev。推送 v* 标签才跑；发版 PR 合并本身不发布。
+  # 只有仓库变量 MIST_MIRROR_ENABLED 精确等于 false 时才跳过。密钥放在 release
+  # 环境（和 minisign 同一处）。不指定 environment 时，环境级密钥是空的，旧 job
+  # 还会把这种情况当成成功。缺密钥或同步失败必须让本 job 失败。
+  # 顺序在 scripts/sync-release-mirror.py：v<版本>/ 安装包 → 核对公网大小 →
+  # v<版本>/latest.json → 公网 stable 不比本版新时才写 stable/latest.json，
+  # 然后更新官网按钮用的 latest/ 别名。已发布且大小不一致的版本目录文件不覆盖。
   mirror:
     name: Mirror to mistlab.dev
     needs: release
-    if: startsWith(github.ref, 'refs/tags/v') && vars.MIST_MIRROR_ENABLED == 'true'
+    if: startsWith(github.ref, 'refs/tags/v') && vars.MIST_MIRROR_ENABLED != 'false'
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: release
+    permissions:
+      contents: read
     steps:
-      - name: Check deploy key present
-        id: key
-        run: |
-          if [ -z "${{ secrets.MIST_DEPLOY_KEY }}" ]; then
-            echo "::notice title=Mirror skipped::MIST_DEPLOY_KEY secret not set. Upload assets to mistlab.dev manually. See docs/release/AUTO_UPDATE.md."
-            echo "present=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "present=true" >> "$GITHUB_OUTPUT"
-          fi
-      - name: Download release assets
-        if: steps.key.outputs.present == 'true'
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install rsync and ssh
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends rsync openssh-client
+
+      - name: Download published release assets
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ github.ref_name }}
+        shell: bash
         run: |
-          mkdir -p dist
-          gh release download "$VERSION" --repo "$GITHUB_REPOSITORY" --dir dist
-          ls -la dist
-      - name: Install deploy key
-        if: steps.key.outputs.present == 'true'
+          set -euo pipefail
+          ok=0
+          for i in 1 2 3 4 5; do
+            rm -rf dist
+            mkdir -p dist
+            if gh release download "${GITHUB_REF_NAME}" --repo "$GITHUB_REPOSITORY" --dir dist; then
+              ok=1
+              break
+            fi
+            echo "release download failed (attempt ${i}); retrying"
+            sleep $((i * 5))
+          done
+          test "$ok" = 1
+          rm -f dist/latest.json.tc
+          find dist -type f -printf '%f\n' | sort
+
+      - name: Sync versioned installers, then stable manifest
         env:
           MIST_DEPLOY_KEY: ${{ secrets.MIST_DEPLOY_KEY }}
+          MIST_MIRROR_HOST: ${{ vars.MIST_MIRROR_HOST }}
+        shell: bash
         run: |
-          mkdir -p ~/.ssh
-          printf '%s\n' "$MIST_DEPLOY_KEY" > ~/.ssh/id_ed25519
-          chmod 600 ~/.ssh/id_ed25519
-          ssh-keyscan -H 85.137.247.166 >> ~/.ssh/known_hosts 2>/dev/null
-      - name: Rsync installers first (no manifest yet)
-        if: steps.key.outputs.present == 'true'
-        run: |
-          rsync -az --info=progress2 \
-            -e "ssh -i ~/.ssh/id_ed25519" \
-            dist/ \
-            mist-deploy@85.137.247.166:/var/www/mistlab/downloads/mistterm/v${GITHUB_REF_NAME#v}/
-      - name: Rsync manifest last (flip stable pointer)
-        if: steps.key.outputs.present == 'true'
-        run: |
-          rsync -az --info=progress2 \
-            -e "ssh -i ~/.ssh/id_ed25519" \
-            dist/latest.json dist/latest.json.minisig \
-            mist-deploy@85.137.247.166:/var/www/mistlab/downloads/mistterm/stable/
-      - name: Verify public manifest
-        if: steps.key.outputs.present == 'true'
-        run: |
-          sleep 3
-          got=$(curl -fsSL "https://mistlab.dev/downloads/mistterm/stable/latest.json" | grep -o '"version": *"[^"]*"' | head -1)
-          echo "public manifest: $got (expect ${{ github.ref_name }})"
-          echo "$got" | grep -q "${GITHUB_REF_NAME#v}" || {
-            echo "::warning::public manifest does not reflect ${GITHUB_REF_NAME} yet (CDN cache?)"
-          }
+          set -euo pipefail
+          args=(
+            python3 scripts/sync-release-mirror.py
+            --version "${GITHUB_REF_NAME#v}"
+            --dist dist
+          )
+          if [ -n "${MIST_MIRROR_HOST}" ]; then
+            args+=(--host "${MIST_MIRROR_HOST}")
+          fi
+          "${args[@]}"
