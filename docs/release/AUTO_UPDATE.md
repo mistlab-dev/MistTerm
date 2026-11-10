@@ -181,5 +181,5 @@ python3 scripts/sync-release-mirror.py --self-test   # 缺密钥 / 半包 / 重�
 
 - 改 Bundle ID（`com.mist.term` → 正式 ID）仍未做。macOS 一键更新按单架构更新包进行；universal 安装需要先手动换一次对应架构的 dmg。
 - Windows 安装包没有代码签名证书（未购买），SmartScreen 可能提示；静默安装路径未在真实 Windows 上跑过 CI 之外的测试。
-- 官网下载页的 HTML/JS **不在本仓库**（组织里也没有单独的网站仓库，页面在镜像主机上）。下载卡片上的版本文案和 LATEST 标记由 `download.js` 读 GitHub Releases API 更新，不靠这次同步。按钮的镜像地址写死为 `downloads/mistterm/latest/<文件名>`，所以 mirror job 会在 stable 更新之后把安装包拷到这个别名。`download.html` 里给 API 失败时用的 v1.3.14 回退链接仍要在服务器上改页面才会变，本仓库的发版流程改不到那份 HTML。
+- 官网在 `mistlab-dev/mist-website`。下载卡片的版本号和安装包链接以镜像上的 `downloads/mistterm/latest/latest.json` 为准（mirror job 在更新 stable 之后会写这个别名和清单）。GitHub Releases API 只用来补下载次数和更新说明。因此发版后一般不必再给官网开「对齐版本号」的 PR；页面里的静态文案只是无 JS 时的最后回退。macOS 清单项是自动更新用的 `*-update.tar.gz`，页面卡片仍应指向 `.dmg`。
 - 给已发布版本重签 `latest.json` 的 patch workflow 仍然只改 GitHub Release。镜像要跟着变时，在能读到 `release` 环境 `MIST_DEPLOY_KEY` 的地方跑 main 上的 `scripts/sync-release-mirror.py`。重跑旧标签的 Actions 不会用到后来合进 main 的脚本。
