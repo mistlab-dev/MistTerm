@@ -1,0 +1,31 @@
+name: Release mirror plan
+
+# 只跑镜像同步的计划自测：缺密钥、半包、重试和 stable 顺序。
+# 不连生产机，不上传，不需要 secrets。
+on:
+  pull_request:
+    paths:
+      - scripts/sync-release-mirror.py
+      - .github/workflows/build.yml
+      - .github/workflows/release-mirror-plan.yml
+      - docs/release/AUTO_UPDATE.md
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  plan:
+    name: Mirror plan self-test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Self-test mirror planner
+        run: python3 scripts/sync-release-mirror.py --self-test

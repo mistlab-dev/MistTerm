@@ -80,20 +80,24 @@
 ## 4. CI 流程（`.github/workflows/build.yml`）
 
 ```
-preflight（版本号一致性 + 清单脚本自测）
+preflight（版本号一致性 + 清单脚本自测 + 镜像同步计划自测）
   → platform ×4（Linux、Windows、macOS arm64、macOS x86_64；正式构建会检查公钥）
   + cli-linux ×2（命令行静态版 x86_64 / aarch64：确认是静态程序，六个发行版冒烟测试，打包）
   → manifest（生成 SHA256SUMS + latest.json，不需要任何密钥）
   → sign（environment: release；**无人工审批**；用 MINISIGN_SECRET_KEY 签名，再用仓库公钥验一遍）
   → release（一次性发布全部文件，含 latest.json 和签名）
-  → mirror（rsync 仍未实现；`MIST_MIRROR_ENABLED != 'true'` 时跳过。设为 `true` 也只打印 notice 并成功结束，不把 tag 发版标红）
+  → mirror（environment: release；先同步 v<版本>/ 安装包并核对公网大小，再放该目录的 latest.json，
+     最后才更新 stable/latest.json 和官网按钮用的 latest/ 别名）
 ```
 
-- 触发条件没变：只有推 `v*` 标签或手动触发才运行；合并 PR **不会**发版。手动触发会跑 manifest 当作检查
-  （版本号取 Cargo.toml，产物只留在这次运行里），**不会**进入 sign/release。
-- 推 `v*` 标签后 sign → release **自动跑完**，无需在 Actions 里点批准。
-- manifest job **始终**写入镜像优先的安装包地址，不看 `MIST_MIRROR_ENABLED` / `MIST_MIRROR_BASE_URL`。
-- 签名 job 只签两个小文件，私钥写到临时文件、用完即删，从不打印。
+- 支持的发布触发是：**在 main 上的提交打 `v*` 标签并推送**。合并发版 PR 只把版本号带进 main，**不会**自动打标签，也不会发版。手动触发（`workflow_dispatch`）会跑 manifest 当作检查（版本号取 Cargo.toml，产物只留在这次运行里），**不会**进入 sign / release / mirror。
+- 推 `v*` 标签后 sign → release → mirror **自动跑完**，无需在 Actions 里点批准。`release` 环境没有 Required reviewers。
+- mirror 默认会跑。只有仓库变量 `MIST_MIRROR_ENABLED` **精确等于** `false` 时才跳过。不要再把它设成必须等于 `true`：v1.3.14 和 v1.3.15 的 mirror job 就是因为不等于 `true` 被整段跳过。
+- 缺 `MIST_DEPLOY_KEY`、安装包不齐、公网大小对不上、或 stable 在同步途中被更新的版本抢走时，mirror job **失败**。GitHub Release 已经发出，但这次 Actions 运行是红的，方便补跑。旧实现在密钥为空时只打 notice 并以成功结束。
+- 重跑同一个标签是幂等的：公网文件大小已经一致的安装包不会重传。已经公开、且大小和这次构建不一致的 `v<版本>/` 文件**不会被覆盖**，job 会失败并停下，避免把已发布的版本目录改掉。公网 `stable/latest.json` 比这个标签新时，只补这个标签自己目录里缺的文件，**不会**把 stable 或官网 `latest/` 退回旧版。
+- manifest job **始终**写入镜像优先的安装包地址，不看 `MIST_MIRROR_ENABLED`。
+- 签名和镜像用的私钥都只写到临时文件、用完即删，从不打印。镜像 job 通过环境变量读密钥，不把密钥写进 `if` 脚本。
+- `Release mirror plan`（`.github/workflows/release-mirror-plan.yml`）在改到同步脚本或 `build.yml` 的 PR 上跑计划自测，不连生产机。
 - `Update E2E` 工作流（`.github/workflows/update-e2e.yml`）：PR 修改更新相关代码时在 Linux 上跑离线端到端测试；
   Windows 版只能手动触发（勾选 `windows`）。两者都只有只读权限，不发布任何东西。
 
@@ -110,8 +114,9 @@ preflight（版本号一致性 + 清单脚本自测）
    - `MINISIGN_SECRET_KEY`：`mistterm-primary.key` 的完整内容
    - `MINISIGN_PASSWORD`：主钥密码
 6. 镜像下载目录已在用（`/var/www/mistlab/downloads/mistterm/`）。清单里的安装包地址已经是镜像在前、GitHub 在后。
-   `mirror` job 的 rsync 还没写：把 `MIST_MIRROR_ENABLED` 设为 `true` 不会让发版失败，也不会自动把文件传到服务器。
-   发版后仍需把安装包放到该目录，再放 `latest.json` / `.minisig`（先文件、后清单）。
+   在 `release` 环境（不是只放在仓库级、也不要只放在没指定 environment 的 workflow 里）添加 secret：
+   - `MIST_DEPLOY_KEY`：生产机 `mist-deploy` 的现有专用私钥。公钥仍由 `command=` 限制成只能 `rsync` 到 `mistterm*` 目录。不要换钥匙，不要把私钥写进仓库或日志。
+   可选仓库变量 `MIST_MIRROR_HOST`：不设时用 workflow 里现有的镜像主机。`MIST_MIRROR_ENABLED=false` 是紧急开关。
    nginx 不要让 SPA 回退把缺失文件变成首页 HTML；不存在的路径应返回 404。
 
 ## 6. 发版步骤
@@ -120,13 +125,15 @@ preflight（版本号一致性 + 清单脚本自测）
 2. **写** `docs/release/notes/v<版本>.zh.md` / `.en.md`（人话短句；规则见 `docs/release/notes/README.md`）。
    CI 会同时写入 `latest.json` notes，并嵌进 GitHub Release body 开头（`## 更新内容` / `## What's New`），
    供 mistlab.dev 下载页「更新日志」读取；不要只靠自动 `## What's Changed`。
-3. 合并到 main，打标签 `v<版本>` 推送。
-4. 等待 Actions 自动完成 sign + GitHub Release（无需人工批准）。
-5. 发布后核对：
+3. 合并到 main。这一步还不发布。
+4. 在 main 的这个提交上打标签 `v<版本>` 并推送。CI 会拒绝不在 `origin/main` 上的标签。
+5. 等待 Actions 自动完成 sign、GitHub Release 和 mirror（无需人工批准）。mirror 成功后才算镜像同步完成；失败就重跑该 workflow，不要手工先改 `stable/latest.json`。
+6. 发布后核对：
    - `curl -sL https://github.com/mistlab-dev/MistTerm/releases/latest/download/latest.json`，
      各平台 `urls` 第一项是 `https://mistlab.dev/downloads/mistterm/v<版本>/…`，第二项是 GitHub。
    - Release body 含 `## 更新内容` 与 `## What's New`（再是 Downloads，再是自动 What’s Changed）。
-   - 镜像上的 `stable/latest.json` 已换成这份清单（客户端先读镜像）。
+   - 镜像上的 `stable/latest.json` 已换成这份清单（客户端先读镜像），并且 `v<版本>/` 里的安装包大小和清单一致。
+   - 官网下载按钮用的 `https://mistlab.dev/downloads/mistterm/latest/<文件名>` 已是这一版（mirror 在更新 stable 之后才会写这个别名）。
    - 旧版本运行 `mist update --check` 应提示新版本。
 
 ### 给已发布版本补写镜像地址
@@ -146,8 +153,9 @@ workflow 使用 `release` 环境的 `MINISIGN_SECRET_KEY` / `MINISIGN_PASSWORD`�
 需要把 `main`（或你选择的 ref）加进允许列表，否则读不到签名密钥。
 
 这个 workflow **只更新 GitHub Release**。客户端先请求
-`https://mistlab.dev/downloads/mistterm/stable/latest.json`。镜像上的 `stable/latest.json`、
-`v<版本>/latest.json` 以及对应的 `.minisig` 要另行换成刚签过的文件，国内客户端才会改从镜像下载安装包。
+`https://mistlab.dev/downloads/mistterm/stable/latest.json`。要让镜像跟上刚签过的文件，用 **main 上**
+的 `scripts/sync-release-mirror.py` 再同步一次（它会先核对安装包，再换 `v<版本>/` 和 `stable/` 的清单）。
+不要重跑旧标签上的 Build & Test：那个 workflow 文件停在打标签时的提交，不会带上后来的镜像脚本。
 
 ## 7. 本地测试
 
@@ -157,6 +165,7 @@ python3 scripts/update-e2e/run_e2e.py             # 离线端到端（构建 1.9
 python3 scripts/update-e2e/run_e2e.py --no-gui    # 跳过 Xvfb 下的 GUI 检查
 python3 scripts/update-e2e/run_e2e.py --static-cli  # 命令行静态版（需要 cargo-zigbuild + musl target）
 python3 scripts/gen-update-manifest.py --self-test
+python3 scripts/sync-release-mirror.py --self-test   # 缺密钥 / 半包 / 重试 / stable 顺序，不上传
 ```
 
 测试专用环境变量（只在 `--features update-test` 构建里生效）：`MIST_UPDATE_MANIFEST_URL`（逗号分隔，可用
@@ -166,4 +175,5 @@ python3 scripts/gen-update-manifest.py --self-test
 
 - 改 Bundle ID（`com.mist.term` → 正式 ID）仍未做。macOS 一键更新按单架构更新包进行；universal 安装需要先手动换一次对应架构的 dmg。
 - Windows 安装包没有代码签名证书（未购买），SmartScreen 可能提示；静默安装路径未在真实 Windows 上跑过 CI 之外的测试。
-- 镜像 rsync 仍未接入 CI（见第 5 节第 6 条）。新发版的清单已经是镜像优先；已发布的版本用上面的 patch workflow 重签 GitHub Release 上的 `latest.json`，再把同一对文件同步到 mistlab。
+- 官网下载页的 HTML/JS **不在本仓库**（组织里也没有单独的网站仓库，页面在镜像主机上）。下载卡片上的版本文案和 LATEST 标记由 `download.js` 读 GitHub Releases API 更新，不靠这次同步。按钮的镜像地址写死为 `downloads/mistterm/latest/<文件名>`，所以 mirror job 会在 stable 更新之后把安装包拷到这个别名。`download.html` 里给 API 失败时用的 v1.3.14 回退链接仍要在服务器上改页面才会变，本仓库的发版流程改不到那份 HTML。
+- 给已发布版本重签 `latest.json` 的 patch workflow 仍然只改 GitHub Release。镜像要跟着变时，在能读到 `release` 环境 `MIST_DEPLOY_KEY` 的地方跑 main 上的 `scripts/sync-release-mirror.py`。重跑旧标签的 Actions 不会用到后来合进 main 的脚本。
