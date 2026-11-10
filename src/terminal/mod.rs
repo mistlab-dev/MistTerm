@@ -6,6 +6,7 @@ pub mod paste;
 pub mod program_status;
 pub mod sem_osc;
 pub mod shell_integration;
+pub mod startup;
 pub mod style;
 
 pub use alacritty::{BlockNav, CopyBlock, NavDir, SearchHit, Terminal, ViewportCursor};

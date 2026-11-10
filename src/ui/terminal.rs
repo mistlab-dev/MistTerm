@@ -530,10 +530,20 @@ pub struct TerminalView {
     pending_startup_cd: Option<String>,
     /// #401 方案 B：是否允许连接后注入目录上报钩子（偏好设置，默认开）。
     shell_hook_enabled: bool,
-    /// 已探测到 shell 类型、等提示符就绪再发的注入命令。
-    pending_shell_hook: Option<String>,
-    /// #410：注入后的精确回显抑制窗口（剥掉 PTY 对钩子/自动 cd 的行回显）。
+    /// #410：注入后的精确回显抑制窗口（剥掉 PTY 对钩子/自动 cd 的线性回显）。
     echo_suppressor: crate::terminal::shell_integration::EchoSuppressor,
+    /// 注入窗口内的折行重绘兜底（zsh ZLE 的 `\r<` 等）。
+    hook_echo_guard: crate::terminal::startup::HookEchoGuard,
+    /// 本会话 cwd OSC 扫描（跨 chunk）。
+    cwd_osc_scanner: crate::terminal::startup::CwdOscScanner,
+    /// 每个窗格的启动状态机（探测 / 等 OSC / 注入 / cd / Ready）。
+    startup: crate::terminal::startup::StartupController,
+    /// 为 true 时 `send_pty_input` 不进启动按键队列（钩子、自动 cd、冲刷队列）。
+    startup_input_bypass: bool,
+    /// 注入期间远端 PTY 被临时加宽；UI 侧的 resize 只记目标，不立刻发。
+    startup_hold_remote_size: bool,
+    /// 重连成功后若有离线缓冲，等启动完成再弹出「是否重发」。
+    defer_resend_offline_dialog: bool,
     /// shell 类型探测的异步回执（走 shell 泵线程的 exec 通道，不经过用户终端）。
     shell_probe_rx: Option<std::sync::mpsc::Receiver<Result<String, String>>>,
     /// 本次连接已排过探测，避免重连路径重复入队。
@@ -1164,8 +1174,13 @@ impl TerminalView {
             shell_cwd: None,
             pending_startup_cd: None,
             shell_hook_enabled: true,
-            pending_shell_hook: None,
             echo_suppressor: crate::terminal::shell_integration::EchoSuppressor::new(),
+            hook_echo_guard: crate::terminal::startup::HookEchoGuard::new(),
+            cwd_osc_scanner: crate::terminal::startup::CwdOscScanner::new(),
+            startup: crate::terminal::startup::StartupController::new(),
+            startup_input_bypass: false,
+            startup_hold_remote_size: false,
+            defer_resend_offline_dialog: false,
             shell_probe_rx: None,
             shell_probe_sent: false,
             remote_identity: None,
@@ -1573,6 +1588,16 @@ impl TerminalView {
     }
 
     fn send_pty_input(&mut self, data: &[u8]) -> Result<(), String> {
+        if !self.startup_input_bypass && self.startup.queues_user_input() {
+            if let Some(bytes) = self.startup.push_user_input(data) {
+                self.startup_input_bypass = true;
+                let result = self.send_pty_input(&bytes);
+                self.startup_input_bypass = false;
+                self.advance_startup();
+                return result;
+            }
+            return Ok(());
+        }
         let __t0 = std::time::Instant::now();
         if !data.is_empty() {
             // 键入时清选区，避免拖选灰底残留盖住新输出(对标 Windows Terminal)。
@@ -1699,6 +1724,7 @@ impl TerminalView {
         }
         self.shell_cwd = Some(cwd.to_string());
         self.pending_startup_cd = Some(cwd.to_string());
+        self.startup.set_cd_pending(true);
         self.startup_cd_policy = Some(match origin {
             Some(o) => StartupCdPolicy::Match(o),
             None => StartupCdPolicy::Unconditional,
@@ -1735,6 +1761,7 @@ impl TerminalView {
         self.startup_cd_policy = None;
         self.startup_cd_deadline = None;
         self.shell_cwd = None;
+        self.startup.set_cd_pending(false);
     }
 
     /// 尚未发出的启动 `cd` 目标目录（重连替换 TerminalView 时须搬运）。
@@ -1770,32 +1797,38 @@ impl TerminalView {
                 }
             }
         }
-        let line = self.terminal.cursor_line_text();
-        if !prompt_ready_for_cd(&line) {
-            return;
-        }
         let Some(path) = self.pending_startup_cd.take() else {
+            self.startup.set_cd_pending(false);
             return;
         };
         self.startup_cd_policy = None;
         self.startup_cd_deadline = None;
         let bytes = startup_cd_payload(&path);
+        self.startup_input_bypass = true;
         self.broadcast_suppress = true;
         let sent = self.send_pty_input(&bytes);
         self.broadcast_suppress = false;
+        self.startup_input_bypass = false;
         if let Err(e) = &sent {
             log::debug!("startup cd: {e}");
+            self.startup.set_cd_pending(false);
             return;
         }
-        // #410：同帧 hook 后的自动 cd 也会回显一行，追加进抑制队列；
-        // 窗口已关（hook 回显极快剥完）时对 cd 单独开一个窗口。
+        // 同帧 hook 后的自动 cd 也会回显一行，追加进抑制队列。
         // 用户手敲的 cd 不经过此处。
         self.echo_suppressor.begin(&bytes);
+        self.hook_echo_guard.begin(
+            &bytes,
+            Instant::now(),
+            crate::terminal::shell_integration::ECHO_SUPPRESS_WINDOW,
+        );
+        self.startup.set_cd_pending(false);
     }
 
     /// #401 方案 B：偏好开关，连接前由宿主按 `AppSettings` 写入。
     pub fn set_shell_hook_enabled(&mut self, on: bool) {
         self.shell_hook_enabled = on;
+        self.startup.set_hook_enabled(on);
     }
 
     /// 连接成功后向 shell 泵线程排一次探测：登录 shell 类型 + 远端身份。
@@ -1838,56 +1871,144 @@ impl TerminalView {
                 // 身份探测是终端自己的事（跨会话继承要不要 cd），与注入开关无关：
                 // 关掉注入的用户也需要"别 cd 错目录"这层保护。
                 self.remote_identity = probe.identity;
-                if self.shell_hook_enabled {
-                    match crate::terminal::shell_integration::injection_command(probe.shell) {
-                        Some(cmd) => self.pending_shell_hook = Some(cmd.to_string()),
-                        None => {
-                            log::debug!("shell integration: {:?} 不支持，跳过注入", probe.shell)
-                        }
-                    }
-                }
+                self.startup.on_probe(probe.shell, Instant::now());
             }
             Ok(Err(e)) => {
                 self.shell_probe_rx = None;
+                self.startup.on_probe_failed(Instant::now());
                 log::debug!("shell integration probe failed: {e}");
             }
             Err(TryRecvError::Empty) => {}
             Err(TryRecvError::Disconnected) => {
                 self.shell_probe_rx = None;
+                self.startup.on_probe_failed(Instant::now());
             }
         }
     }
 
-    /// 等提示符就绪再注入，避免命令被打进 MOTD / banner 输出流里。
-    ///
-    /// 与 `maybe_send_startup_cd` 共用同一判据；注入排在 `cd` 之前（两条命令同帧发出，
-    /// shell 按顺序执行，所以目录继承时钩子已经生效）。
-    fn maybe_send_shell_hook(&mut self) {
-        if self.pending_shell_hook.is_none() {
-            return;
+    fn reset_startup_state(&mut self) {
+        self.echo_suppressor.reset();
+        self.hook_echo_guard.reset();
+        self.cwd_osc_scanner.reset();
+        self.startup.reset();
+        self.startup.set_hook_enabled(self.shell_hook_enabled);
+        self.startup.set_current_cols(self.cols as u16);
+        if self.pending_startup_cd.is_some() {
+            self.startup.set_cd_pending(true);
         }
+        self.startup_input_bypass = false;
+        self.startup_hold_remote_size = false;
+        self.defer_resend_offline_dialog = false;
+        self.shell_probe_rx = None;
+        self.shell_probe_sent = false;
+    }
+
+    fn filter_startup_echo(&mut self, data: Vec<u8>) -> Vec<u8> {
+        let now = Instant::now();
+        let mut data = if self.echo_suppressor.is_active() {
+            self.echo_suppressor.filter(&data, now)
+        } else {
+            data
+        };
+        self.hook_echo_guard.tick(now);
+        if self.hook_echo_guard.is_active() {
+            data = self.hook_echo_guard.filter(&data, now);
+        }
+        if self.cwd_osc_scanner.feed(&data) {
+            self.startup.on_cwd_osc();
+        }
+        data
+    }
+
+    fn widen_remote_pty(&mut self, cols: u16) {
+        self.startup_hold_remote_size = true;
+        if let Some(ref handle) = self.ssh_handle {
+            if let Err(e) = handle.resize_pty(cols as u32, self.rows) {
+                log::debug!("startup widen pty: {e}");
+            } else {
+                self.last_resize_sent = Some(Instant::now());
+            }
+        }
+    }
+
+    fn restore_remote_pty_size(&mut self) {
+        self.startup_hold_remote_size = false;
+        let (cols, rows) = self.pending_resize.unwrap_or((self.cols, self.rows));
+        self.pending_resize = None;
+        self.send_pty_resize_now(cols, rows);
+    }
+
+    fn send_startup_hook(&mut self, cmd: &str) {
         if !self.connected || !self.has_pty_writer() {
             return;
         }
-        if !prompt_ready_for_cd(&self.terminal.cursor_line_text()) {
-            return;
-        }
-        let Some(cmd) = self.pending_shell_hook.take() else {
-            return;
-        };
-        let mut bytes = cmd.into_bytes();
+        let mut bytes = cmd.as_bytes().to_vec();
         bytes.push(b'\n');
+        self.startup_input_bypass = true;
         self.broadcast_suppress = true;
         let sent = self.send_pty_input(&bytes);
         self.broadcast_suppress = false;
+        self.startup_input_bypass = false;
         if let Err(e) = &sent {
             log::debug!("shell integration inject: {e}");
-            // 发送失败就没有回显可剥，凭空开窗口反而会误吞后续输出。
             return;
         }
-        // #410：发送成功即开精确回显抑制窗口，剥掉 PTY 对这一行的回显。
+        let now = Instant::now();
+        let window = crate::terminal::shell_integration::ECHO_SUPPRESS_WINDOW;
         self.echo_suppressor.begin(&bytes);
+        self.hook_echo_guard.begin(&bytes, now, window);
         log::debug!("shell integration hook injected");
+    }
+
+    fn offer_deferred_resend_dialog(&mut self) {
+        if !self.defer_resend_offline_dialog {
+            return;
+        }
+        if !self.startup.is_complete() {
+            return;
+        }
+        self.defer_resend_offline_dialog = false;
+        if !self.disconnected_input_buffer.is_empty() && self.has_pty_writer() {
+            self.resend_offline_input_dialog_open = true;
+        }
+    }
+
+    fn advance_startup(&mut self) -> Option<std::time::Duration> {
+        if self.is_local_shell() {
+            return None;
+        }
+        let now = Instant::now();
+        self.startup.set_current_cols(self.cols as u16);
+        self.poll_shell_hook_probe();
+        self.startup
+            .on_cursor_line_at(&self.terminal.cursor_line_text(), now);
+        if matches!(
+            self.startup.phase(),
+            crate::terminal::startup::StartupPhase::AwaitingEcho
+        ) && !self.echo_suppressor.is_active()
+            && !self.hook_echo_guard.is_active()
+        {
+            self.startup.on_echo_finished();
+        }
+        use crate::terminal::startup::StartupAction;
+        for _ in 0..8 {
+            match self.startup.poll(now) {
+                StartupAction::None => break,
+                StartupAction::WidenPty { cols } => self.widen_remote_pty(cols),
+                StartupAction::InjectHook { command } => self.send_startup_hook(&command),
+                StartupAction::SendStartupCd => self.maybe_send_startup_cd(),
+                StartupAction::RestorePtySize => self.restore_remote_pty_size(),
+                StartupAction::FlushKeys { bytes } => {
+                    if !bytes.is_empty() {
+                        self.startup_input_bypass = true;
+                        let _ = self.send_pty_input(&bytes);
+                        self.startup_input_bypass = false;
+                    }
+                }
+            }
+        }
+        self.offer_deferred_resend_dialog();
+        self.startup.next_deadline(now)
     }
 
     fn note_typed_cd(&mut self, line: &str) {
@@ -1999,11 +2120,8 @@ impl TerminalView {
                 self.agent_audit_degraded = false;
                 self.agent_audit_banner_dismissed = false;
                 self.connection_target = Some((username.to_string(), host.to_string()));
-                // #401：新连接重新探测 shell（换机器/换账号都可能有另一种 shell）。
-                self.shell_probe_sent = false;
-                self.shell_probe_rx = None;
-                self.pending_shell_hook = None;
-                self.echo_suppressor.reset();
+                // 新连接重新走完整启动状态机（换机器/换账号都可能有另一种 shell）。
+                self.reset_startup_state();
                 self.remote_identity = None;
                 self.startup_cd_policy = None;
                 self.startup_cd_deadline = None;
@@ -2033,11 +2151,8 @@ impl TerminalView {
             crate::local_shell::spawn_local_shell_in(self.cols, self.rows, &dir)?;
         self.shell_cwd = Some(cwd_text);
         self.pending_startup_cd = None;
-        // #401：本机 shell 不走注入（PowerShell/ConPTY 的 prompt 由本进程控制）。
-        self.shell_probe_sent = false;
-        self.shell_probe_rx = None;
-        self.pending_shell_hook = None;
-        self.echo_suppressor.reset();
+        // 本机 shell 不走注入（PowerShell/ConPTY 的 prompt 由本进程控制）。
+        self.reset_startup_state();
         self.remote_identity = None;
         self.startup_cd_policy = None;
         self.startup_cd_deadline = None;
@@ -3197,6 +3312,9 @@ impl TerminalView {
             });
         self.render_resend_offline_dialog(ui.ctx(), theme);
         self.fire_post_connect_command(ui.ctx());
+        if let Some(dt) = self.startup.next_deadline(Instant::now()) {
+            ui.ctx().request_repaint_after(dt);
+        }
     }
 
     /// `viewport`：ScrollArea **内容区**(inner)的宽 × 可视区高度(与 `max_height(scroll_h)` 一致)，已不含 Frame inner_margin 与纵向滚动条占位。
@@ -3341,12 +3459,11 @@ impl TerminalView {
                     }
                 }
             }
-            // #410：空闲帧也要 tick——提示符先到、探测后到且后续无输出时，
-            // 不能等下一段输出才注入；超时时把暂存的候选残余冲进 VTE（可见）。
-            self.poll_shell_hook_probe();
-            self.maybe_send_shell_hook();
-            self.maybe_send_startup_cd();
+            // 空闲帧也要推进启动状态机，并 tick 回显窗口：
+            // 提示符先到、探测后到且后续无输出时，不能等下一段输出才注入；
+            // 超时时把暂存的候选残余冲进 VTE（可见）。
             if let Some(flushed) = self.echo_suppressor.tick(Instant::now()) {
+                let flushed = self.filter_startup_echo(flushed);
                 if !flushed.is_empty() {
                     self.pending_log_output.push(flushed.clone());
                     self.observe_interactive_output(&flushed);
@@ -3354,7 +3471,10 @@ impl TerminalView {
                     self.terminal.feed(&flushed);
                     vte_dirty = true;
                 }
+            } else {
+                self.hook_echo_guard.tick(Instant::now());
             }
+            self.advance_startup();
             for msg in batch {
                 match msg {
                     SshMessage::Output { data, .. } => {
@@ -3541,19 +3661,9 @@ impl TerminalView {
                             }
                         }
                         if !display_data.is_empty() {
-                            // #410：在进 VTE / 日志 / 模块分发之前先做精确回显抑制，
-                            // 只在 Injecting 窗口内剥掉与注入载荷精确匹配的回显前缀。
-                            // 直接覆盖外层 display_data，保证下面的 VTE / 日志 / 模块
-                            // 分发用的都是过滤后的字节（不能用内层同名变量遮蔽）。
-                            let filtered = if self.echo_suppressor.is_active() {
-                                self.echo_suppressor.filter(&display_data, Instant::now())
-                            } else {
-                                display_data
-                            };
-                            self.poll_shell_hook_probe();
-                            self.maybe_send_shell_hook();
-                            self.maybe_send_startup_cd();
-                            display_data = filtered;
+                            // 进 VTE / 日志 / 模块分发之前先过滤注入回显，
+                            // 再喂 VTE，最后推进启动状态机（这样本帧的 OSC / 提示符能立刻被看见）。
+                            display_data = self.filter_startup_echo(display_data);
                         }
                         if !display_data.is_empty() {
                             self.pending_log_output.push(display_data.clone());
@@ -3562,6 +3672,7 @@ impl TerminalView {
                             self.terminal.feed(&display_data);
                             vte_dirty = true;
                         }
+                        self.advance_startup();
                     }
                     SshMessage::Connected { .. } => {
                         if let Some((_, host)) = &self.connection_target {
@@ -3586,7 +3697,8 @@ impl TerminalView {
                                     Ok(handle) => {
                                         self.ssh_handle = Some(handle);
                                         if !self.disconnected_input_buffer.is_empty() {
-                                            self.resend_offline_input_dialog_open = true;
+                                            // 等启动状态机 Ready，避免离线缓冲和钩子交织。
+                                            self.defer_resend_offline_dialog = true;
                                         }
                                         // #177：连接/重连成功后排队恢复命令。
                                         // 延迟 ~600ms 等 shell 提示符就绪，避免命令
@@ -3599,9 +3711,16 @@ impl TerminalView {
                                                 self.pending_post_connect_command = Some(cmd);
                                             }
                                         }
-                                        // #401 方案 B：shell 已起来，排一次类型探测。
-                                        // 连服务器装了 integration 也可能没装，主动补一份。
+                                        // 交互壳已起来：启动状态机从头走，并排一次类型探测。
+                                        // 服务器已会自己上报时，短窗口内见到 OSC 就不再注入。
+                                        self.startup.on_shell_started(Instant::now());
+                                        if self.pending_startup_cd.is_some() {
+                                            self.startup.set_cd_pending(true);
+                                        }
                                         self.start_shell_hook_probe();
+                                        if self.shell_probe_rx.is_none() && !self.shell_probe_sent {
+                                            self.startup.on_probe_failed(Instant::now());
+                                        }
                                     }
                                     Err(e) => {
                                         let msg = format_ssh_connect_error(
@@ -3966,6 +4085,11 @@ impl TerminalView {
         };
         if Instant::now() < fire_at {
             ctx.request_repaint_after(Duration::from_millis(100));
+            return;
+        }
+        if !self.is_local_shell() && !self.startup.is_complete() {
+            // 启动未完成：保留命令，避免与钩子/自动 cd 交织。
+            ctx.request_repaint_after(Duration::from_millis(50));
             return;
         }
         self.post_connect_fire_at = None;
@@ -5468,6 +5592,11 @@ impl TerminalView {
     }
 
     fn send_pty_resize_now(&mut self, cols: u32, rows: u32) {
+        if self.startup_hold_remote_size && !self.is_local_shell() {
+            // 注入加宽窗口内：只记下 UI 目标尺寸，等 RestorePtySize 再发。
+            self.pending_resize = Some((cols, rows));
+            return;
+        }
         self.last_resize_sent = Some(std::time::Instant::now());
         if self.is_local_shell() {
             if let Some(ref handle) = self.local_handle {
@@ -5550,12 +5679,8 @@ impl TerminalView {
         self.resend_offline_input_dialog_open = false;
         // #177：断线丢弃未执行的恢复命令，避免旧命令跨会话泄漏
         self.pending_post_connect_command = None;
-        // #401：断线丢弃未注入的钩子与探测回执；shell_probe_sent 复位，
-        // 重连后要重新探测（新会话可能是另一台机器/另一种 shell）。
-        self.pending_shell_hook = None;
-        self.echo_suppressor.reset();
-        self.shell_probe_rx = None;
-        self.shell_probe_sent = false;
+        // 断线丢弃启动状态，重连必须重新走完整流程。
+        self.reset_startup_state();
         self.remote_identity = None;
         self.startup_cd_policy = None;
         self.startup_cd_deadline = None;
@@ -5601,6 +5726,7 @@ impl TerminalView {
         self.disconnect_input_toast_at = None;
         self.disconnect_input_toast_armed = false;
         self.resend_offline_input_dialog_open = false;
+        self.reset_startup_state();
         self.feed_ssh_disconnected_notice();
     }
 
@@ -5629,6 +5755,7 @@ impl TerminalView {
         self.connecting_fido2 = false;
         self.transfer_progress = None;
         self.transfer_outgoing = false;
+        self.reset_startup_state();
         self.feed_ssh_disconnected_notice();
     }
 
@@ -5918,18 +6045,6 @@ fn resolve_local_cwd(raw: Option<&str>) -> PathBuf {
         return home.join(rest);
     }
     PathBuf::from(raw)
-}
-
-fn prompt_ready_for_cd(line: &str) -> bool {
-    let t = line.trim();
-    if t.is_empty() {
-        return false;
-    }
-    t.starts_with("PS ")
-        || t.ends_with('$')
-        || t.ends_with('#')
-        || t.ends_with('%')
-        || t.ends_with('>')
 }
 
 /// #401：PS1 文本反推目录的路径已整体废弃（`parse_prompt_cwd` 删除）。
