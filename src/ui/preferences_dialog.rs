@@ -792,14 +792,14 @@ impl MistTermApp {
                     &mut shell_hook,
                     crate::i18n::tr(
                         ctx,
-                        "Install directory-reporting hook on connect",
-                        "连接后注入目录上报钩子",
+                        "Report the current directory after connecting",
+                        "连接后自动上报当前目录",
                     ),
                 )
                 .on_hover_text(crate::i18n::tr(
                     ctx,
-                    "Sends one short line to the remote shell so it reports its working directory (OSC 7) — only needed when the server has no shell integration installed. Touches the current session only: nothing is written to disk and it disappears on disconnect. Applies to new connections.",
-                    "连上后向远端 shell 发一行钩子，让它主动上报当前目录（OSC 7）——只有服务器没装 shell integration 时才用得上。仅改当前会话，不写服务器文件，断开即失效；对新建立的连接生效。",
+                    "If the server does not already report the current directory, MistTerm will do it for this session so new tabs and splits can follow the same folder. If the server already reports it, nothing extra is added. This applies only to newly opened connections, does not write files on the server, and ends when you disconnect.",
+                    "连上后，如果服务器还不会自己上报当前目录，就会在这一次连接里帮忙上报，方便新标签和分屏跟到同一个目录。服务器已经会自己上报的，不会再加一遍。只对之后新建立的连接生效，不会改服务器上的文件，断开就失效。",
                 ))
                 .changed()
                 {
