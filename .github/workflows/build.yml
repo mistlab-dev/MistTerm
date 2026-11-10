@@ -1,6 +1,9 @@
 name: Build & Test
 
 on:
+  # 人工推送的 v* 标签会走这里。tag-release.yml 用 GITHUB_TOKEN 打的标签
+  # 不会再触发 push，所以它会 workflow_dispatch 到这个标签 ref 上。
+  # 在 main 上手动 Run workflow 仍只是构建检查，不会签名或发布。
   push:
     tags: ['v*']
   workflow_dispatch:
@@ -56,6 +59,10 @@ jobs:
       - name: Self-test release mirror planner
         shell: bash
         run: python3 scripts/sync-release-mirror.py --self-test
+
+      - name: Self-test release tag planner
+        shell: bash
+        run: python3 scripts/plan-release-tag.py --self-test
 
   # Linux、Windows、macOS arm64、macOS x86_64 并行。单元测试 + 集成测试仅在 Linux
   # （mold + 系统 OpenSSL，最快）；Windows / macOS 只 release 构建 + 打包，依赖 rust-cache。
