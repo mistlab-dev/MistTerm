@@ -8,8 +8,8 @@ alwaysApply: true
 When the user asks to commit a release, bump version, create a tag, or publish GitHub Release:
 
 1. **Never tag a feature branch.** The release commit and `v*` tag must be on `main`.
-2. Merge or ensure all release changes are on `main` first (PR preferred).
-3. On `main`: bump `Cargo.toml` and `Info.plist`, commit (`chore: release vX.Y.Z`), tag, push `main` + tag.
-4. Do not push a release tag until `main` contains the release commit.
+2. Merge the release PR to `main`. That PR bumps `Cargo.toml` and `Info.plist` together, adds `docs/release/notes/vX.Y.Z.zh.md` and `.en.md`, and uses a final version newer than existing tags.
+3. `.github/workflows/tag-release.yml` tags that main commit and starts Build & Test. Do not create the tag by hand unless that workflow failed before the tag existed.
+4. Never move or delete an existing `v*` tag. A manually pushed tag on `main` still starts the same build.
 
 CI rejects releases whose tagged commit is not contained in `origin/main`.

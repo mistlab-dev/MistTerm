@@ -1,0 +1,116 @@
+name: Tag release
+
+# 发版 PR 合进 main 后自动打 vX.Y.Z，并启动 Build & Test。
+# 用 GITHUB_TOKEN 推送的标签不会再触发 on.push.tags（GitHub 防递归），
+# 所以打上标签后要用 workflow_dispatch 显式启动 build.yml。人工推送的
+# v* 标签仍走 build.yml 自己的 push 触发。已有标签绝不移动。
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: tag-release-main
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    name: Tag newer release on main
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Fetch release tags
+        run: git fetch origin '+refs/tags/v*:refs/tags/v*'
+
+      - name: Self-test release tag planner
+        run: python3 scripts/plan-release-tag.py --self-test
+
+      - name: Decide
+        id: plan
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          output="$(python3 scripts/plan-release-tag.py)"
+          code=$?
+          set -e
+          printf '%s\n' "$output"
+          if [ "$code" != 0 ]; then
+            exit "$code"
+          fi
+          action="$(printf '%s\n' "$output" | sed -n 's/^action=//p' | head -1)"
+          version="$(printf '%s\n' "$output" | sed -n 's/^version=//p' | head -1)"
+          tag="$(printf '%s\n' "$output" | sed -n 's/^tag=//p' | head -1)"
+          reason="$(printf '%s\n' "$output" | sed -n 's/^reason=//p' | head -1)"
+          if [ "$action" != create ] && [ "$action" != noop ] && [ "$action" != skip ]; then
+            echo "::error::unexpected planner action: ${action:-<empty>} ${reason}"
+            exit 1
+          fi
+          if [ "$action" = create ] || [ "$action" = noop ]; then
+            [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+            [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          fi
+          {
+            echo "action=${action}"
+            echo "version=${version}"
+            echo "tag=${tag}"
+            echo "reason=${reason}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create annotated tag
+        if: steps.plan.outputs.action == 'create'
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.plan.outputs.tag }}"
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "MistTerm ${TAG}"
+          if git push origin "refs/tags/${TAG}:refs/tags/${TAG}"; then
+            echo "created ${TAG} at $(git rev-parse HEAD)"
+            exit 0
+          fi
+          git fetch origin "+refs/tags/${TAG}:refs/tags/${TAG}"
+          peeled="$(git rev-parse "${TAG}^{commit}")"
+          if [ "$peeled" = "$(git rev-parse HEAD)" ]; then
+            echo "${TAG} already points at this commit"
+            exit 0
+          fi
+          echo "::error::${TAG} already points at ${peeled}; refusing to move it"
+          exit 1
+
+      - name: Start build on the tag
+        if: >-
+          steps.plan.outputs.action == 'create' ||
+          (steps.plan.outputs.action == 'noop' &&
+            (github.event_name == 'workflow_dispatch' || github.run_attempt > 1))
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.plan.outputs.tag }}"
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          # GITHUB_TOKEN 推上去的 tag 不会触发 build.yml 的 on.push.tags。
+          # workflow_dispatch 是这个 token 仍能启动的事件。
+          for i in 1 2 3 4 5; do
+            if gh workflow run build.yml --ref "$TAG"; then
+              echo "dispatched Build & Test on ${TAG}"
+              exit 0
+            fi
+            echo "dispatch attempt ${i} failed; retrying"
+            sleep $((i * 2))
+          done
+          echo "::error::could not dispatch build.yml on ${TAG}"
+          exit 1

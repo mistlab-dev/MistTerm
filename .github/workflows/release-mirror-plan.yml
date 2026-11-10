@@ -1,12 +1,14 @@
 name: Release mirror plan
 
-# 只跑镜像同步的计划自测：缺密钥、半包、重试和 stable 顺序。
-# 不连生产机，不上传，不需要 secrets。
+# 发版计划自测：镜像顺序，以及 main 上哪些提交可以打标签。
+# 不连生产机，不打标签，不上传，不需要 secrets。
 on:
   pull_request:
     paths:
       - scripts/sync-release-mirror.py
+      - scripts/plan-release-tag.py
       - .github/workflows/build.yml
+      - .github/workflows/tag-release.yml
       - .github/workflows/release-mirror-plan.yml
       - docs/release/AUTO_UPDATE.md
   workflow_dispatch:
@@ -29,3 +31,6 @@ jobs:
 
       - name: Self-test mirror planner
         run: python3 scripts/sync-release-mirror.py --self-test
+
+      - name: Self-test release tag planner
+        run: python3 scripts/plan-release-tag.py --self-test
