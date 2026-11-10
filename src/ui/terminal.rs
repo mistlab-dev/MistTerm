@@ -1804,9 +1804,13 @@ impl TerminalView {
     /// 探测失败（关掉了 exec、ForceCommand、非 POSIX shell）直接静默放弃，
     /// 退化到"只听 OSC 7"的被动模式，不影响任何已有功能。
     ///
-    /// 注意这里**不**看 `shell_hook_enabled`：身份探测还给跨会话继承判定用，
-    /// 关掉注入钩子的人一样需要它——否则新标签会照着旧目录乱 `cd`。
+    /// [`crate::terminal::shell_integration::CWD_HOOK_INJECTION_ENABLED`] 关闭时，
+    /// 探测一并跳过：它主要是为注入服务的，期间 PTY 泵会暂停，最坏约 15s。
+    /// 关闭期间目录继承只依赖服务器自己上报的 OSC；身份判定在总闸重新打开后恢复。
     fn start_shell_hook_probe(&mut self) {
+        if !crate::terminal::shell_integration::cwd_hook_probe_enabled() {
+            return;
+        }
         if self.shell_probe_sent || self.is_local_shell() {
             return;
         }
@@ -1838,7 +1842,9 @@ impl TerminalView {
                 // 身份探测是终端自己的事（跨会话继承要不要 cd），与注入开关无关：
                 // 关掉注入的用户也需要"别 cd 错目录"这层保护。
                 self.remote_identity = probe.identity;
-                if self.shell_hook_enabled {
+                if crate::terminal::shell_integration::cwd_hook_injection_enabled(
+                    self.shell_hook_enabled,
+                ) {
                     match crate::terminal::shell_integration::injection_command(probe.shell) {
                         Some(cmd) => self.pending_shell_hook = Some(cmd.to_string()),
                         None => {
@@ -1863,6 +1869,12 @@ impl TerminalView {
     /// 与 `maybe_send_startup_cd` 共用同一判据；注入排在 `cd` 之前（两条命令同帧发出，
     /// shell 按顺序执行，所以目录继承时钩子已经生效）。
     fn maybe_send_shell_hook(&mut self) {
+        if !crate::terminal::shell_integration::cwd_hook_injection_enabled(self.shell_hook_enabled)
+        {
+            // 总闸或偏好关闭时丢掉待发脚本，绝不以 hook 文本写进交互 PTY。
+            self.pending_shell_hook = None;
+            return;
+        }
         if self.pending_shell_hook.is_none() {
             return;
         }
@@ -7132,5 +7144,66 @@ mod disconnect_banner_tests {
         view.append_offline_bytes(b"x");
         view.flush_disconnect_input_toast(&ctx);
         assert!(view.take_pending_toast_info().is_some());
+    }
+}
+
+#[cfg(test)]
+mod cwd_hook_injection_gate_tests {
+    use super::*;
+    use crate::terminal::shell_integration::{
+        cwd_hook_injection_enabled, cwd_hook_probe_enabled, injection_command, ShellKind,
+        CWD_HOOK_INJECTION_ENABLED,
+    };
+
+    #[test]
+    fn start_probe_is_skipped_when_product_gate_is_off() {
+        assert!(
+            !CWD_HOOK_INJECTION_ENABLED && !cwd_hook_probe_enabled(),
+            "product default must keep the shell-detect probe off"
+        );
+        let mut view = TerminalView::new();
+        view.set_shell_hook_enabled(true);
+        view.start_shell_hook_probe();
+        assert!(
+            !view.shell_probe_sent,
+            "must not enqueue the remote-exec shell-detect probe"
+        );
+        assert!(view.shell_probe_rx.is_none());
+        assert!(view.pending_shell_hook.is_none());
+    }
+
+    #[test]
+    fn stale_probe_result_does_not_queue_hook_script() {
+        assert!(!cwd_hook_injection_enabled(true));
+        let mut view = TerminalView::new();
+        view.set_shell_hook_enabled(true);
+        let (tx, rx) = std::sync::mpsc::channel();
+        tx.send(Ok("shell=/usr/bin/zsh\nuser=tian\nhost=box\n".to_string()))
+            .unwrap();
+        view.shell_probe_rx = Some(rx);
+        view.poll_shell_hook_probe();
+        assert!(
+            view.pending_shell_hook.is_none(),
+            "must not enqueue __mist_cwd_report / precmd hook text"
+        );
+    }
+
+    #[test]
+    fn maybe_send_drops_pending_hook_without_writing_pty() {
+        let mut view = TerminalView::new();
+        view.set_shell_hook_enabled(true);
+        view.connected = true;
+        let cmd = injection_command(ShellKind::Zsh).expect("zsh hook exists");
+        assert!(cmd.contains("__mist_cwd_report"));
+        view.pending_shell_hook = Some(cmd.to_string());
+        view.maybe_send_shell_hook();
+        assert!(
+            view.pending_shell_hook.is_none(),
+            "pending hook script must be dropped, not sent"
+        );
+        assert!(
+            !view.has_pty_writer(),
+            "test must not attach a PTY writer; drop happens before send"
+        );
     }
 }

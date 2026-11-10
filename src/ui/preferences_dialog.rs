@@ -784,29 +784,32 @@ impl MistTermApp {
                     let _ = self.app_settings.save();
                 }
                 Self::preferences_row_divider(ui, theme);
-                // #401 方案 B：连接后向远端 shell 注入目录上报钩子。
-                let mut shell_hook = self.app_settings.shell_integration_hook;
-                if crate::ui::chrome::form_checkbox(
-                    ui,
-                    theme,
-                    &mut shell_hook,
-                    crate::i18n::tr(
+                // 产品总闸关闭时不展示该偏好：打开也无效，避免误导。总闸重新打开后此项自动回来。
+                if crate::terminal::shell_integration::CWD_HOOK_INJECTION_ENABLED {
+                    // #401 方案 B：连接后向远端 shell 注入目录上报钩子。
+                    let mut shell_hook = self.app_settings.shell_integration_hook;
+                    if crate::ui::chrome::form_checkbox(
+                        ui,
+                        theme,
+                        &mut shell_hook,
+                        crate::i18n::tr(
+                            ctx,
+                            "Report the current directory after connecting",
+                            "连接后自动上报当前目录",
+                        ),
+                    )
+                    .on_hover_text(crate::i18n::tr(
                         ctx,
-                        "Report the current directory after connecting",
-                        "连接后自动上报当前目录",
-                    ),
-                )
-                .on_hover_text(crate::i18n::tr(
-                    ctx,
-                    "If the server does not already report the current directory, MistTerm will do it for this session so new tabs and splits can follow the same folder. If the server already reports it, nothing extra is added. This applies only to newly opened connections, does not write files on the server, and ends when you disconnect.",
-                    "连上后，如果服务器还不会自己上报当前目录，就会在这一次连接里帮忙上报，方便新标签和分屏跟到同一个目录。服务器已经会自己上报的，不会再加一遍。只对之后新建立的连接生效，不会改服务器上的文件，断开就失效。",
-                ))
-                .changed()
-                {
-                    self.app_settings.shell_integration_hook = shell_hook;
-                    let _ = self.app_settings.save();
+                        "If the server does not already report the current directory, MistTerm will do it for this session so new tabs and splits can follow the same folder. If the server already reports it, nothing extra is added. This applies only to newly opened connections, does not write files on the server, and ends when you disconnect.",
+                        "连上后，如果服务器还不会自己上报当前目录，就会在这一次连接里帮忙上报，方便新标签和分屏跟到同一个目录。服务器已经会自己上报的，不会再加一遍。只对之后新建立的连接生效，不会改服务器上的文件，断开就失效。",
+                    ))
+                    .changed()
+                    {
+                        self.app_settings.shell_integration_hook = shell_hook;
+                        let _ = self.app_settings.save();
+                    }
+                    Self::preferences_row_divider(ui, theme);
                 }
-                Self::preferences_row_divider(ui, theme);
                 let mut ar = self.auto_reconnect_enabled;
                 if crate::ui::chrome::form_checkbox(
                     ui,

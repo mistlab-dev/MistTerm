@@ -16,6 +16,15 @@
 //! VTE 消化之前按字节流精确剥掉 `expected` 的回显：流式匹配、跨 chunk、
 //! `\n`↔`\r\n` 规范化、超时放行。不做清屏、不整段吞流、窗口外一个字节都不碰。
 //! probe 本身走独立 exec 通道，输出不经用户终端，用户看不到探测过程。
+//!
+//! ## 产品开关（2026-11-10）
+//!
+//! 真实 sshd 上 zsh 新连接/新标签仍可能在提示符处露出钩子函数体（可见性修复未达标）。
+//! 在那项工作恢复之前，[`CWD_HOOK_INJECTION_ENABLED`] 默认关闭：连接、重连、新标签
+//! 都不会把 `__mist_cwd_report` / `PROMPT_COMMAND` / `precmd` 文本写进交互 PTY，
+//! 也不会再为注入跑远端探测（探测与 PTY 读写互斥，最坏阻塞约 15s）。
+//! 服务器自己上报的 OSC 7 / 9;9 / 1337 CurrentDir 仍会听，目录继承在那种情况下还能用。
+//! 把该常量改回 `true` 即恢复注入；用户偏好 `AppSettings.shell_integration_hook` 仍叠在上面。
 
 /// 远端交互 shell 的类型。只覆盖能稳定注入的三种；其余一律 `Unknown` = 不注入。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -49,6 +58,24 @@ pub struct ProbeResult {
 ///
 /// 名字带双下划线前缀是 shell 惯例里的私有命名，尽量不与用户函数撞车。
 const HOOK_FN: &str = "__mist_cwd_report";
+
+/// 是否允许向交互 PTY 注入 cwd 上报钩子。默认关闭。
+///
+/// 产品口径（2026-11-10）：先保证线上可用，可见性修复后续再做。改回 `true`
+/// 即可恢复探测与注入；不要另加用户可见的新开关。
+pub const CWD_HOOK_INJECTION_ENABLED: bool = false;
+
+/// 本次会话是否应注入钩子：产品总闸与用户偏好同时开启才注入。
+pub fn cwd_hook_injection_enabled(user_pref: bool) -> bool {
+    CWD_HOOK_INJECTION_ENABLED && user_pref
+}
+
+/// 是否应启动为注入服务的 shell 探测（独立 exec，最长约 15s，期间 PTY 泵暂停）。
+///
+/// 总闸关闭时跳过：没有注入就不需要探测，也避免无谓地卡住新连接。
+pub fn cwd_hook_probe_enabled() -> bool {
+    CWD_HOOK_INJECTION_ENABLED
+}
 
 /// 探测命令：跑在独立 exec 通道（无 TTY），输出对用户不可见。
 ///
@@ -562,6 +589,18 @@ mod tests {
                 user: "alice".into()
             }
         );
+    }
+
+    #[test]
+    fn cwd_hook_injection_defaults_off() {
+        // 产品默认：不注入、不探测。改 CWD_HOOK_INJECTION_ENABLED 时请同步改这组断言。
+        assert!(
+            !CWD_HOOK_INJECTION_ENABLED,
+            "injection must stay off until the hook-visibility work is re-enabled"
+        );
+        assert!(!cwd_hook_injection_enabled(true));
+        assert!(!cwd_hook_injection_enabled(false));
+        assert!(!cwd_hook_probe_enabled());
     }
 
     #[test]
