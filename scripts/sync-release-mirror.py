@@ -10,7 +10,10 @@ Public layout (clients and the website already use these paths):
 Order is fixed: versioned installers, verify, versioned manifest, verify,
 and only then the stable pointer and the website alias. A tag older than the
 public stable manifest is never promoted. Installer bytes already published
-for the live version are not replaced when the size differs.
+for the live version are not replaced when the size differs. Website alias
+checksums and manifests are always rewritten: SHA256SUMS is often the same
+size across versions when version strings have the same length, so a size
+match must not skip the upload.
 
 The deploy key is read from the environment (`MIST_DEPLOY_KEY`) and written to
 a mode-600 file. It is never printed. `--self-test` and `--dry-run` do not
@@ -294,12 +297,26 @@ def plan_sync(
             promotion=True,
         )
     )
+    # Installers may be skipped when the public size already matches.
+    # Checksums are always rewritten: SHA256SUMS is often the same byte
+    # length across versions (e.g. 1.3.15 vs 1.3.16), so a size match is
+    # not enough to treat the alias file as current.
     phases.append(
         phase(
             "website-installers",
             "latest",
-            archive_names,
+            installer_names,
             "replace",
+            expect_version=False,
+            promotion=True,
+        )
+    )
+    phases.append(
+        phase(
+            "website-checksums",
+            "latest",
+            checksum_names,
+            "always",
             expect_version=False,
             promotion=True,
         )
@@ -686,6 +703,7 @@ def self_test() -> int:
     _test_verify_failure_stops_before_promotion()
     _test_stable_race_does_not_downgrade()
     _test_live_retry_repairs_website_alias()
+    _test_same_size_stale_website_checksums_are_refreshed()
     _test_rsync_command_hides_key_and_creates_directory()
     _test_content_length_parser()
     _test_http_transport_with_fake_curl()
@@ -852,6 +870,7 @@ def _test_dry_run_plans_without_upload() -> None:
             "versioned-manifest",
             "stable-manifest",
             "website-installers",
+            "website-checksums",
             "website-manifest",
         ]
         assert "latest.json" not in phases[0].uploads
@@ -878,22 +897,27 @@ def _test_older_stable_promotes_in_order() -> None:
             "stable",
             "latest",
             "latest",
+            "latest",
         ]
         assert puts[0][2] == ("Extra.dmg", "pkg.bin", "SHA256SUMS", "SHA256SUMS.minisig")
         assert "latest.json" not in puts[0][2]
         assert puts[1][2] == MANIFEST_NAMES
         assert puts[2][2] == MANIFEST_NAMES
         assert "pkg.bin" in puts[3][2] and "latest.json" not in puts[3][2]
-        assert puts[4][2] == MANIFEST_NAMES
+        assert "SHA256SUMS" not in puts[3][2]
+        assert puts[4][2] == CHECKSUM_NAMES
+        assert puts[5][2] == MANIFEST_NAMES
         assert phases[-1].promotion is True
-        # Idempotent retry: sizes now match, so installers are not sent again,
-        # but the pointer files are refreshed.
+        # Idempotent retry: matching installer sizes are not sent again,
+        # but website checksums and pointer files are always refreshed.
         remote.ops.clear()
         run_sync(local, remote, dry_run=False, key_present=True, verify_attempts=1, retry_sleep=0)
         puts = [op for op in remote.ops if op[0] == "put"]
-        assert [op[1] for op in puts] == ["v1.2.3", "stable", "latest"]
+        assert [op[1] for op in puts] == ["v1.2.3", "stable", "latest", "latest"]
         assert puts[0][2] == MANIFEST_NAMES
+        assert puts[2][2] == CHECKSUM_NAMES
         assert "pkg.bin" not in puts[2][2]
+        assert puts[3][2] == MANIFEST_NAMES
 
 
 def _test_live_size_mismatch_refuses_overwrite() -> None:
@@ -990,6 +1014,29 @@ def _test_live_retry_repairs_website_alias() -> None:
         assert len(alias) == 1
         assert "latest.json" not in alias[0][2]
         assert any(op[1] == "stable" for op in puts)
+        assert phases[-1].name == "website-manifest"
+        checksum_puts = [op for op in puts if op[1] == "latest" and op[2] == CHECKSUM_NAMES]
+        assert len(checksum_puts) == 1
+
+
+def _test_same_size_stale_website_checksums_are_refreshed() -> None:
+    """A same-size SHA256SUMS on latest/ is not proof it belongs to this version."""
+    with tempfile.TemporaryDirectory() as tmp:
+        local = _write_base(Path(tmp))
+        remote = FakeTransport("1.2.3").bind(local)
+        for name, size in {**local.installers, **local.checksums, **local.manifests}.items():
+            remote.sizes[f"v1.2.3/{name}"] = size
+            remote.sizes[f"latest/{name}"] = size
+        phases = run_sync(
+            local, remote, dry_run=False, key_present=True, verify_attempts=1, retry_sleep=0
+        )
+        puts = [op for op in remote.ops if op[0] == "put"]
+        assert not any(op[1] == "latest" and "pkg.bin" in op[2] for op in puts)
+        checksum_puts = [op for op in puts if op[1] == "latest" and "SHA256SUMS" in op[2]]
+        assert len(checksum_puts) == 1
+        assert checksum_puts[0][2] == CHECKSUM_NAMES
+        assert any(op[1] == "latest" and op[2] == MANIFEST_NAMES for op in puts)
+        assert phases[-2].name == "website-checksums"
         assert phases[-1].name == "website-manifest"
 
 
