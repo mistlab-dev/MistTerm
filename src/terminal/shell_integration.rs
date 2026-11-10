@@ -11,9 +11,11 @@
 //! 3. **不破坏用户已有钩子**：`PROMPT_COMMAND` / `precmd_functions` 里原本的东西必须照跑，
 //!    所以是"前置拼接"而不是"覆盖赋值"。
 //!
-//! 注入命令是**单行**、**会在用户终端回显一行**——这是有意的：往别人 shell 里塞东西
-//! 至少该让本人看得见（偏好设置里可整体关掉）。probe 本身走独立 exec 通道，
-//! 输出不经用户终端，用户看不到探测过程。
+//! 注入命令是**单行**。#410：发送后进入精确回显抑制窗口——PTY 的 ECHO 会把
+//! 注入的那行原样弹回给用户（这就是产品看到的"露出一行内部命令"），我们在
+//! VTE 消化之前按字节流精确剥掉 `expected` 的回显：流式匹配、跨 chunk、
+//! `\n`↔`\r\n` 规范化、超时放行。不做清屏、不整段吞流、窗口外一个字节都不碰。
+//! probe 本身走独立 exec 通道，输出不经用户终端，用户看不到探测过程。
 
 /// 远端交互 shell 的类型。只覆盖能稳定注入的三种；其余一律 `Unknown` = 不注入。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -155,6 +157,236 @@ const ZSH_HOOK: &str = concat!(
 const FISH_HOOK: &str =
     r#"function __mist_cwd_report --on-event fish_prompt; printf '\033]7;file://%s%s\033\\' (hostname 2>/dev/null) $PWD; end"#;
 
+/// 精确回显抑制窗口的时长：超过后停止过滤，残余回显保持可见（宁可露一行
+/// 也不吞用户输出）。覆盖慢速链路下 shell 回显 + 执行的开销。
+pub const ECHO_SUPPRESS_WINDOW: std::time::Duration = std::time::Duration::from_millis(1500);
+
+/// `expected` 末尾如果是 `\n`，额外允许 `\r\n` 结尾；末尾是 `\r` 则额外允许
+/// `\r\n`（PTY 回显会把行尾的 CR 展开成 CRLF）。
+fn echo_variants(expected: &[u8]) -> Vec<Vec<u8>> {
+    let mut variants = Vec::new();
+    match expected.last() {
+        Some(&b'\n') => {
+            let mut crlf = expected.to_vec();
+            let n = crlf.len();
+            crlf[n - 1] = b'\r';
+            crlf.push(b'\n');
+            // 长变体优先：能用 CRLF 吃掉就别留下半个行尾。
+            variants.push(crlf);
+            variants.push(expected.to_vec());
+        }
+        Some(&b'\r') => {
+            let mut crlf = expected.to_vec();
+            crlf.push(b'\n');
+            variants.push(crlf);
+            variants.push(expected.to_vec());
+        }
+        _ => variants.push(expected.to_vec()),
+    }
+    variants
+}
+
+/// #410：注入后的精确回显抑制状态机。
+///
+/// 发送钩子（及同帧的自动 `cd`）后进入抑制窗口：后续 PTY 输出里，
+/// **只有**完整出现的注入载荷回显（允许 `\n`↔`\r\n` 规范化）会被剥掉，
+/// 其余字节（MOTD、Last login、报错、OSC 7、用户输出）原样放行。
+/// 超时后窗口关闭，残余保持可见；不做清屏、不宽泛吞流。
+///
+/// 实现用"暂存候选 + 完整匹配才剥离"：跨 chunk 的部分匹配先暂存在
+/// `pending` 里，一旦走偏立即把暂存字节原样放行——绝不吞用户输出，
+/// 代价只是走偏时那一次多余的暂存。
+#[derive(Debug)]
+pub struct EchoSuppressor {
+    /// 依次待匹配的精确载荷（hook 在前、同帧自动 cd 在后）。
+    queue: Vec<Vec<u8>>,
+    /// 已暂存的候选回显字节（可能是某个载荷前缀的一部分）。
+    pending: Vec<u8>,
+    /// 窗口截止时刻；`None` 表示窗口已关。
+    deadline: Option<std::time::Instant>,
+}
+
+impl Default for EchoSuppressor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl EchoSuppressor {
+    pub fn new() -> Self {
+        Self {
+            queue: Vec::new(),
+            pending: Vec::new(),
+            deadline: None,
+        }
+    }
+
+    pub fn is_active(&self) -> bool {
+        self.deadline.is_some()
+    }
+
+    /// 兼容别名。
+    pub fn active(&self) -> bool {
+        self.is_active()
+    }
+
+    /// 开始/追加一个抑制窗口：`payload` 是实际写入 PTY 的字节。
+    /// 首个载荷重置截止时钟；同帧追加（hook + cd）按顺序排队。
+    pub fn begin(&mut self, payload: &[u8]) {
+        if payload.is_empty() {
+            return;
+        }
+        if self.queue.is_empty() && self.pending.is_empty() {
+            self.deadline = Some(std::time::Instant::now() + ECHO_SUPPRESS_WINDOW);
+        }
+        self.queue.push(payload.to_vec());
+    }
+
+    /// 超时检查：到点关闭窗口，暂存与残余全部放行（可见）。
+    pub fn tick(&mut self, now: std::time::Instant) -> bool {
+        match self.deadline {
+            Some(d) if now >= d => {
+                self.reset();
+                true
+            }
+            _ => false,
+        }
+    }
+
+    pub fn reset(&mut self) {
+        self.queue.clear();
+        self.pending.clear();
+        self.deadline = None;
+    }
+
+    /// 暂存字节与首个载荷的所有变体不再有任何前缀关系时，返回 true。
+    fn pending_is_stale(&self) -> bool {
+        let Some(expected) = self.queue.first() else {
+            return true;
+        };
+        !echo_variants(expected)
+            .iter()
+            .any(|v| v.starts_with(&self.pending))
+    }
+
+    /// 暂存字节已完整构成首个载荷的某个变体。返回 Some(剥离起点)：
+    /// 匹配结束后从该位置起的字节要放行。只允许多余字节是行尾重复的 `\r`。
+    fn pending_completed(&self) -> Option<usize> {
+        let Some(expected) = self.queue.first() else {
+            return None;
+        };
+        for v in echo_variants(expected) {
+            if self.pending.starts_with(&v) {
+                let tail = &self.pending[v.len()..];
+                if tail.iter().all(|&b| b == b'\r') {
+                    return Some(v.len());
+                }
+            }
+        }
+        None
+    }
+
+    /// 过滤一段 PTY 输出：剥离注入载荷的完整回显，返回剩余应进 VTE 的字节。
+    /// 窗口未激活时原样返回输入。任何走偏都立即放行暂存字节——绝不吞用户输出。
+    pub fn filter(&mut self, data: &[u8], now: std::time::Instant) -> Vec<u8> {
+        if !self.is_active() {
+            return data.to_vec();
+        }
+        if self.tick(now) {
+            return data.to_vec();
+        }
+        let mut out: Vec<u8> = Vec::with_capacity(data.len());
+        // 先处理上次剩下的暂存候选。
+        if !self.pending.is_empty() {
+            self.pending.extend_from_slice(data);
+            if let Some(keep_from) = self.pending_completed() {
+                // 完整匹配：剥离载荷本体（含可放行的行尾 `\r`），多余字节放行。
+                out.extend_from_slice(&self.pending[keep_from..]);
+                self.pending.clear();
+                self.queue.remove(0);
+                if self.queue.is_empty() {
+                    self.deadline = None;
+                }
+            } else if self.pending_is_stale() {
+                // 走偏：暂存字节是真实输出，原样放行并放弃当前载荷。
+                out.append(&mut self.pending);
+                self.queue.remove(0);
+                if self.queue.is_empty() {
+                    self.deadline = None;
+                }
+            }
+            return out;
+        }
+        // 正常路径：逐字节推进候选窗口，只暂存有希望构成载荷回显的前缀。
+        let mut i = 0usize;
+        while i < data.len() {
+            let Some(expected) = self.queue.first() else {
+                break;
+            };
+            // 尝试从 i 开始直接完整匹配某个变体。
+            let mut matched_len = None;
+            for v in echo_variants(expected) {
+                if data[i..].starts_with(&v) {
+                    matched_len = Some(v.len());
+                    break;
+                }
+            }
+            if let Some(mlen) = matched_len {
+                i += mlen;
+                self.queue.remove(0);
+                if self.queue.is_empty() {
+                    // 窗口结束：剩余字节（提示符、用户输出）必须原样放行。
+                    out.extend_from_slice(&data[i..]);
+                    self.pending.clear();
+                    self.deadline = None;
+                    return out;
+                }
+                continue;
+            }
+            // 没有完整匹配：暂存从 i 开始的、仍是某个变体前缀的最长候选。
+            let variants = echo_variants(expected);
+            let max_prefix = variants
+                .iter()
+                .map(|v| {
+                    let n = (data.len() - i).min(v.len());
+                    let mut k = 0usize;
+                    while k < n && v[k] == data[i + k] {
+                        k += 1;
+                    }
+                    k
+                })
+                .max()
+                .unwrap_or(0);
+            if max_prefix == 0 {
+                // 这个字节与任何载荷都无关：放行。
+                out.push(data[i]);
+                i += 1;
+                continue;
+            }
+            // 暂存候选，等下一个 chunk 再判。剩余字节若是候选之外的输出也先放行？
+            // 不——候选之后的字节归属未定（可能是回显续体），先暂存起来一起等。
+            self.pending.extend_from_slice(&data[i..]);
+            i = data.len();
+            if self.pending_completed().is_some() {
+                let keep_from = self.pending_completed().unwrap();
+                out.extend_from_slice(&self.pending[keep_from..]);
+                self.pending.clear();
+                self.queue.remove(0);
+                if self.queue.is_empty() {
+                    self.deadline = None;
+                }
+            } else if self.pending_is_stale() {
+                out.append(&mut self.pending);
+                self.queue.remove(0);
+                if self.queue.is_empty() {
+                    self.deadline = None;
+                }
+            }
+        }
+        out
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -292,5 +524,131 @@ mod tests {
         );
         assert!(cmd.contains("user=") && cmd.contains("host="), "要一并带出身份");
         assert!(!cmd.contains('\n'), "探测命令也走单行");
+    }
+
+    mod suppressor_tests {
+        use super::*;
+        use std::time::Instant;
+
+        fn now() -> Instant {
+            Instant::now()
+        }
+
+        #[test]
+        fn inactive_passes_through() {
+            let mut s = EchoSuppressor::new();
+            let out = s.filter(b"Last login: ...\r\nprompt$ ", now());
+            assert_eq!(out, b"Last login: ...\r\nprompt$ ".to_vec());
+        }
+
+        #[test]
+        fn strips_full_echo_in_one_chunk() {
+            let mut s = EchoSuppressor::new();
+            s.begin(b"__mist_cwd_report() { ... }; PROMPT_COMMAND=...\n");
+            let echo = b"__mist_cwd_report() { ... }; PROMPT_COMMAND=...\r\n";
+            let out = s.filter(&echo[..], now());
+            assert!(out.is_empty(), "回显应被精确剥掉，got {:?}", String::from_utf8_lossy(&out));
+            assert!(!s.is_active());
+        }
+
+        #[test]
+        fn strips_across_split_chunks() {
+            let mut s = EchoSuppressor::new();
+            let payload = b"__mist_cwd_report() { printf ... }\n";
+            s.begin(payload);
+            let echo = b"__mist_cwd_report() { printf ... }\r\n";
+            let (a, b) = echo.split_at(10);
+            let out_a = s.filter(a, now());
+            assert!(out_a.is_empty());
+            let out_b = s.filter(b, now());
+            assert!(out_b.is_empty());
+            assert!(!s.is_active());
+        }
+
+        #[test]
+        fn passes_leading_output_then_strips_hook() {
+            let mut s = EchoSuppressor::new();
+            s.begin(b"hook-line\n");
+            let stream = b"Last login: Mon Nov 10 from 1.2.3.4\r\nhook-line\r\nprompt$ ";
+            let out = s.filter(&stream[..], now());
+            assert_eq!(out, b"Last login: Mon Nov 10 from 1.2.3.4\r\nprompt$ ".to_vec());
+        }
+
+        #[test]
+        fn passes_osc_and_following_user_output() {
+            let mut s = EchoSuppressor::new();
+            s.begin(b"hook-line\n");
+            // 回显后 shell 执行钩子产出 OSC 7，再下一个提示符 + 用户命令输出。
+            let stream = b"hook-line\r\n\x1b]7;file://h/home\x1b\\prompt$ file1 file2\r\n";
+            let out = s.filter(&stream[..], now());
+            assert_eq!(
+                String::from_utf8_lossy(&out),
+                "\x1b]7;file://h/home\x1b\\prompt$ file1 file2\r\n"
+            );
+        }
+
+        #[test]
+        fn queue_handles_hook_then_startup_cd() {
+            let mut s = EchoSuppressor::new();
+            s.begin(b"__mist_cwd_report() { ... }; PROMPT_COMMAND=...\n");
+            s.begin(b"cd -- '/srv/app'\r");
+            let stream = b"__mist_cwd_report() { ... }; PROMPT_COMMAND=...\r\ncd -- '/srv/app'\r\n";
+            let out = s.filter(&stream[..], now());
+            assert!(out.is_empty(), "两段回显都要剥掉，got {:?}", String::from_utf8_lossy(&out));
+            assert!(!s.is_active());
+        }
+
+        #[test]
+        fn mismatch_passes_rest_through() {
+            let mut s = EchoSuppressor::new();
+            s.begin(b"hook-line\n");
+            // 回显根本没出现，来的全是别的东西：一个字节都不能吞。
+            let stream = b"Welcome to Ubuntu 22.04\r\nprompt$ ";
+            let out = s.filter(&stream[..], now());
+            assert_eq!(out, stream.to_vec());
+        }
+
+        #[test]
+        fn timeout_stops_filtering_residue_visible() {
+            let mut s = EchoSuppressor::new();
+            s.begin(b"hook-line\n");
+            let t0 = Instant::now();
+            // 窗口内只回显了前半截。
+            let out0 = s.filter(b"hook-li", t0);
+            assert!(out0.is_empty());
+            // 超时后残余保持可见。
+            let later = t0 + ECHO_SUPPRESS_WINDOW + std::time::Duration::from_millis(10);
+            let out1 = s.filter(b"ne is visible\r\n", later);
+            assert_eq!(out1, b"ne is visible\r\n".to_vec());
+            assert!(!s.is_active());
+        }
+
+        #[test]
+        fn partial_match_then_divergence_passes_through() {
+            let mut s = EchoSuppressor::new();
+            let payload = b"__mist_cwd_report\n";
+            s.begin(payload);
+            // 前缀匹配后走偏：暂存字节全部放行（宁可多露一字也不吞用户输出）。
+            let stream = b"__mist_cwd_reportX and user output\r\n";
+            let out = s.filter(&stream[..], now());
+            assert_eq!(out, stream.to_vec());
+        }
+
+        #[test]
+        fn reset_clears_everything() {
+            let mut s = EchoSuppressor::new();
+            s.begin(b"hook\n");
+            s.reset();
+            let out = s.filter(b"hook\r\nanything", now());
+            assert_eq!(out, b"hook\r\nanything".to_vec());
+            assert!(!s.is_active());
+        }
+
+        #[test]
+        fn empty_begin_is_noop() {
+            let mut s = EchoSuppressor::new();
+            s.begin(b"");
+            assert!(!s.is_active());
+        }
     }
 }
