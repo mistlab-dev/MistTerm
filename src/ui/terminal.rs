@@ -3520,7 +3520,7 @@ impl TerminalView {
                             continue;
                         }
 
-                        let (display_data, audit_events) = self.server_audit_probe.feed(&data);
+                        let (mut display_data, audit_events) = self.server_audit_probe.feed(&data);
                         if !audit_events.is_empty() {
                             self.pending_server_audit.extend(audit_events);
                             // 审计行常被整行剥离：无 VTE 脏位则不 request_repaint，Toast 会一直卡着。
@@ -3543,7 +3543,9 @@ impl TerminalView {
                         if !display_data.is_empty() {
                             // #410：在进 VTE / 日志 / 模块分发之前先做精确回显抑制，
                             // 只在 Injecting 窗口内剥掉与注入载荷精确匹配的回显前缀。
-                            let display_data = if self.echo_suppressor.is_active() {
+                            // 直接覆盖外层 display_data，保证下面的 VTE / 日志 / 模块
+                            // 分发用的都是过滤后的字节（不能用内层同名变量遮蔽）。
+                            let filtered = if self.echo_suppressor.is_active() {
                                 self.echo_suppressor.filter(&display_data, Instant::now())
                             } else {
                                 display_data
@@ -3551,6 +3553,7 @@ impl TerminalView {
                             self.poll_shell_hook_probe();
                             self.maybe_send_shell_hook();
                             self.maybe_send_startup_cd();
+                            display_data = filtered;
                         }
                         if !display_data.is_empty() {
                             self.pending_log_output.push(display_data.clone());
