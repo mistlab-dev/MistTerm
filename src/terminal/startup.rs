@@ -121,17 +121,27 @@ impl CwdOscScanner {
         self.pending.extend_from_slice(data);
         let found = stream_contains_cwd_osc(&self.pending);
         // 只保留可能构成 OSC 前缀的尾部，避免无限增长。
+        // KEEP 必须覆盖「起始 ESC ]7; 之后仍无终止符」的最大安全前缀：
+        // 长路径的 OSC 7 首片可以远超 32 字节，若只保留尾 32 字节，
+        // 起始 ESC ]7; 被截掉，下一片的终止符到了也认不出完整序列，
+        // 会被误判为「本会话未上报」而重复注入。保留自最近一次
+        // 未终止 OSC 起始 ESC 起的全部尾部；没有未终止 OSC 才截到 32 字节。
         const KEEP: usize = 32;
-        if self.pending.len() > KEEP {
-            let start = self.pending.len() - KEEP;
-            // 若尾部还在未结束的 OSC 里，尽量从最近的 ESC 起保留。
-            let esc = self.pending[start..]
+        let keep_from = if has_unterminated_osc(&self.pending) {
+            // 最近一个未终止 OSC 的起始 ESC；若找不到（理论上不可能），退回 KEEP。
+            self.pending
+                .iter()
+                .rposition(|&b| b == 0x1b)
+                .unwrap_or(self.pending.len().saturating_sub(KEEP))
+        } else {
+            let start = self.pending.len().saturating_sub(KEEP);
+            self.pending[start..]
                 .iter()
                 .rposition(|&b| b == 0x1b)
                 .map(|i| start + i)
-                .unwrap_or(start);
-            self.pending.drain(..esc);
-        }
+                .unwrap_or(start)
+        };
+        self.pending.drain(..keep_from);
         if found {
             // 完整序列已经见过，不必再为它保留长缓冲。
             if !has_unterminated_osc(&self.pending) {
@@ -238,7 +248,20 @@ impl HookEchoGuard {
                 break;
             }
             // CSI / ESC 序列：匹配中则剥掉（行编辑器重绘），否则放行。
+            // OSC 序列（ESC ]）必须整段放行：目录上报可能恰好落在抑制窗口内，
+            // 若在 started 状态把 ESC 当控制字节吞掉，OSC 会被拆碎，
+            // 迟到的目录上报丢失 → 幂等/继承判断失效。OSC 不参与折行重绘。
             if data[i] == 0x1b {
+                if data.len() > i + 1 && data[i + 1] == b']' {
+                    let Some(end) = osc_seq_len(&data[i..]) else {
+                        // OSC 被截断：剩余整段挂起，等下一块再处理。
+                        out.extend_from_slice(&data[i..]);
+                        break;
+                    };
+                    out.extend_from_slice(&data[i..i + end]);
+                    i += end;
+                    continue;
+                }
                 if let Some(n) = escape_len(&data[i..]) {
                     if self.started {
                         i += n;
@@ -311,6 +334,28 @@ fn printable_payload(payload: &[u8]) -> Vec<u8> {
         .collect()
 }
 
+/// OSC 序列长度：`ESC ]` 起，`BEL` 或 `ESC \` 收；未终止返回 None。
+fn osc_seq_len(data: &[u8]) -> Option<usize> {
+    if data.len() < 2 || data[0] != 0x1b || data[1] != b']' {
+        return None;
+    }
+    let mut j = 2;
+    while j < data.len() {
+        if data[j] == 0x07 {
+            return Some(j + 1);
+        }
+        if data[j] == 0x1b {
+            if j + 1 < data.len() && data[j + 1] == b'\\' {
+                return Some(j + 2);
+            }
+            // OSC 里出现另一个 ESC 但不是 ST：按新序列开始，终止在前面。
+            return Some(j);
+        }
+        j += 1;
+    }
+    None
+}
+
 fn escape_len(data: &[u8]) -> Option<usize> {
     if data.is_empty() || data[0] != 0x1b {
         return None;
@@ -329,7 +374,7 @@ fn escape_len(data: &[u8]) -> Option<usize> {
         return Some(data.len()); // 截断，先整段挂起由下次补；这里消费到末尾以免把 '[' 当正文。
     }
     if data[1] == b']' {
-        // OSC：守卫不剥 OSC（目录上报必须放行）。让调用方走普通扫描。
+        // OSC 由 filter 里的 osc_seq_len 分支整段放行，不会走到这里。
         return None;
     }
     Some(2)
@@ -712,6 +757,14 @@ impl StartupController {
                     self.restore_requested = true;
                     return StartupAction::RestorePtySize;
                 }
+                // Degraded（超时 / Ctrl+C / 队列满）时目录继承不能被跳过：
+                // 自动 cd 只是把用户带回会话目录，与钩子可见性无关；
+                // 启动失败时更要照常发（身份已探到才有 pending），
+                // 且此时按键已放行，不再有折行抑制需求。
+                if self.phase == StartupPhase::Degraded && self.cd_pending {
+                    self.cd_pending = false;
+                    return StartupAction::SendStartupCd;
+                }
                 StartupAction::None
             }
         }
@@ -933,6 +986,51 @@ mod tests {
         assert!(looks_like_prompt("PS C:\\Users>"));
         assert!(!looks_like_prompt(""));
         assert!(!looks_like_prompt("Last login: Mon Nov 10"));
+    }
+
+    #[test]
+    fn scanner_keeps_unterminated_osc_across_long_first_chunk() {
+        // 回归（review 软注 1）：OSC 7 长路径首片 >32 字节且无终止符时，
+        // 不能把起始 ESC ]7; 截掉，否则第二片终止符到来也认不出，
+        // 会被误判为「本会话未上报」而重复注入。
+        let osc = b"\x1b]7;file://very-long-hostname-aaaaaaaaaaaaaaaaaaaaaa/long/path\x1b\\";
+        let (first, second) = osc.split_at(40);
+        let mut s = CwdOscScanner::new();
+        assert!(!s.feed(b"user@host$ "), "首片无终止符不算上报");
+        assert!(!s.feed(first));
+        assert!(s.feed(second), "长路径 OSC 跨 chunk 必须能被识别");
+        // 下一 chunk 不应再误判（pending 已清）
+        assert!(!s.feed(b"prompt$ "));
+    }
+
+    #[test]
+    fn guard_passes_osc_intact_even_mid_match() {
+        // 回归（review 软注 2）：guard 匹配中到达的 OSC 必须整段放行，
+        // 否则迟到的目录上报被拆碎，幂等/继承判断失效。
+        let osc = b"\x1b]7;file://h/tmp\x1b\\prompt$ ";
+        let mut g = HookEchoGuard::new();
+        g.begin(b"__mist_cwd_report() { printf", Instant::now(), ECHO_SUPPRESS_WINDOW);
+        let out = g.filter(osc, Instant::now());
+        assert_eq!(String::from_utf8_lossy(&out), String::from_utf8_lossy(osc));
+    }
+
+    #[test]
+    fn degraded_still_sends_startup_cd() {
+        // 回归（review 软注 3）：超时 / Ctrl+C / 队列满进入 Degraded 后，
+        // 目录继承（自动 cd）不能被跳过。
+        let now = t0();
+        let mut c = StartupController::new();
+        c.set_cd_pending(true);
+        c.on_shell_started(now);
+        let act = c.poll(now + STARTUP_BUDGET);
+        assert_eq!(c.phase(), StartupPhase::Degraded);
+        match act {
+            StartupAction::SendStartupCd => {}
+            other => panic!("Degraded 后应先发自动 cd，got {other:?}"),
+        }
+        c.set_cd_pending(false);
+        let act = c.poll(now + STARTUP_BUDGET + Duration::from_millis(50));
+        assert!(matches!(act, StartupAction::RestorePtySize | StartupAction::None));
     }
 
     #[test]
