@@ -532,6 +532,8 @@ pub struct TerminalView {
     shell_hook_enabled: bool,
     /// 已探测到 shell 类型、等提示符就绪再发的注入命令。
     pending_shell_hook: Option<String>,
+    /// #410：注入后的精确回显抑制窗口（剥掉 PTY 对钩子/自动 cd 的行回显）。
+    echo_suppressor: crate::terminal::shell_integration::EchoSuppressor,
     /// shell 类型探测的异步回执（走 shell 泵线程的 exec 通道，不经过用户终端）。
     shell_probe_rx: Option<std::sync::mpsc::Receiver<Result<String, String>>>,
     /// 本次连接已排过探测，避免重连路径重复入队。
@@ -1163,6 +1165,7 @@ impl TerminalView {
             pending_startup_cd: None,
             shell_hook_enabled: true,
             pending_shell_hook: None,
+            echo_suppressor: crate::terminal::shell_integration::EchoSuppressor::new(),
             shell_probe_rx: None,
             shell_probe_sent: false,
             remote_identity: None,
@@ -1778,10 +1781,16 @@ impl TerminalView {
         self.startup_cd_deadline = None;
         let bytes = startup_cd_payload(&path);
         self.broadcast_suppress = true;
-        if let Err(e) = self.send_pty_input(&bytes) {
-            log::debug!("startup cd: {e}");
-        }
+        let sent = self.send_pty_input(&bytes);
         self.broadcast_suppress = false;
+        if let Err(e) = &sent {
+            log::debug!("startup cd: {e}");
+            return;
+        }
+        // #410：同帧 hook 后的自动 cd 也会回显一行，追加进抑制队列；
+        // 窗口已关（hook 回显极快剥完）时对 cd 单独开一个窗口。
+        // 用户手敲的 cd 不经过此处。
+        self.echo_suppressor.begin(&bytes);
     }
 
     /// #401 方案 B：偏好开关，连接前由宿主按 `AppSettings` 写入。
@@ -1869,10 +1878,15 @@ impl TerminalView {
         let mut bytes = cmd.into_bytes();
         bytes.push(b'\n');
         self.broadcast_suppress = true;
-        if let Err(e) = self.send_pty_input(&bytes) {
-            log::debug!("shell integration inject: {e}");
-        }
+        let sent = self.send_pty_input(&bytes);
         self.broadcast_suppress = false;
+        if let Err(e) = &sent {
+            log::debug!("shell integration inject: {e}");
+            // 发送失败就没有回显可剥，凭空开窗口反而会误吞后续输出。
+            return;
+        }
+        // #410：发送成功即开精确回显抑制窗口，剥掉 PTY 对这一行的回显。
+        self.echo_suppressor.begin(&bytes);
         log::debug!("shell integration hook injected");
     }
 
@@ -1989,6 +2003,7 @@ impl TerminalView {
                 self.shell_probe_sent = false;
                 self.shell_probe_rx = None;
                 self.pending_shell_hook = None;
+                self.echo_suppressor.reset();
                 self.remote_identity = None;
                 self.startup_cd_policy = None;
                 self.startup_cd_deadline = None;
@@ -2022,6 +2037,7 @@ impl TerminalView {
         self.shell_probe_sent = false;
         self.shell_probe_rx = None;
         self.pending_shell_hook = None;
+        self.echo_suppressor.reset();
         self.remote_identity = None;
         self.startup_cd_policy = None;
         self.startup_cd_deadline = None;
@@ -3325,6 +3341,20 @@ impl TerminalView {
                     }
                 }
             }
+            // #410：空闲帧也要 tick——提示符先到、探测后到且后续无输出时，
+            // 不能等下一段输出才注入；超时时把暂存的候选残余冲进 VTE（可见）。
+            self.poll_shell_hook_probe();
+            self.maybe_send_shell_hook();
+            self.maybe_send_startup_cd();
+            if let Some(flushed) = self.echo_suppressor.tick(Instant::now()) {
+                if !flushed.is_empty() {
+                    self.pending_log_output.push(flushed.clone());
+                    self.observe_interactive_output(&flushed);
+                    self.dispatch_output_to_modules(&flushed);
+                    self.terminal.feed(&flushed);
+                    vte_dirty = true;
+                }
+            }
             for msg in batch {
                 match msg {
                     SshMessage::Output { data, .. } => {
@@ -3490,7 +3520,7 @@ impl TerminalView {
                             continue;
                         }
 
-                        let (display_data, audit_events) = self.server_audit_probe.feed(&data);
+                        let (mut display_data, audit_events) = self.server_audit_probe.feed(&data);
                         if !audit_events.is_empty() {
                             self.pending_server_audit.extend(audit_events);
                             // 审计行常被整行剥离：无 VTE 脏位则不 request_repaint，Toast 会一直卡着。
@@ -3511,16 +3541,26 @@ impl TerminalView {
                             }
                         }
                         if !display_data.is_empty() {
+                            // #410：在进 VTE / 日志 / 模块分发之前先做精确回显抑制，
+                            // 只在 Injecting 窗口内剥掉与注入载荷精确匹配的回显前缀。
+                            // 直接覆盖外层 display_data，保证下面的 VTE / 日志 / 模块
+                            // 分发用的都是过滤后的字节（不能用内层同名变量遮蔽）。
+                            let filtered = if self.echo_suppressor.is_active() {
+                                self.echo_suppressor.filter(&display_data, Instant::now())
+                            } else {
+                                display_data
+                            };
+                            self.poll_shell_hook_probe();
+                            self.maybe_send_shell_hook();
+                            self.maybe_send_startup_cd();
+                            display_data = filtered;
+                        }
+                        if !display_data.is_empty() {
                             self.pending_log_output.push(display_data.clone());
                             self.observe_interactive_output(&display_data);
                             self.dispatch_output_to_modules(&display_data);
                             self.terminal.feed(&display_data);
                             vte_dirty = true;
-                            // #401：目录只认 shell 主动上报（OSC 7/9;9）与用户敲的 cd，
-                            // 不再从提示符文本反推——PS1 拆路径是 #396/#400 的坑源。
-                            self.poll_shell_hook_probe();
-                            self.maybe_send_shell_hook();
-                            self.maybe_send_startup_cd();
                         }
                     }
                     SshMessage::Connected { .. } => {
@@ -5513,6 +5553,7 @@ impl TerminalView {
         // #401：断线丢弃未注入的钩子与探测回执；shell_probe_sent 复位，
         // 重连后要重新探测（新会话可能是另一台机器/另一种 shell）。
         self.pending_shell_hook = None;
+        self.echo_suppressor.reset();
         self.shell_probe_rx = None;
         self.shell_probe_sent = false;
         self.remote_identity = None;
