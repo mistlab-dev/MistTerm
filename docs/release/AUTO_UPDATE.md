@@ -80,7 +80,8 @@
 ## 4. CI 流程（`.github/workflows/build.yml`）
 
 ```
-preflight（版本号一致性 + 清单脚本自测 + 镜像同步计划自测）
+tag-release（push main；满足条件才创建 vX.Y.Z，并在该标签上启动下面这条流程）
+  → preflight（版本号一致性 + 清单 / 镜像 / 打标签计划自测）
   → platform ×4（Linux、Windows、macOS arm64、macOS x86_64；正式构建会检查公钥）
   + cli-linux ×2（命令行静态版 x86_64 / aarch64：确认是静态程序，六个发行版冒烟测试，打包）
   → manifest（生成 SHA256SUMS + latest.json，不需要任何密钥）
@@ -90,8 +91,13 @@ preflight（版本号一致性 + 清单脚本自测 + 镜像同步计划自测�
      最后才更新 stable/latest.json 和官网按钮用的 latest/ 别名）
 ```
 
-- 支持的发布触发是：**在 main 上的提交打 `v*` 标签并推送**。合并发版 PR 只把版本号带进 main，**不会**自动打标签，也不会发版。手动触发（`workflow_dispatch`）会跑 manifest 当作检查（版本号取 Cargo.toml，产物只留在这次运行里），**不会**进入 sign / release / mirror。
-- 推 `v*` 标签后 sign → release → mirror **自动跑完**，无需在 Actions 里点批准。`release` 环境没有 Required reviewers。
+- 发布触发有两条，走的是同一个 Build & Test：
+  1. **发版 PR 合进 main**（`.github/workflows/tag-release.yml`）。HEAD 的 `Cargo.toml` / `Info.plist` 是同一个正式 `X.Y.Z`（不带预发布后缀），比已有的正式标签都新，并且 `docs/release/notes/vX.Y.Z.zh.md` 和 `.en.md` 都有内容时，workflow 在这个 main 提交上创建附注标签 `vX.Y.Z`，然后启动构建。
+  2. **人工推送 `v*` 标签**。标签指向的提交必须已经在 main 上，构建前的检查会拒绝不在 main 上的标签。
+- 用 workflow 里的 `GITHUB_TOKEN` 推上去的标签**不会**再触发 `on.push.tags`（GitHub 用这个限制避免 workflow 自己把自己叫醒）。Tag release 打完标签后执行 `gh workflow run build.yml --ref vX.Y.Z`。`workflow_dispatch` 是这个 token 仍然能启动的事件，而且 ref 是标签，所以签名、Release 和 mirror 都会跑。不需要另外的 PAT。
+- 已有标签不会被移动或删除。同一个版本之后的 main 提交不会再次打标签。标签已经指在这个提交上时，重跑 Tag release（或在 Actions 里手动跑它）会再启动一次构建，用来补上「标签打上了但 dispatch 失败」的情况。构建本身失败则重跑 Build & Test。
+- 在 main 上手动 Run workflow 跑 Build & Test 仍然只生成清单做检查，不签名、不发布、不同步。
+- 标签上的 sign → release → mirror **自动跑完**，无需在 Actions 里点批准。`release` 环境没有 Required reviewers。
 - mirror 默认会跑。只有仓库变量 `MIST_MIRROR_ENABLED` **精确等于** `false` 时才跳过。不要再把它设成必须等于 `true`：v1.3.14 和 v1.3.15 的 mirror job 就是因为不等于 `true` 被整段跳过。
 - 缺 `MIST_DEPLOY_KEY`、安装包不齐、公网大小对不上、或 stable 在同步途中被更新的版本抢走时，mirror job **失败**。GitHub Release 已经发出，但这次 Actions 运行是红的，方便补跑。旧实现在密钥为空时只打 notice 并以成功结束。
 - 重跑同一个标签是幂等的：公网文件大小已经一致的安装包不会重传。已经公开、且大小和这次构建不一致的 `v<版本>/` 文件**不会被覆盖**，job 会失败并停下，避免把已发布的版本目录改掉。公网 `stable/latest.json` 比这个标签新时，只补这个标签自己目录里缺的文件，**不会**把 stable 或官网 `latest/` 退回旧版。
@@ -125,8 +131,8 @@ preflight（版本号一致性 + 清单脚本自测 + 镜像同步计划自测�
 2. **写** `docs/release/notes/v<版本>.zh.md` / `.en.md`（人话短句；规则见 `docs/release/notes/README.md`）。
    CI 会同时写入 `latest.json` notes，并嵌进 GitHub Release body 开头（`## 更新内容` / `## What's New`），
    供 mistlab.dev 下载页「更新日志」读取；不要只靠自动 `## What's Changed`。
-3. 合并到 main。这一步还不发布。
-4. 在 main 的这个提交上打标签 `v<版本>` 并推送。CI 会拒绝不在 `origin/main` 上的标签。
+3. 合并到 main。Tag release 发现版本比现有正式标签新、版本号一致、中英 notes 都在，就在这个提交上创建 `v<版本>` 并启动 Build & Test。不要再手工打标签，也不要移动已经存在的标签。
+4. 若 Tag release 在创建标签之前失败（例如忘了 notes），补一次提交再合进 main。标签会打在第一次满足条件的 main 提交上。若标签已经打上但构建没启动，重跑 Tag release。若构建失败，重跑该标签上的 Build & Test。人工 `git push origin v<版本>` 仍然可以直接启动同一次构建。
 5. 等待 Actions 自动完成 sign、GitHub Release 和 mirror（无需人工批准）。mirror 成功后才算镜像同步完成；失败就重跑该 workflow，不要手工先改 `stable/latest.json`。
 6. 发布后核对：
    - `curl -sL https://github.com/mistlab-dev/MistTerm/releases/latest/download/latest.json`，
