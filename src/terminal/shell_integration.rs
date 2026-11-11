@@ -57,7 +57,7 @@ pub struct ProbeResult {
 /// 钩子函数名，同时用作"是否已注入"的哨兵。
 ///
 /// 名字带双下划线前缀是 shell 惯例里的私有命名，尽量不与用户函数撞车。
-const HOOK_FN: &str = "__mist_cwd_report";
+pub const HOOK_FN: &str = "__mist_cwd_report";
 
 /// 是否允许向交互 PTY 注入 cwd 上报钩子。默认关闭。
 ///
@@ -124,7 +124,12 @@ pub fn parse_probe_output(raw: &str) -> ProbeResult {
     }
     if shell_path.is_empty() {
         // exec 通道里可能先冒出一行诊断噪音（awk: not found），取最后一条非空行最稳。
-        if let Some(last) = raw.lines().map(str::trim).filter(|l| !l.is_empty()).next_back() {
+        if let Some(last) = raw
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .next_back()
+        {
             shell_path = last.to_string();
         }
     }
@@ -165,7 +170,7 @@ pub fn injection_command(kind: ShellKind) -> Option<&'static str> {
 ///   属于已知取舍——数组写法太少见，为它加分支不值得。
 /// - `printf '\033]7;...\033\\'`：`ESC ]` 起、`ESC \`（ST）收。
 const BASH_HOOK: &str = concat!(
-    r#"__mist_cwd_report() { printf '\033]7;file://%s%s\033\\' "${HOSTNAME:-$(hostname 2>/dev/null)}" "$PWD"; }"#,
+    r#"__mist_cwd_report() { printf '\033]7;file://%s%s\033\\' "${HOSTNAME:-$(uname -n)}" "$PWD"; }"#,
     r#"; case "${PROMPT_COMMAND-}" in *__mist_cwd_report*) ;; *)"#,
     r#" PROMPT_COMMAND="__mist_cwd_report${PROMPT_COMMAND:+;$PROMPT_COMMAND}" ;; esac"#,
 );
@@ -174,15 +179,14 @@ const BASH_HOOK: &str = concat!(
 ///
 /// zsh 没有 `HOSTNAME`，只有 `HOST`。
 const ZSH_HOOK: &str = concat!(
-    r#"__mist_cwd_report() { printf '\033]7;file://%s%s\033\\' "${HOST:-$(hostname 2>/dev/null)}" "$PWD"; }"#,
+    r#"__mist_cwd_report() { printf '\033]7;file://%s%s\033\\' "${HOST:-$(uname -n)}" "$PWD"; }"#,
     r#"; case ":${precmd_functions[*]}:" in *:__mist_cwd_report:*) ;; *)"#,
     r#" precmd_functions+=(__mist_cwd_report) ;; esac"#,
 );
 
 /// fish：同名函数重复定义即替换，天然幂等，不需要额外的哨兵判断。
 /// `--on-event fish_prompt` 相当于 bash 的 `PROMPT_COMMAND`。
-const FISH_HOOK: &str =
-    r#"function __mist_cwd_report --on-event fish_prompt; printf '\033]7;file://%s%s\033\\' (hostname 2>/dev/null) $PWD; end"#;
+const FISH_HOOK: &str = r#"function __mist_cwd_report --on-event fish_prompt; printf '\033]7;file://%s%s\033\\' (uname -n) $PWD; end"#;
 
 /// 精确回显抑制窗口的时长：超过后停止过滤，残余回显保持可见（宁可露一行
 /// 也不吞用户输出）。覆盖慢速链路下 shell 回显 + 执行的开销。
@@ -268,7 +272,8 @@ fn fish_fragment_match(body: &[u8], buf: &[u8]) -> Option<usize> {
         let mut moves = 0usize;
         while rest.len() >= 2 && rest[0] == 0x1b && rest[1] == b'[' {
             let mut j = 2usize;
-            while j < rest.len() && (rest[j].is_ascii_digit() || rest[j] == b';' || rest[j] == b'?') {
+            while j < rest.len() && (rest[j].is_ascii_digit() || rest[j] == b';' || rest[j] == b'?')
+            {
                 j += 1;
             }
             if j >= rest.len() {
@@ -491,22 +496,39 @@ impl EchoSuppressor {
                 .max()
                 .unwrap_or(0);
             if max_prefix > 0 {
-                // 有希望构成回显续体：只暂存匹配前缀本身。
-                // 若新前缀没有比已暂存的更长（没有新证据），说明候选已走偏：
-                // 放行暂存字节，保留队列（真正的回显可能还在后面的位置）。
+                let remainder = &buf[pos + max_prefix..];
+                // 钩子正文已齐、行尾/行编辑填充可能被截断：必须等下一 chunk。
+                let body_waiting_tail = expected.last() == Some(&b'\n')
+                    && max_prefix == expected.len() - 1
+                    && !remainder.is_empty();
+                // 行编辑碎片尚未结束（下一字节是 \r 或 CSI）时也必须等，不能当走偏。
+                let maybe_line_edit =
+                    !remainder.is_empty() && (remainder[0] == b'\r' || remainder[0] == 0x1b);
+                if remainder.is_empty() || body_waiting_tail || maybe_line_edit {
+                    // 有希望构成回显续体：只暂存匹配前缀本身。
+                    // 若新前缀没有比已暂存的更长（没有新证据），说明候选已走偏。
+                    if max_prefix <= old_pending.len() && !old_pending.is_empty() {
+                        out.extend_from_slice(&old_pending);
+                        pos += old_pending.len();
+                        continue;
+                    }
+                    self.pending = buf[pos..pos + max_prefix].to_vec();
+                    if !remainder.is_empty() {
+                        self.deferred.push(remainder.to_vec());
+                    }
+                    return out;
+                }
+                // 同一 chunk 里前缀后面的字节已经对不上任何变体（例如 MOTD
+                // 的 "from" 对上 fish 钩子 "function" 的首字母）：立刻走偏并继续扫，
+                // 否则会把后面的钩子回显、OSC、提示符一起挂到下一轮，超时后整段露出。
                 if max_prefix <= old_pending.len() && !old_pending.is_empty() {
                     out.extend_from_slice(&old_pending);
                     pos += old_pending.len();
                     continue;
                 }
-                // 暂存候选；候选之后的剩余字节先挂在 deferred，等候选定论后
-                // 再按顺序处理（回显剥离 or 放行），保证输出顺序与到达顺序一致。
-                self.pending = buf[pos..pos + max_prefix].to_vec();
-                let remainder = &buf[pos + max_prefix..];
-                if !remainder.is_empty() {
-                    self.deferred.push(remainder.to_vec());
-                }
-                return out;
+                out.extend_from_slice(&buf[pos..pos + max_prefix]);
+                pos += max_prefix;
+                continue;
             }
             // 走偏：这个字节与任何载荷都无关（MOTD/Last login 等），放行后继续扫。
             // 注意不能在这里放弃队列——载荷回显可能出现在后面的位置。
@@ -565,8 +587,12 @@ mod tests {
         assert_eq!(pr.identity.unwrap().user, "root");
 
         // 身份缺一半就当没有：只有 host 不足以判断该不该继承目录。
-        assert!(parse_probe_output("shell=/bin/bash\nhost=box\n").identity.is_none());
-        assert!(parse_probe_output("shell=/bin/bash\nuser=root\n").identity.is_none());
+        assert!(parse_probe_output("shell=/bin/bash\nhost=box\n")
+            .identity
+            .is_none());
+        assert!(parse_probe_output("shell=/bin/bash\nuser=root\n")
+            .identity
+            .is_none());
         assert!(parse_probe_output("").identity.is_none());
     }
 
@@ -658,13 +684,19 @@ mod tests {
     #[test]
     fn detect_command_reads_login_shell_with_fallback() {
         let cmd = detect_command();
-        assert!(cmd.contains("/etc/passwd"), "优先读本地 passwd，不依赖可能卡网络的 getent");
+        assert!(
+            cmd.contains("/etc/passwd"),
+            "优先读本地 passwd，不依赖可能卡网络的 getent"
+        );
         assert!(cmd.contains("${SHELL:-}"), "读不到时回落 $SHELL");
         assert!(
             cmd.contains(r#"${HOSTNAME:-$(uname -n"#),
             "主机名要和钩子上报的取值同源，否则身份永远比不上"
         );
-        assert!(cmd.contains("user=") && cmd.contains("host="), "要一并带出身份");
+        assert!(
+            cmd.contains("user=") && cmd.contains("host="),
+            "要一并带出身份"
+        );
         assert!(!cmd.contains('\n'), "探测命令也走单行");
     }
 
@@ -689,7 +721,11 @@ mod tests {
             s.begin(b"__mist_cwd_report() { ... }; PROMPT_COMMAND=...\n");
             let echo = b"__mist_cwd_report() { ... }; PROMPT_COMMAND=...\r\n";
             let out = s.filter(&echo[..], now());
-            assert!(out.is_empty(), "回显应被精确剥掉，got {:?}", String::from_utf8_lossy(&out));
+            assert!(
+                out.is_empty(),
+                "回显应被精确剥掉，got {:?}",
+                String::from_utf8_lossy(&out)
+            );
             assert!(!s.is_active());
         }
 
@@ -715,10 +751,7 @@ mod tests {
             s.begin(b"hook-line\n");
             let out_a = s.filter(b"hook-", now());
             assert!(out_a.is_empty());
-            let out_b = s.filter(
-                b"line\r\n\x1b]7;file://h/home\x1b\\prompt$ ",
-                now(),
-            );
+            let out_b = s.filter(b"line\r\n\x1b]7;file://h/home\x1b\\prompt$ ", now());
             assert_eq!(
                 String::from_utf8_lossy(&out_b),
                 "\x1b]7;file://h/home\x1b\\prompt$ "
@@ -735,7 +768,11 @@ mod tests {
             let out_a = s.filter(b"hook-", now());
             assert!(out_a.is_empty());
             let out_b = s.filter(b"line\r\ncd -- '/tmp'\r\n", now());
-            assert!(out_b.is_empty(), "两段回显都要剥掉，got {:?}", String::from_utf8_lossy(&out_b));
+            assert!(
+                out_b.is_empty(),
+                "两段回显都要剥掉，got {:?}",
+                String::from_utf8_lossy(&out_b)
+            );
             assert!(!s.is_active());
         }
 
@@ -745,7 +782,36 @@ mod tests {
             s.begin(b"hook-line\n");
             let stream = b"Last login: Mon Nov 10 from 1.2.3.4\r\nhook-line\r\nprompt$ ";
             let out = s.filter(&stream[..], now());
-            assert_eq!(out, b"Last login: Mon Nov 10 from 1.2.3.4\r\nprompt$ ".to_vec());
+            assert_eq!(
+                out,
+                b"Last login: Mon Nov 10 from 1.2.3.4\r\nprompt$ ".to_vec()
+            );
+        }
+
+        #[test]
+        fn motd_from_does_not_stall_fish_function_hook() {
+            // fish 钩子以 function 开头；MOTD 的 "from" 只共享首字母。
+            // 同一 chunk 必须立刻走偏并继续剥后面的真回显，不能把 OSC/提示符挂到下一轮。
+            let hook = injection_command(ShellKind::Fish).unwrap();
+            let mut payload = hook.as_bytes().to_vec();
+            payload.push(b'\n');
+            let mut s = EchoSuppressor::new();
+            s.begin(&payload);
+            let mut stream = b"Last login: Mon Nov 10 from 1.2.3.4\r\n".to_vec();
+            stream.extend_from_slice(&payload[..payload.len() - 1]);
+            stream.extend_from_slice(b"\r\n\x1b]7;file://h/tmp\x1b\\prompt$ ");
+            let out = s.filter(&stream, now());
+            let text = String::from_utf8_lossy(&out);
+            assert!(
+                text.contains("Last login: Mon Nov 10 from 1.2.3.4"),
+                "MOTD 必须放行，got {text:?}"
+            );
+            assert!(
+                text.contains("]7;file://h/tmp") && text.contains("prompt$ "),
+                "OSC/提示符必须在同一轮放行，got {text:?}"
+            );
+            assert!(!text.contains(HOOK_FN), "钩子回显必须剥掉，got {text:?}");
+            assert!(!s.is_active());
         }
 
         #[test]
@@ -768,7 +834,11 @@ mod tests {
             s.begin(b"cd -- '/srv/app'\r");
             let stream = b"__mist_cwd_report() { ... }; PROMPT_COMMAND=...\r\ncd -- '/srv/app'\r\n";
             let out = s.filter(&stream[..], now());
-            assert!(out.is_empty(), "两段回显都要剥掉，got {:?}", String::from_utf8_lossy(&out));
+            assert!(
+                out.is_empty(),
+                "两段回显都要剥掉，got {:?}",
+                String::from_utf8_lossy(&out)
+            );
             assert!(!s.is_active());
         }
 
@@ -878,7 +948,8 @@ mod tests {
             // 碎片拼接不等于载荷本体：不能剥。
             let mut s = EchoSuppressor::new();
             s.begin(b"function hook; end\n");
-            let stream = b"function \r\x1b[9CWRONG; end\r\x1b[18Cfunction hook; end\r\x1b[18C\r\nprompt# ";
+            let stream =
+                b"function \r\x1b[9CWRONG; end\r\x1b[18Cfunction hook; end\r\x1b[18C\r\nprompt# ";
             let out = s.filter(&stream[..], now());
             // 碎片内容对不上：碎片放行；但后面的完整逐字重绘就是真实回显，仍要剥。
             let out2 = s.filter(b"", now());
@@ -896,7 +967,10 @@ mod tests {
             let mut s = EchoSuppressor::new();
             s.begin(b"function hook; end\n");
             let out0 = s.filter(b"function \r\x1b[9Chook; ", now());
-            let out1 = s.filter(b"\r\x1b[15Cend\r\x1b[18Cfunction hook; end\r\x1b[18C\r\nprompt# ", now());
+            let out1 = s.filter(
+                b"\r\x1b[15Cend\r\x1b[18Cfunction hook; end\r\x1b[18C\r\nprompt# ",
+                now(),
+            );
             // 碎片跨 chunk 拼接：可见输出只有 OSC 7 与提示符。
             let mut all = out0.clone();
             all.extend(out1);
@@ -914,7 +988,10 @@ mod tests {
             // 超时：tick 必须交回暂存字节，残余全部可见。
             let later = t0 + ECHO_SUPPRESS_WINDOW + std::time::Duration::from_millis(10);
             let flushed = s.tick(later);
-            assert_eq!(flushed.as_ref().map(|v| v.as_slice()), Some(b"hook-li".as_slice()));
+            assert_eq!(
+                flushed.as_ref().map(|v| v.as_slice()),
+                Some(b"hook-li".as_slice())
+            );
             // 超时后再来的数据原样放行。
             let out1 = s.filter(b"ne is visible\r\n", later);
             assert_eq!(out1, b"ne is visible\r\n".to_vec());
@@ -925,7 +1002,8 @@ mod tests {
         fn timeout_with_empty_pending_flushes_nothing() {
             let mut s = EchoSuppressor::new();
             s.begin(b"hook-line\n");
-            let later = Instant::now() + ECHO_SUPPRESS_WINDOW + std::time::Duration::from_millis(10);
+            let later =
+                Instant::now() + ECHO_SUPPRESS_WINDOW + std::time::Duration::from_millis(10);
             let flushed = s.tick(later);
             assert!(flushed.is_some());
             assert!(flushed.unwrap().is_empty());
