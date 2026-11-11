@@ -1098,7 +1098,7 @@ impl TerminalView {
     pub fn new() -> Self {
         let download_dir = crate::core::local_dir::current().dir;
 
-        Self {
+        let mut view = Self {
             session_id: None,
             ssh_manager: None,
             ssh_rx: None,
@@ -1215,7 +1215,13 @@ impl TerminalView {
             module_output_line_acc: String::new(),
             pending_module_actions: Vec::new(),
             pending_module_menu_action: None,
-        }
+        };
+        // #414：产品总闸优先于用户偏好。总闸关闭时状态机一律不排队钩子文本，
+        // 避免「探测结果迟到 → 仍注入 __mist_cwd_report」。
+        view.startup.set_hook_enabled(Self::startup_hook_injection_allowed(
+            view.shell_hook_enabled,
+        ));
+        view
     }
 
     pub fn set_search_highlight(&mut self, highlight: Option<(usize, usize, usize)>) {
@@ -1771,6 +1777,8 @@ impl TerminalView {
 
     fn maybe_send_startup_cd(&mut self) {
         if self.pending_startup_cd.is_none() {
+            // 与状态机的 cd_pending 保持一致，避免 Degraded 臂反复发空动作。
+            self.startup.set_cd_pending(false);
             return;
         }
         // #401 第 4 条：跨会话继承得先确认"同一台机器、同一个登录账号"，否则不搬。
@@ -1825,10 +1833,16 @@ impl TerminalView {
         self.startup.set_cd_pending(false);
     }
 
+    /// #414：产品总闸优先于用户偏好。注入相关的每个入口统一走这里，避免漏检。
+    fn startup_hook_injection_allowed(pref: bool) -> bool {
+        crate::terminal::shell_integration::cwd_hook_injection_enabled(pref)
+    }
+
     /// #401 方案 B：偏好开关，连接前由宿主按 `AppSettings` 写入。
     pub fn set_shell_hook_enabled(&mut self, on: bool) {
         self.shell_hook_enabled = on;
-        self.startup.set_hook_enabled(on);
+        self.startup
+            .set_hook_enabled(Self::startup_hook_injection_allowed(on));
     }
 
     /// 连接成功后向 shell 泵线程排一次探测：登录 shell 类型 + 远端身份。
@@ -1895,7 +1909,8 @@ impl TerminalView {
         self.hook_echo_guard.reset();
         self.cwd_osc_scanner.reset();
         self.startup.reset();
-        self.startup.set_hook_enabled(self.shell_hook_enabled);
+        self.startup
+            .set_hook_enabled(Self::startup_hook_injection_allowed(self.shell_hook_enabled));
         self.startup.set_current_cols(self.cols as u16);
         if self.pending_startup_cd.is_some() {
             self.startup.set_cd_pending(true);
@@ -1943,6 +1958,11 @@ impl TerminalView {
     }
 
     fn send_startup_hook(&mut self, cmd: &str) {
+        // 第二道门：状态机动作到 PTY 写入之间再检一次总闸。
+        if !Self::startup_hook_injection_allowed(self.shell_hook_enabled) {
+            log::debug!("shell integration hook inject blocked by product gate");
+            return;
+        }
         if !self.connected || !self.has_pty_writer() {
             return;
         }
@@ -7269,6 +7289,10 @@ mod cwd_hook_injection_gate_tests {
             "product default must keep the shell-detect probe off"
         );
         let mut view = TerminalView::new();
+        assert!(
+            !view.startup.hook_enabled(),
+            "总闸关闭时状态机不得允许注入"
+        );
         view.set_shell_hook_enabled(true);
         view.start_shell_hook_probe();
         assert!(
@@ -7276,11 +7300,16 @@ mod cwd_hook_injection_gate_tests {
             "must not enqueue the remote-exec shell-detect probe"
         );
         assert!(view.shell_probe_rx.is_none());
+        assert!(
+            !view.startup.has_pending_hook(),
+            "总闸关闭时不得排队钩子文本"
+        );
     }
 
     #[test]
     fn stale_probe_result_does_not_queue_hook_script() {
         assert!(!cwd_hook_injection_enabled(true));
+        assert!(!TerminalView::startup_hook_injection_allowed(true));
         let mut view = TerminalView::new();
         view.set_shell_hook_enabled(true);
         let (tx, rx) = std::sync::mpsc::channel();
@@ -7288,26 +7317,39 @@ mod cwd_hook_injection_gate_tests {
             .unwrap();
         view.shell_probe_rx = Some(rx);
         view.poll_shell_hook_probe();
-        // PR #413 语义：探测结果只填远端身份，钩子文本由 StartupController 内部持有，
-        // 总闸关闭时绝不在 UI 层排队任何 __mist_cwd_report / precmd 文本。
+        // 身份仍要填：跨会话继承目录靠它，与注入开关无关。
         assert!(
             view.remote_identity.is_some(),
             "probe result must still fill remote identity for cd inheritance"
         );
+        // c-wind 阻塞项：恢复「不得排队钩子文本」的断言。总闸关闭时，
+        // 迟到的探测结果也不能让状态机写出 __mist_cwd_report / precmd 文本。
+        assert!(
+            !view.startup.has_pending_hook(),
+            "must not queue hook script when product gate is off"
+        );
+        assert!(!view.startup.hook_enabled());
     }
 
     #[test]
-    fn disabled_hook_prefers_no_pending_hook_in_controller() {
+    fn disabled_hook_preference_keeps_controller_off() {
         let mut view = TerminalView::new();
-        view.set_shell_hook_enabled(true);
-        assert!(view.startup.hook_enabled());
         view.set_shell_hook_enabled(false);
-        assert!(
-            !view.startup.hook_enabled(),
-            "disabled hook preference must keep the startup controller from queuing hook text"
-        );
+        assert!(!view.startup.hook_enabled());
         view.startup
             .on_probe(ShellKind::Zsh, std::time::Instant::now());
-        assert!(!view.startup.hook_enabled());
+        assert!(!view.startup.has_pending_hook());
+    }
+
+    #[test]
+    fn product_gate_blocks_send_startup_hook() {
+        // 第二道门：即使状态机真的给出 InjectHook，UI 写 PTY 前也要再检总闸。
+        let mut view = TerminalView::new();
+        view.set_shell_hook_enabled(true);
+        assert!(!TerminalView::startup_hook_injection_allowed(true));
+        view.send_startup_hook("__mist_cwd_report() { :; }");
+        // 门挡住时不得打开任何回显抑制窗口，也不得触发 PTY 写入。
+        assert!(!view.echo_suppressor.is_active());
+        assert!(!view.hook_echo_guard.is_active());
     }
 }

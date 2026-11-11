@@ -467,6 +467,12 @@ impl StartupController {
         self.hook_enabled
     }
 
+    /// 供诊断/测试：状态机内部是否持有待注入的钩子文本。
+    /// 产品总闸关闭时必须恒为 false，避免「探测结果迟到仍注入」。
+    pub fn has_pending_hook(&self) -> bool {
+        self.pending_hook.is_some()
+    }
+
     pub fn set_hook_enabled(&mut self, on: bool) {
         self.hook_enabled = on;
     }
@@ -645,6 +651,17 @@ impl StartupController {
                 }
             }
         }
+        // `abort(Degraded)` 会清掉 report/widen deadline，而 STARTUP_BUDGET 已过；
+        // 若此时还有 cd / 恢复列宽 / 排队按键没发，必须给 UI 一个短唤醒，
+        // 否则「连上后空等、只按 deadline 再 poll」时这些动作永远发不出去。
+        if soonest.is_none() && self.phase == StartupPhase::Degraded {
+            if self.cd_pending
+                || (self.widen_requested && !self.restore_requested)
+                || (!self.flushed_on_ready && !self.key_queue.is_empty())
+            {
+                return Some(Duration::from_millis(50));
+            }
+        }
         soonest.map(|d| d.saturating_duration_since(now))
     }
 
@@ -659,9 +676,12 @@ impl StartupController {
                 self.abort(StartupPhase::Degraded);
                 let bytes = self.take_queued_keys();
                 if !bytes.is_empty() {
+                    // 先交还按键；`advance_startup` 的循环下一拍会再 poll，
+                    // 由下方 Degraded 臂发 cd；`next_deadline` 也会给短唤醒兜底。
                     return StartupAction::FlushKeys { bytes };
                 }
-                return StartupAction::None;
+                // 空队列：不要提前 return None，让控制流落入下面 match 的
+                // Degraded 臂，同一次 poll 就把 RestorePtySize / SendStartupCd 发出去。
             }
         }
 
@@ -762,7 +782,10 @@ impl StartupController {
                 // 启动失败时更要照常发（身份已探到才有 pending），
                 // 且此时按键已放行，不再有折行抑制需求。
                 if self.phase == StartupPhase::Degraded && self.cd_pending {
-                    self.cd_pending = false;
+                    // 不提前清旗：UI 的 `maybe_send_startup_cd` 在身份未齐或发送
+                    // 失败时会保留 pending_startup_cd，成功后才 set_cd_pending(false)。
+                    // 这里清掉会导致身份迟到时这次继承永久丢失（与 StartingCd
+                    // / AwaitingEcho 两臂保持一致的语义）。
                     return StartupAction::SendStartupCd;
                 }
                 StartupAction::None
@@ -1031,6 +1054,44 @@ mod tests {
         c.set_cd_pending(false);
         let act = c.poll(now + STARTUP_BUDGET + Duration::from_millis(50));
         assert!(matches!(act, StartupAction::RestorePtySize | StartupAction::None));
+    }
+
+    #[test]
+    fn timeout_with_queued_keys_flushes_then_sends_cd() {
+        // 回归（review 阻塞项）：超时且队列非空时先 FlushKeys，
+        // 下一拍仍必须发出 SendStartupCd；next_deadline 也要能把 UI 唤醒。
+        let now = t0();
+        let mut c = StartupController::new();
+        c.set_cd_pending(true);
+        c.on_shell_started(now);
+        c.push_user_input(b"pwd");
+        let act = c.poll(now + STARTUP_BUDGET);
+        match act {
+            StartupAction::FlushKeys { bytes } => assert_eq!(bytes, b"pwd".to_vec()),
+            other => panic!("应先交还排队按键, got {other:?}"),
+        }
+        assert_eq!(c.phase(), StartupPhase::Degraded);
+        // abort 清掉了 report/widen deadline，STARTUP_BUDGET 已过；
+        // 仍有 cd_pending，必须给一个短唤醒，否则空闲连接上不再 poll。
+        assert!(
+            c.next_deadline(now + STARTUP_BUDGET).is_some(),
+            "Degraded 且有 pending 动作时必须还能唤醒 UI"
+        );
+        let act = c.poll(now + STARTUP_BUDGET + Duration::from_millis(50));
+        assert_eq!(act, StartupAction::SendStartupCd);
+    }
+
+    #[test]
+    fn degraded_does_not_clear_cd_flag_before_ui_sends() {
+        // 身份未齐时 maybe_send_startup_cd 会保留 pending_startup_cd；
+        // 控制器不能在发动作时提前清 cd_pending，否则这次继承永久丢失。
+        let now = t0();
+        let mut c = StartupController::new();
+        c.set_cd_pending(true);
+        c.on_shell_started(now);
+        assert_eq!(c.poll(now + STARTUP_BUDGET), StartupAction::SendStartupCd);
+        assert!(c.cd_pending, "cd flag must survive until UI confirms send");
+        assert!(c.next_deadline(now + STARTUP_BUDGET).is_some());
     }
 
     #[test]
