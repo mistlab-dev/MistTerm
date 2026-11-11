@@ -1837,9 +1837,13 @@ impl TerminalView {
     /// 探测失败（关掉了 exec、ForceCommand、非 POSIX shell）直接静默放弃，
     /// 退化到"只听 OSC 7"的被动模式，不影响任何已有功能。
     ///
-    /// 注意这里**不**看 `shell_hook_enabled`：身份探测还给跨会话继承判定用，
-    /// 关掉注入钩子的人一样需要它——否则新标签会照着旧目录乱 `cd`。
+    /// [`crate::terminal::shell_integration::CWD_HOOK_INJECTION_ENABLED`] 关闭时，
+    /// 探测一并跳过：它主要是为注入服务的，期间 PTY 泵会暂停，最坏约 15s。
+    /// 关闭期间目录继承只依赖服务器自己上报的 OSC；身份判定在总闸重新打开后恢复。
     fn start_shell_hook_probe(&mut self) {
+        if !crate::terminal::shell_integration::cwd_hook_probe_enabled() {
+            return;
+        }
         if self.shell_probe_sent || self.is_local_shell() {
             return;
         }
@@ -7247,5 +7251,63 @@ mod disconnect_banner_tests {
         view.append_offline_bytes(b"x");
         view.flush_disconnect_input_toast(&ctx);
         assert!(view.take_pending_toast_info().is_some());
+    }
+}
+
+#[cfg(test)]
+mod cwd_hook_injection_gate_tests {
+    use super::*;
+    use crate::terminal::shell_integration::{
+        cwd_hook_injection_enabled, cwd_hook_probe_enabled, ShellKind,
+        CWD_HOOK_INJECTION_ENABLED,
+    };
+
+    #[test]
+    fn start_probe_is_skipped_when_product_gate_is_off() {
+        assert!(
+            !CWD_HOOK_INJECTION_ENABLED && !cwd_hook_probe_enabled(),
+            "product default must keep the shell-detect probe off"
+        );
+        let mut view = TerminalView::new();
+        view.set_shell_hook_enabled(true);
+        view.start_shell_hook_probe();
+        assert!(
+            !view.shell_probe_sent,
+            "must not enqueue the remote-exec shell-detect probe"
+        );
+        assert!(view.shell_probe_rx.is_none());
+    }
+
+    #[test]
+    fn stale_probe_result_does_not_queue_hook_script() {
+        assert!(!cwd_hook_injection_enabled(true));
+        let mut view = TerminalView::new();
+        view.set_shell_hook_enabled(true);
+        let (tx, rx) = std::sync::mpsc::channel();
+        tx.send(Ok("shell=/usr/bin/zsh\nuser=tian\nhost=box\n".to_string()))
+            .unwrap();
+        view.shell_probe_rx = Some(rx);
+        view.poll_shell_hook_probe();
+        // PR #413 语义：探测结果只填远端身份，钩子文本由 StartupController 内部持有，
+        // 总闸关闭时绝不在 UI 层排队任何 __mist_cwd_report / precmd 文本。
+        assert!(
+            view.remote_identity.is_some(),
+            "probe result must still fill remote identity for cd inheritance"
+        );
+    }
+
+    #[test]
+    fn disabled_hook_prefers_no_pending_hook_in_controller() {
+        let mut view = TerminalView::new();
+        view.set_shell_hook_enabled(true);
+        assert!(view.startup.hook_enabled());
+        view.set_shell_hook_enabled(false);
+        assert!(
+            !view.startup.hook_enabled(),
+            "disabled hook preference must keep the startup controller from queuing hook text"
+        );
+        view.startup
+            .on_probe(ShellKind::Zsh, std::time::Instant::now());
+        assert!(!view.startup.hook_enabled());
     }
 }

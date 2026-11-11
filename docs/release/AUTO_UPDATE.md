@@ -100,7 +100,7 @@ tag-release（push main；满足条件才创建 vX.Y.Z，并在该标签上启�
 - 标签上的 sign → release → mirror **自动跑完**，无需在 Actions 里点批准。`release` 环境没有 Required reviewers。
 - mirror 默认会跑。只有仓库变量 `MIST_MIRROR_ENABLED` **精确等于** `false` 时才跳过。不要再把它设成必须等于 `true`：v1.3.14 和 v1.3.15 的 mirror job 就是因为不等于 `true` 被整段跳过。
 - 缺 `MIST_DEPLOY_KEY`、安装包不齐、公网大小对不上、或 stable 在同步途中被更新的版本抢走时，mirror job **失败**。GitHub Release 已经发出，但这次 Actions 运行是红的，方便补跑。旧实现在密钥为空时只打 notice 并以成功结束。
-- 重跑同一个标签是幂等的：公网文件大小已经一致的安装包不会重传。已经公开、且大小和这次构建不一致的 `v<版本>/` 文件**不会被覆盖**，job 会失败并停下，避免把已发布的版本目录改掉。公网 `stable/latest.json` 比这个标签新时，只补这个标签自己目录里缺的文件，**不会**把 stable 或官网 `latest/` 退回旧版。
+- 重跑同一个标签是幂等的：公网文件大小已经一致的安装包不会重传。已经公开、且大小和这次构建不一致的 `v<版本>/` 文件**不会被覆盖**，job 会失败并停下，避免把已发布的版本目录改掉。公网 `stable/latest.json` 比这个标签新时，只补这个标签自己目录里缺的文件，**不会**把 stable 或官网 `latest/` 退回旧版。官网 `latest/` 上的 `SHA256SUMS` 和 `latest.json` **每次都会重写**：校验和文件在版本号位数相同时常常一样大（例如 1.3.15 和 1.3.16 都是 1036 字节），只比大小会误判为已是当前版本并跳过上传。
 - manifest job **始终**写入镜像优先的安装包地址，不看 `MIST_MIRROR_ENABLED`。
 - 签名和镜像用的私钥都只写到临时文件、用完即删，从不打印。镜像 job 通过环境变量读密钥，不把密钥写进 `if` 脚本。
 - `Release mirror plan`（`.github/workflows/release-mirror-plan.yml`）在改到同步脚本或 `build.yml` 的 PR 上跑计划自测，不连生产机。
