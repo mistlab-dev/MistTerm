@@ -538,6 +538,10 @@ pub struct TerminalView {
     shell_probe_rx: Option<std::sync::mpsc::Receiver<Result<String, String>>>,
     /// 本次连接已排过探测，避免重连路径重复入队。
     shell_probe_sent: bool,
+    /// #413 后继：exec 通道带外查询 cwd 的异步回执（与注入总闸无关，零 PTY 写入）。
+    oob_cwd_rx: Option<std::sync::mpsc::Receiver<Result<String, String>>>,
+    /// 本次连接已排过带外查询，避免重连路径重复入队。
+    oob_cwd_sent: bool,
     /// 本连接探测到的远端身份（host + 登录名），用于跨会话继承判定。
     remote_identity: Option<crate::terminal::shell_integration::RemoteIdentity>,
     /// 待发启动 `cd` 的继承策略，与 `pending_startup_cd` 同生命周期。
@@ -1168,6 +1172,8 @@ impl TerminalView {
             echo_suppressor: crate::terminal::shell_integration::EchoSuppressor::new(),
             shell_probe_rx: None,
             shell_probe_sent: false,
+            oob_cwd_rx: None,
+            oob_cwd_sent: false,
             remote_identity: None,
             startup_cd_policy: None,
             startup_cd_deadline: None,
@@ -1864,6 +1870,72 @@ impl TerminalView {
         }
     }
 
+    /// #413 后继：连接成功后排一次 exec 通道带外 cwd 查询。
+    ///
+    /// 与注入探测（`start_shell_hook_probe`）完全独立：不受
+    /// [`crate::terminal::shell_integration::CWD_HOOK_INJECTION_ENABLED`] 总闸影响，
+    /// 因为这条路**不向交互 PTY 写入任何字节**，不存在回显 / ZLE 折行 / 可见性问题。
+    ///
+    /// 一次 exec 同时拿三样：登录名、主机名、当前目录。前两者补上 #414 关闭注入
+    /// 探测后 `remote_identity` 恒为 `None` 的缺口，让跨会话目录继承的 `Match`
+    /// 身份判定重新可用；后者作为 OSC 7 之外的兜底目录来源。
+    ///
+    /// 取舍：`enqueue_remote_exec` 期间 PTY 泵暂停（最坏 `PUMP_EXEC_TIMEOUT_MS`
+    /// = 15s）。查询命令是纯 `/proc` 遍历、无网络依赖，正常百毫秒内返回；
+    /// ForceCommand / 受限 shell 下 exec 失败会静默降级，不影响已有功能。
+    fn start_oob_cwd_query(&mut self) {
+        if self.oob_cwd_sent || self.is_local_shell() {
+            return;
+        }
+        let Some(handle) = self.ssh_handle.as_ref() else {
+            return;
+        };
+        match handle.enqueue_remote_exec(crate::terminal::oob_cwd::OOB_CWD_COMMAND) {
+            Ok(rx) => {
+                self.oob_cwd_rx = Some(rx);
+                self.oob_cwd_sent = true;
+            }
+            Err(e) => {
+                log::debug!("oob cwd query skipped: {e}");
+            }
+        }
+    }
+
+    /// 非阻塞取带外查询结果。优先级：OSC 7 / 用户手敲 cd / 继承目标 > 带外兜底。
+    fn poll_oob_cwd_query(&mut self) {
+        let Some(rx) = self.oob_cwd_rx.take() else {
+            return;
+        };
+        use std::sync::mpsc::TryRecvError;
+        match rx.try_recv() {
+            Ok(Ok(out)) => {
+                let result = crate::terminal::oob_cwd::parse_oob_cwd_output(&out);
+                // 身份总是补（若还没有更准确的来源）：#414 关掉注入探测后，
+                // 跨会话继承的 Match 策略会一直等不到身份，6s 后放弃目录继承。
+                if self.remote_identity.is_none() {
+                    self.remote_identity = result.identity;
+                }
+                // 目录只在「还没有任何目录信息」时兜底写入：
+                // - 已有 OSC 7（sync_shell_cwd）→ 服务器自报的更可信；
+                // - 用户已手敲 cd（note_typed_cd）→ 异步回执不能把旧目录盖回去；
+                // - 有待发继承 cd（arm_startup_directory_for）→ 那是目标目录，
+                //   带外查到的是刚登录的 home，写进去会污染继承。
+                if self.shell_cwd.is_none() && self.pending_startup_cd.is_none() {
+                    if let Some(cwd) = result.cwd {
+                        self.shell_cwd = Some(cwd);
+                    }
+                }
+            }
+            Ok(Err(e)) => {
+                log::debug!("oob cwd query failed: {e}");
+            }
+            Err(TryRecvError::Empty) => {
+                self.oob_cwd_rx = Some(rx);
+            }
+            Err(TryRecvError::Disconnected) => {}
+        }
+    }
+
     /// 等提示符就绪再注入，避免命令被打进 MOTD / banner 输出流里。
     ///
     /// 与 `maybe_send_startup_cd` 共用同一判据；注入排在 `cd` 之前（两条命令同帧发出，
@@ -2014,6 +2086,8 @@ impl TerminalView {
                 // #401：新连接重新探测 shell（换机器/换账号都可能有另一种 shell）。
                 self.shell_probe_sent = false;
                 self.shell_probe_rx = None;
+                self.oob_cwd_sent = false;
+                self.oob_cwd_rx = None;
                 self.pending_shell_hook = None;
                 self.echo_suppressor.reset();
                 self.remote_identity = None;
@@ -2048,6 +2122,8 @@ impl TerminalView {
         // #401：本机 shell 不走注入（PowerShell/ConPTY 的 prompt 由本进程控制）。
         self.shell_probe_sent = false;
         self.shell_probe_rx = None;
+        self.oob_cwd_sent = false;
+        self.oob_cwd_rx = None;
         self.pending_shell_hook = None;
         self.echo_suppressor.reset();
         self.remote_identity = None;
@@ -3356,6 +3432,7 @@ impl TerminalView {
             // #410：空闲帧也要 tick——提示符先到、探测后到且后续无输出时，
             // 不能等下一段输出才注入；超时时把暂存的候选残余冲进 VTE（可见）。
             self.poll_shell_hook_probe();
+            self.poll_oob_cwd_query();
             self.maybe_send_shell_hook();
             self.maybe_send_startup_cd();
             if let Some(flushed) = self.echo_suppressor.tick(Instant::now()) {
@@ -3563,6 +3640,7 @@ impl TerminalView {
                                 display_data
                             };
                             self.poll_shell_hook_probe();
+                            self.poll_oob_cwd_query();
                             self.maybe_send_shell_hook();
                             self.maybe_send_startup_cd();
                             display_data = filtered;
@@ -3614,6 +3692,12 @@ impl TerminalView {
                                         // #401 方案 B：shell 已起来，排一次类型探测。
                                         // 连服务器装了 integration 也可能没装，主动补一份。
                                         self.start_shell_hook_probe();
+                                        // #413 后继：每条新交互 shell 都重排一次带外查询，
+                                        // 先清掉可能残留的上一次会话回执（断线路径不统一，
+                                        // keep_buffer / 意外断开不会走 connect() 的复位块）。
+                                        self.oob_cwd_sent = false;
+                                        self.oob_cwd_rx = None;
+                                        self.start_oob_cwd_query();
                                     }
                                     Err(e) => {
                                         let msg = format_ssh_connect_error(
@@ -5568,6 +5652,8 @@ impl TerminalView {
         self.echo_suppressor.reset();
         self.shell_probe_rx = None;
         self.shell_probe_sent = false;
+        self.oob_cwd_rx = None;
+        self.oob_cwd_sent = false;
         self.remote_identity = None;
         self.startup_cd_policy = None;
         self.startup_cd_deadline = None;
@@ -7204,6 +7290,108 @@ mod cwd_hook_injection_gate_tests {
         assert!(
             !view.has_pty_writer(),
             "test must not attach a PTY writer; drop happens before send"
+        );
+    }
+}
+
+#[cfg(test)]
+mod oob_cwd_tests {
+    use super::*;
+    use crate::terminal::oob_cwd::{parse_oob_cwd_output, OOB_CWD_COMMAND};
+
+    /// 把 exec 回执塞进 channel，模拟泵线程返回。
+    fn deliver(view: &mut TerminalView, out: &str) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        tx.send(Ok(out.to_string())).unwrap();
+        view.oob_cwd_rx = Some(rx);
+        view.poll_oob_cwd_query();
+    }
+
+    #[test]
+    fn query_fills_cwd_and_identity_when_nothing_known() {
+        // #414 关掉注入探测后 remote_identity 恒为空；带外查询要补上，
+        // 否则跨会话继承的 Match 策略 6s 后必然放弃。
+        let mut view = TerminalView::new();
+        assert!(view.shell_cwd.is_none());
+        assert!(view.remote_identity.is_none());
+        deliver(&mut view, "user=deploy\nhost=box\ncwd=/srv/app\n");
+        assert_eq!(view.shell_cwd.as_deref(), Some("/srv/app"));
+        assert_eq!(view.remote_identity.as_ref().unwrap().user, "deploy");
+        assert_eq!(view.remote_identity.as_ref().unwrap().host, "box");
+        assert!(view.oob_cwd_rx.is_none(), "取走结果后不应留回执");
+    }
+
+    #[test]
+    fn osc_or_typed_cd_wins_over_late_oob_result() {
+        // 异步回执可能迟到：服务器自报的 OSC 7 / 用户手敲的 cd 更可信，不能被盖回去。
+        let mut view = TerminalView::new();
+        view.sync_shell_cwd("/from/osc7");
+        deliver(&mut view, "user=u\nhost=box\ncwd=/home/u\n");
+        assert_eq!(view.shell_cwd.as_deref(), Some("/from/osc7"));
+        // 身份仍要补，与目录优先级无关。
+        assert_eq!(view.remote_identity.as_ref().unwrap().user, "u");
+    }
+
+    #[test]
+    fn pending_inheritance_cd_blocks_oob_fallback() {
+        // 待发继承 cd 时 shell_cwd 已是目标目录；带外查到的登录 home 不能污染它。
+        let mut view = TerminalView::new();
+        view.arm_startup_directory("/inherited/project");
+        deliver(&mut view, "user=u\nhost=box\ncwd=/home/u\n");
+        assert_eq!(view.shell_cwd.as_deref(), Some("/inherited/project"));
+    }
+
+    #[test]
+    fn empty_reply_keeps_receiver_for_next_frame() {
+        let mut view = TerminalView::new();
+        let (tx, rx) = std::sync::mpsc::channel();
+        view.oob_cwd_rx = Some(rx);
+        view.poll_oob_cwd_query();
+        assert!(view.oob_cwd_rx.is_some(), "Empty 要放回 rx 等下一帧");
+        assert!(view.shell_cwd.is_none());
+        tx.send(Ok("user=u\nhost=box\ncwd=/late\n".to_string()))
+            .unwrap();
+        view.poll_oob_cwd_query();
+        assert_eq!(view.shell_cwd.as_deref(), Some("/late"));
+        assert!(view.oob_cwd_rx.is_none());
+    }
+
+    #[test]
+    fn failed_or_disconnected_reply_degrades_silently() {
+        let mut view = TerminalView::new();
+        let (tx, rx) = std::sync::mpsc::channel();
+        tx.send(Err("exec blocked".to_string())).unwrap();
+        view.oob_cwd_rx = Some(rx);
+        view.poll_oob_cwd_query();
+        assert!(view.shell_cwd.is_none());
+        assert!(view.oob_cwd_rx.is_none());
+
+        let (tx2, rx2) = std::sync::mpsc::channel();
+        drop(tx2);
+        view.oob_cwd_rx = Some(rx2);
+        view.poll_oob_cwd_query();
+        assert!(view.oob_cwd_rx.is_none());
+        assert!(view.remote_identity.is_none());
+    }
+
+    #[test]
+    fn no_ssh_handle_does_not_mark_sent() {
+        // 入队失败不能置 sent，否则重连后再也不会重试。
+        let mut view = TerminalView::new();
+        view.start_oob_cwd_query();
+        assert!(!view.oob_cwd_sent);
+        assert!(view.oob_cwd_rx.is_none());
+    }
+
+    #[test]
+    fn command_is_wired_and_parser_agrees() {
+        assert!(!OOB_CWD_COMMAND.contains('\n'));
+        assert!(OOB_CWD_COMMAND.starts_with("sh -c '"));
+        assert_eq!(
+            parse_oob_cwd_output("user=u\nhost=box\ncwd=/tmp/a b\n")
+                .cwd
+                .as_deref(),
+            Some("/tmp/a b")
         );
     }
 }
