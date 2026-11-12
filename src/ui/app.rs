@@ -5703,10 +5703,8 @@ impl MistTermApp {
         let active = self.tabs[idx]
             .active_pane
             .min(self.tabs[idx].panes.len().saturating_sub(1));
-        let inherit_cwd = self.tabs[idx].panes[active]
-            .terminal
-            .shell_cwd()
-            .map(|s| s.to_string());
+        // A+B：与 ⌘T 同一读点 + 分屏前先刷新带外 cwd（同 #419 点查跟进）。
+        let inherit_cwd = self.refresh_source_cwd_for_inherit(ctx, idx, active);
         if self.tabs[idx].panes[active].terminal.is_local_shell() {
             crate::local_shell::set_repaint_context(ctx);
             let mut terminal = self.new_terminal_view();
@@ -5908,15 +5906,74 @@ impl MistTermApp {
         ctx.request_repaint();
     }
 
-    /// #392：取指定标签活动窗格的 shell cwd（优先 terminal 通道，与分屏一致；其次 pane 字段）。
+    /// #392：取指定标签活动窗格的 shell cwd。
+    /// #419 点查跟进：改为委托 [`Self::pane_inherit_cwd_at`]（统一继承源，A 方案）。
+    /// 只读缓存，不发起刷新查询；复制标签/本机新标签不需要实时性，避免无谓 exec。
     pub(crate) fn tab_pane_inherit_cwd(&self, tab_idx: usize) -> Option<String> {
+        let active = self.active_pane_idx(tab_idx)?;
+        self.pane_inherit_cwd_at(tab_idx, active)
+    }
+
+    /// #419 点查跟进：取指定标签活动窗格的继承源目录。
+    ///
+    /// A 方案：所有继承入口（新标签 / 分屏 / 复制标签）统一走这里，
+    /// 优先 `terminal.shell_cwd()`（OSC 7 / 手敲 cd / 带外查询都会更新），
+    /// 否则退回 `pane.shell_cwd`，不再各处各读各的。
+    fn pane_inherit_cwd_at(&self, tab_idx: usize, pane_idx: usize) -> Option<String> {
         let tab = self.tabs.get(tab_idx)?;
-        let active = tab.active_pane.min(tab.panes.len().saturating_sub(1));
-        let pane = tab.panes.get(active)?;
+        let pane = tab.panes.get(pane_idx)?;
         pane.terminal
             .shell_cwd()
             .map(|s| s.to_string())
             .or_else(|| pane.shell_cwd.clone())
+    }
+
+    fn active_pane_idx(&self, tab_idx: usize) -> Option<usize> {
+        let tab = self.tabs.get(tab_idx)?;
+        Some(tab.active_pane.min(tab.panes.len().saturating_sub(1)))
+    }
+
+    /// #419 点查跟进：继承前对源会话做一次带外刷新查询，并等到结果（或超时）。
+    ///
+    /// B 方案主路径：登录时那一次查询通常只拿到 home，之后用户 `cd` 就旧了。
+    /// 这里在用户动作的当帧发起短超时刷新（`OOB_REFRESH_TIMEOUT_MS`），
+    /// `request_repaint_after` 唤醒本轮帧循环继续轮询；完成后返回刷新到的目录，
+    /// 失败/超时/本机 shell 退回 `fallback`（统一继承源缓存）。
+    fn refresh_source_cwd_for_inherit(&mut self, ctx: &egui::Context, tab_idx: usize, pane_idx: usize) -> Option<String> {
+        let fallback = self.pane_inherit_cwd_at(tab_idx, pane_idx);
+        let Some(pane) = self.tabs.get_mut(tab_idx).and_then(|t| t.panes.get_mut(pane_idx)) else {
+            return fallback;
+        };
+        if pane.terminal.is_local_shell() {
+            // 本机 shell 没有 /proc 通道（Windows/ConPTY），缓存就是实时的（cwd 由 spawn 决定）。
+            return fallback;
+        }
+        pane.terminal.start_oob_cwd_refresh();
+        let deadline = Instant::now() + Duration::from_millis(crate::terminal::oob_cwd::OOB_REFRESH_TIMEOUT_MS as u64 + 200);
+        loop {
+            pane.terminal.poll_oob_cwd_query();
+            if pane.terminal.oob_refresh_finished() {
+                break;
+            }
+            if Instant::now() >= deadline {
+                log::debug!("oob cwd refresh: deadline hit, fall back to cached cwd");
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        let refreshed = pane.terminal.take_oob_refresh_cwd();
+        // 让 egui 在循环后重绘一次，避免状态残留到下一帧。
+        ctx.request_repaint();
+        match refreshed {
+            Some(cwd) => {
+                log::debug!("oob cwd refresh: inherited from /proc: {cwd}");
+                Some(cwd)
+            }
+            None => {
+                log::debug!("oob cwd refresh: no result, fall back to cached cwd ({:?})", fallback);
+                fallback
+            }
+        }
     }
 
     fn open_new_tab_from_selection(&mut self, ctx: &egui::Context) {
@@ -5939,12 +5996,13 @@ impl MistTermApp {
             );
             return;
         };
-        // #392：继承当前活动 pane 的 shell 汇报目录（OSC 7/9;9），连接成功后自动 cd。
+        // #392：继承当前活动 pane 的 shell 汇报目录；#419 点查跟进：先做一次
+        // 带外刷新查询拿当前真实 cwd（zsh 不发 OSC 7，缓存可能是登录时的 home），
+        // 失败/超时退回统一继承源缓存。A+B：读点统一走 pane_inherit_cwd_at。
         let inherited_cwd = self
             .active_tab
-            .and_then(|i| self.tabs.get(i))
-            .and_then(|t| t.panes.get(t.active_pane))
-            .and_then(|p| p.shell_cwd.clone());
+            .and_then(|i| self.active_pane_idx(i).map(|p| (i, p)))
+            .and_then(|(i, p)| self.refresh_source_cwd_for_inherit(ctx, i, p));
         self.open_new_tab_for_session_with_cwd(ctx, &session, inherited_cwd);
     }
 
@@ -9984,6 +10042,14 @@ impl eframe::App for MistTermApp {
             // #392：每帧取走语义 OSC 载荷（进度 / 目录 / 标题），聚焦与否都更新——
             // 它们是持续状态而非一次性事件，不存在「切走再冒出来」的打扰问题。
             for (pane_idx, pane) in tab.panes.iter_mut().enumerate() {
+                // #419 点查跟进（A 方案）：terminal 侧目录因手敲 cd / 带外刷新更新后，
+                // 同步回 pane 缓存，保证所有继承入口（新标签 / 分屏 / 复制标签）
+                // 拿到同一份最新目录，而不是只认 OSC 7 的 pane 旧值。
+                if let Some(cwd) = pane.terminal.shell_cwd() {
+                    if pane.shell_cwd.as_deref() != Some(cwd) {
+                        pane.shell_cwd = Some(cwd.to_string());
+                    }
+                }
                 if let Some(p) = pane.terminal.take_progress() {
                     pane.progress = if p.state == crate::terminal::sem_osc::ProgressState::Remove {
                         None

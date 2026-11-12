@@ -367,6 +367,17 @@ pub enum ConnectionKind {
 /// 继承目录本质是"把 A 的 PWD 拿到 B 上去 cd"，所以要先回答 A 和 B 是不是同一台机器、
 /// 同一个账号。`session_id` 相等只说明用的是同一套连接配置，跨会话就失效了；
 /// 这里改用连接后探到的远端身份（host + 登录名）来判定。
+
+/// 带外查询意图。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum OobCwdIntent {
+    /// 连接/重连时那一次：结果只在没有任何目录信息时兜底写入（空才填）。
+    InitialFill,
+    /// 开新标签/分屏前的继承刷新：结果写进 `oob_refresh_cwd`，可覆盖缓存目录，
+    /// 但不动 `pending_startup_cd`。
+    RefreshForInherit,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum StartupCdPolicy {
     /// 同会话（重连、分屏）：目录本来就是这条连接自己的，直接发。
@@ -542,6 +553,12 @@ pub struct TerminalView {
     oob_cwd_rx: Option<std::sync::mpsc::Receiver<Result<String, String>>>,
     /// 本次连接已排过带外查询，避免重连路径重复入队。
     oob_cwd_sent: bool,
+    /// 本次带外查询的意图：登录时的初次填充，或开新标签/分屏前的继承刷新。
+    oob_cwd_intent: OobCwdIntent,
+    /// 继承刷新查询的结果（`None` = 已完成但没查到/失败）。发起方读后即用。
+    oob_refresh_cwd: Option<String>,
+    /// 继承刷新查询是否已终结（成功/失败/断开都算）。发起方据此退回缓存。
+    oob_refresh_done: bool,
     /// 本连接探测到的远端身份（host + 登录名），用于跨会话继承判定。
     remote_identity: Option<crate::terminal::shell_integration::RemoteIdentity>,
     /// 待发启动 `cd` 的继承策略，与 `pending_startup_cd` 同生命周期。
@@ -1174,6 +1191,9 @@ impl TerminalView {
             shell_probe_sent: false,
             oob_cwd_rx: None,
             oob_cwd_sent: false,
+            oob_cwd_intent: OobCwdIntent::InitialFill,
+            oob_refresh_cwd: None,
+            oob_refresh_done: false,
             remote_identity: None,
             startup_cd_policy: None,
             startup_cd_deadline: None,
@@ -1681,10 +1701,16 @@ impl TerminalView {
     /// SSH 分屏：等提示符出现后再 `cd` 到源窗格目录。
     /// #392 复审：OSC 7/9;9 汇报的目录同步进 terminal 侧缓存，
     /// 与提示符探测的 shell_cwd() 收敛为一条；仅在未手动 cd 探测出更新时写。
-    pub(crate) fn sync_shell_cwd(&mut self, cwd: &str) {
-        if self.shell_cwd.as_deref() != Some(cwd) {
+    /// #419 点查跟进：`override_cached` 为 true 时直接写入（带外刷新查询用），
+    /// 表示这是比缓存更新鲜的实时读数；false 保持旧语义（空才填）。
+    pub(crate) fn sync_shell_cwd_with(&mut self, cwd: &str, override_cached: bool) {
+        if override_cached || self.shell_cwd.as_deref() != Some(cwd) {
             self.shell_cwd = Some(cwd.to_string());
         }
+    }
+
+    pub(crate) fn sync_shell_cwd(&mut self, cwd: &str) {
+        self.sync_shell_cwd_with(cwd, false);
     }
 
     pub(crate) fn arm_startup_directory(&mut self, cwd: &str) {
@@ -1884,25 +1910,115 @@ impl TerminalView {
     /// = 15s）。查询命令是纯 `/proc` 遍历、无网络依赖，正常百毫秒内返回；
     /// ForceCommand / 受限 shell 下 exec 失败会静默降级，不影响已有功能。
     fn start_oob_cwd_query(&mut self) {
-        if self.oob_cwd_sent || self.is_local_shell() {
+        self.start_oob_cwd_query_impl(OobCwdIntent::InitialFill, None)
+    }
+
+    /// 继承刷新（#419 产品点查 Fail 的主路径修复）：开新标签/分屏前对源会话
+    /// 再查一次 `/proc` cwd，拿当前真实目录而不是登录时缓存的 home。
+    ///
+    /// 与登录查询的区别：结果写进 `oob_refresh_cwd`，并且可以覆盖旧缓存目录；
+    /// 但不动 `pending_startup_cd`。短超时（`OOB_REFRESH_TIMEOUT_MS`），慢/失败
+    /// 由调用方退回已缓存目录。查询走本会话自己的 exec 通道，不会串台。
+    pub(crate) fn start_oob_cwd_refresh(&mut self) {
+        // 清上次刷新的残留，发起方以 `oob_refresh_done` 为准。
+        self.oob_refresh_cwd = None;
+        self.oob_refresh_done = false;
+        self.start_oob_cwd_query_impl(
+            OobCwdIntent::RefreshForInherit,
+            Some(crate::terminal::oob_cwd::OOB_REFRESH_TIMEOUT_MS),
+        );
+    }
+
+    fn start_oob_cwd_query_impl(&mut self, intent: OobCwdIntent, timeout_ms: Option<u32>) {
+        if self.is_local_shell() {
+            if intent == OobCwdIntent::RefreshForInherit {
+                // 本机 shell 没有带外通道：立即完成，发起方退回缓存目录。
+                self.oob_refresh_done = true;
+            }
             return;
         }
+        if intent == OobCwdIntent::InitialFill && self.oob_cwd_sent {
+            return;
+        }
+        // 泵线程串行执行：一次只允许一个在途查询。登录查询还在途时立刻刷新
+        // 会覆盖 `oob_cwd_rx` 丢掉登录回执 —— 先排空在途回执再发刷新。
+        // 排空最多等 `OOB_REFRESH_TIMEOUT_MS`，超时就丢弃旧回执（登录目录本来
+        // 也只是兑底，刷新结果才是这次要用的）。
+        if let Some(mut rx) = self.oob_cwd_rx.take() {
+            use std::sync::mpsc::TryRecvError;
+            let prior_intent = self.oob_cwd_intent;
+            let drain_deadline =
+                Instant::now() + Duration::from_millis(crate::terminal::oob_cwd::OOB_REFRESH_TIMEOUT_MS as u64);
+            loop {
+                match rx.try_recv() {
+                    Ok(Ok(out)) => {
+                        let result = crate::terminal::oob_cwd::parse_oob_cwd_output(&out);
+                        if self.remote_identity.is_none() {
+                            self.remote_identity = result.identity;
+                        }
+                        if prior_intent == OobCwdIntent::InitialFill
+                            && self.shell_cwd.is_none()
+                            && self.pending_startup_cd.is_none()
+                        {
+                            if let Some(cwd) = result.cwd {
+                                self.shell_cwd = Some(cwd);
+                            }
+                        }
+                        break;
+                    }
+                    Ok(Err(_)) | Err(TryRecvError::Disconnected) => break,
+                    Err(TryRecvError::Empty) => {
+                        if Instant::now() >= drain_deadline {
+                            log::debug!("oob cwd query: drain deadline hit, dropping stale receipt");
+                            break;
+                        }
+                        std::thread::sleep(Duration::from_millis(25));
+                    }
+                }
+            }
+        }
         let Some(handle) = self.ssh_handle.as_ref() else {
+            if intent == OobCwdIntent::RefreshForInherit {
+                self.oob_refresh_done = true;
+            }
             return;
         };
-        match handle.enqueue_remote_exec(crate::terminal::oob_cwd::OOB_CWD_COMMAND) {
+        let enqueue = match timeout_ms {
+            Some(ms) => handle.enqueue_remote_exec_with_timeout(
+                crate::terminal::oob_cwd::OOB_CWD_COMMAND,
+                ms,
+            ),
+            None => handle.enqueue_remote_exec(crate::terminal::oob_cwd::OOB_CWD_COMMAND),
+        };
+        match enqueue {
             Ok(rx) => {
                 self.oob_cwd_rx = Some(rx);
-                self.oob_cwd_sent = true;
+                self.oob_cwd_intent = intent;
+                if intent == OobCwdIntent::InitialFill {
+                    self.oob_cwd_sent = true;
+                }
             }
             Err(e) => {
+                if intent == OobCwdIntent::RefreshForInherit {
+                    self.oob_refresh_done = true;
+                }
                 log::debug!("oob cwd query skipped: {e}");
             }
         }
     }
 
+    /// 继承刷新是否已终结（发起方轮询用）。
+    pub(crate) fn oob_refresh_finished(&self) -> bool {
+        self.oob_refresh_done
+    }
+
+    /// 取走继承刷新结果（`None` = 查询完成但没读到目录，调用方退回缓存）。
+    pub(crate) fn take_oob_refresh_cwd(&mut self) -> Option<String> {
+        self.oob_refresh_cwd.take()
+    }
+
     /// 非阻塞取带外查询结果。优先级：OSC 7 / 用户手敲 cd / 继承目标 > 带外兜底。
-    fn poll_oob_cwd_query(&mut self) {
+    pub(crate) fn poll_oob_cwd_query(&mut self) {
         let Some(rx) = self.oob_cwd_rx.take() else {
             return;
         };
@@ -1915,24 +2031,49 @@ impl TerminalView {
                 if self.remote_identity.is_none() {
                     self.remote_identity = result.identity;
                 }
-                // 目录只在「还没有任何目录信息」时兜底写入：
-                // - 已有 OSC 7（sync_shell_cwd）→ 服务器自报的更可信；
-                // - 用户已手敲 cd（note_typed_cd）→ 异步回执不能把旧目录盖回去；
-                // - 有待发继承 cd（arm_startup_directory_for）→ 那是目标目录，
-                //   带外查到的是刚登录的 home，写进去会污染继承。
-                if self.shell_cwd.is_none() && self.pending_startup_cd.is_none() {
-                    if let Some(cwd) = result.cwd {
-                        self.shell_cwd = Some(cwd);
+                // 目录按查询意图分流：
+                // - 登录时那一次（intent=InitialFill）：只在没有任何目录信息时兜底，
+                //   避免刚继承过来的目标被登录 home 盖回去；
+                // - 继承刷新（intent=RefreshForInherit）：把结果写进 oob_refresh_cwd，
+                //   由发起方（开新标签/分屏）读取；也顺带刷新 shell_cwd 缓存（可覆盖旧值），
+                //   但不动 pending_startup_cd。
+                match self.oob_cwd_intent {
+                    OobCwdIntent::RefreshForInherit => {
+                        self.oob_refresh_cwd = result.cwd.clone();
+                        if let Some(cwd) = result.cwd {
+                            self.sync_shell_cwd_with(&cwd, true);
+                        }
+                    }
+                    OobCwdIntent::InitialFill => {
+                        if self.shell_cwd.is_none() && self.pending_startup_cd.is_none() {
+                            if let Some(cwd) = result.cwd {
+                                self.shell_cwd = Some(cwd);
+                            }
+                        }
                     }
                 }
             }
             Ok(Err(e)) => {
+                if self.oob_cwd_intent == OobCwdIntent::RefreshForInherit {
+                    // 刷新失败：显式记一个空结果，让发起方立即退回缓存而不是干等。
+                    self.oob_refresh_cwd = None;
+                    self.oob_refresh_done = true;
+                }
                 log::debug!("oob cwd query failed: {e}");
             }
             Err(TryRecvError::Empty) => {
                 self.oob_cwd_rx = Some(rx);
             }
-            Err(TryRecvError::Disconnected) => {}
+            Err(TryRecvError::Disconnected) => {
+                if self.oob_cwd_intent == OobCwdIntent::RefreshForInherit {
+                    self.oob_refresh_cwd = None;
+                    self.oob_refresh_done = true;
+                }
+            }
+        }
+        if self.oob_cwd_rx.is_none() && self.oob_cwd_intent == OobCwdIntent::RefreshForInherit {
+            // Ok(Ok(_)) 已消费：无论查没查到都算完成。
+            self.oob_refresh_done = true;
         }
     }
 
@@ -6079,21 +6220,99 @@ fn strip_cd_invocation(line: &str) -> Option<&str> {
     None
 }
 
+/// 取 `cd` 后的第一个路径参数，正确处理引号与反斜杠转义里的空格。
+///
+/// #419 点查跟进：旧实现用 `split_whitespace`，`cd '/tmp/oob cwd 419'`
+/// 会被切坏。这里逐字符扫：引号段（单/双）内的空格不算分隔符，
+/// 引号在结尾（含闭合前有尾随空白）才算参数结束；同时跳过选项标记。
+/// PowerShell 的 `-LiteralPath` / `-Path` 与 cmd 的 `/d` 同样跳过。
 fn normalize_cd_arg(rest: &str) -> String {
-    let mut parts = rest.split_whitespace();
-    let mut arg = String::new();
-    for part in parts.by_ref() {
-        let l = part.to_ascii_lowercase();
-        if l == "/d" || l == "--" || l == "-literalpath" || l == "-path" {
-            continue;
+    let bytes = rest.as_bytes();
+    let mut i = 0usize;
+    // 跳过选项：`/d`、`--`、`-LiteralPath`、`-Path`、以及任何 `-xxx`。
+    loop {
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+            i += 1;
         }
-        if l.starts_with('-') {
-            continue;
+        if i >= bytes.len() {
+            return String::new();
         }
-        arg = part.to_string();
+        if bytes[i] == b'-' || bytes[i] == b'/' {
+            let start = i;
+            let tok_end = {
+                let mut e = start;
+                while e < bytes.len() && !bytes[e].is_ascii_whitespace() {
+                    e += 1;
+                }
+                e
+            };
+            let tok = rest[start..tok_end].to_ascii_lowercase();
+            // 裸 `-` 是 `cd -`（回上一目录），不是选项：保留给调用方判定。
+            if tok == "-" {
+                i = start;
+                break;
+            }
+            if tok == "/d" || tok == "--" || tok == "-literalpath" || tok == "-path"
+                || tok.starts_with('-')
+            {
+                i = tok_end;
+                continue;
+            }
+            // `/` 开头但不在选项名单里：那是 Windows 路径（`/d` 是选项而 `/tmp` 不是），
+            // 回退到参数起点按引号规则解析。
+            i = start;
+            break;
+        }
         break;
     }
-    arg.trim_matches(|c| c == '"' || c == '\'').to_string()
+    // 解析参数本体：引号内的空白不切分；引号闭合且后面是空白/结尾才算完。
+    let mut out = String::new();
+    let mut quote: Option<u8> = None;
+    let mut closed = false;
+    while i < bytes.len() {
+        let b = bytes[i];
+        match quote {
+            None => {
+                if b == b'\'' || b == b'"' {
+                    quote = Some(b);
+                } else if b == b'\\' && i + 1 < bytes.len() {
+                    // 反斜杠转义下一个字节（POSIX 双引号外规则；Windows 路径的反斜杠
+                    // 不会被跟非空白字符的情况命中，因为盘符路径 `C:\...` 里 \ 后跟的是普通字符）。
+                    let n = bytes[i + 1];
+                    if n == b'\'' || n == b'"' || n == b'\\' || n == b' ' {
+                        out.push(n as char);
+                        i += 2;
+                        continue;
+                    }
+                    out.push(b as char);
+                } else if b.is_ascii_whitespace() {
+                    break;
+                } else {
+                    out.push(b as char);
+                }
+            }
+            Some(q) => {
+                if b == q {
+                    quote = None;
+                    closed = true;
+                } else if q == b'"' && b == b'\\' && i + 1 < bytes.len() {
+                    // 双引号内的转义：\" \\ 等常见对。
+                    let n = bytes[i + 1];
+                    if n == b'"' || n == b'\\' {
+                        out.push(n as char);
+                        i += 2;
+                        continue;
+                    }
+                    out.push(b as char);
+                } else {
+                    out.push(b as char);
+                }
+            }
+        }
+        i += 1;
+    }
+    let _ = closed;
+    out
 }
 
 fn is_absolute_dir(path: &str) -> bool {
@@ -6731,6 +6950,38 @@ mod cwd_tests {
     }
 
     #[test]
+    fn cd_parses_quoted_paths_with_spaces() {
+        // #419 点查 Fail：`cd '/tmp/oob cwd 419'` 旧实现 split_whitespace 切坏。
+        assert_eq!(
+            apply_cd_line(Some("/home"), "cd '/tmp/oob cwd 419'", None),
+            Some("/tmp/oob cwd 419".into())
+        );
+        assert_eq!(
+            apply_cd_line(Some("/home"), "cd \"/tmp/oob cwd 419\"", None),
+            Some("/tmp/oob cwd 419".into())
+        );
+        // 双引号内转义。
+        assert_eq!(
+            apply_cd_line(Some("/home"), "cd \"/tmp/a\\\"b\"", None),
+            Some("/tmp/a\"b".into())
+        );
+        // 引号路径后带尾随空白：仍能取到完整参数。
+        assert_eq!(
+            apply_cd_line(Some("/home"), "cd '/tmp/x y'  ", None),
+            Some("/tmp/x y".into())
+        );
+        // PowerShell -LiteralPath。
+        assert_eq!(
+            apply_cd_line(Some("C:\\"), "Set-Location -LiteralPath 'C:\\a b'", Some("C:\\Users")),
+            Some("C:\\a b".into())
+        );
+        // 旧行为不回归：无引号、相对路径、~、- 等。
+        assert_eq!(apply_cd_line(Some("/var"), "cd log", None), Some("/var/log".into()));
+        assert_eq!(apply_cd_line(Some("/tmp"), "cd -", None), None);
+        assert_eq!(apply_cd_line(Some("/tmp"), "cd ~/src", Some("/h")), Some("/h/src".into()));
+    }
+
+    #[test]
     fn startup_cd_quotes() {
         let win = String::from_utf8(startup_cd_payload("C:\\Users\\O'Brien")).unwrap();
         assert!(win.contains("Set-Location"));
@@ -7339,6 +7590,77 @@ mod oob_cwd_tests {
         view.arm_startup_directory("/inherited/project");
         deliver(&mut view, "user=u\nhost=box\ncwd=/home/u\n");
         assert_eq!(view.shell_cwd.as_deref(), Some("/inherited/project"));
+    }
+
+    #[test]
+    fn refresh_overrides_cached_login_home() {
+        // B 主路径：登录时缓存了 home，之后用户 cd（无 OSC 7 的 zsh）。
+        // 继承刷新要拿到真实 /proc cwd 并覆盖旧缓存。
+        let mut view = TerminalView::new();
+        view.shell_cwd = Some("/home/u".into());
+        view.start_oob_cwd_refresh();
+        assert!(view.oob_cwd_rx.is_some(), "refresh 应发出短超时查询");
+        assert_eq!(view.oob_cwd_intent, OobCwdIntent::RefreshForInherit);
+        deliver(&mut view, "user=u\nhost=box\ncwd=/tmp/oob cwd 419\n");
+        assert_eq!(view.oob_refresh_cwd.as_deref(), Some("/tmp/oob cwd 419"));
+        assert!(view.oob_refresh_finished());
+        // 缓存也被刷新覆盖（真实读数比登录 home 新）。
+        assert_eq!(view.shell_cwd.as_deref(), Some("/tmp/oob cwd 419"));
+    }
+
+    #[test]
+    fn refresh_does_not_touch_pending_inheritance_cd() {
+        // 刷新不得覆盖尚未发出的继承目标（pending_startup_cd）。
+        let mut view = TerminalView::new();
+        view.arm_startup_directory("/inherited/project");
+        view.start_oob_cwd_refresh();
+        deliver(&mut view, "user=u\nhost=box\ncwd=/home/u\n");
+        assert_eq!(view.oob_refresh_cwd.as_deref(), Some("/home/u"));
+        assert_eq!(
+            view.pending_startup_cd.as_deref(),
+            Some("/inherited/project"),
+            "刷新结果只进 oob_refresh_cwd / shell_cwd，不动待发继承目标"
+        );
+    }
+
+    #[test]
+    fn refresh_failure_marks_done_for_fallback() {
+        let mut view = TerminalView::new();
+        view.shell_cwd = Some("/cached".into());
+        view.start_oob_cwd_refresh();
+        let (tx, rx) = std::sync::mpsc::channel();
+        tx.send(Err("exec timeout".to_string())).unwrap();
+        view.oob_cwd_rx = Some(rx);
+        view.oob_cwd_intent = OobCwdIntent::RefreshForInherit;
+        view.poll_oob_cwd_query();
+        assert!(view.oob_refresh_finished(), "失败也要终结，发起方才能退回缓存");
+        assert!(view.take_oob_refresh_cwd().is_none(), "失败无结果");
+        assert_eq!(view.shell_cwd.as_deref(), Some("/cached"), "退回缓存");
+    }
+
+    #[test]
+    fn refresh_drains_stale_initial_receipt_before_enqueueing() {
+        // 登录查询还在途时发起刷新：先排空旧回执（按 InitialFill 语义填空目录），
+        // 再发新查询，不得把旧 rx 覆盖丢掉。
+        let mut view = TerminalView::new();
+        let (tx, rx) = std::sync::mpsc::channel();
+        tx.send(Ok("user=u\nhost=box\ncwd=/login/home\n".to_string()))
+            .unwrap();
+        view.oob_cwd_rx = Some(rx);
+        view.oob_cwd_intent = OobCwdIntent::InitialFill;
+        view.start_oob_cwd_refresh();
+        assert_eq!(view.shell_cwd.as_deref(), Some("/login/home"), "排空时按 InitialFill 语义兑底");
+        assert!(view.oob_cwd_rx.is_some(), "刷新查询应已入队");
+        assert_eq!(view.oob_cwd_intent, OobCwdIntent::RefreshForInherit);
+    }
+
+    #[test]
+    fn initial_fill_stays_fill_only_after_refresh_semantics_added() {
+        // 回归：登录查询仍保持「空才填」，不覆盖已有缓存/继承目标。
+        let mut view = TerminalView::new();
+        view.shell_cwd = Some("/existing".into());
+        deliver(&mut view, "user=u\nhost=box\ncwd=/login/home\n");
+        assert_eq!(view.shell_cwd.as_deref(), Some("/existing"));
     }
 
     #[test]
