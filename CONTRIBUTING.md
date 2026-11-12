@@ -63,6 +63,33 @@ Example: `feat: add scrollback buffer search`
 - Make sure `cargo test` and `cargo clippy` pass
 - If changing UI text, consider both English and Chinese
 
+### Review Terminology
+
+Use one consistent set of terms in review comments and PR descriptions, so
+"can this merge?" never depends on the reader's vocabulary. Every finding is
+classified by **whether it blocks merging**:
+
+| Term (zh) | English | Meaning | Action |
+| --- | --- | --- | --- |
+| 阻塞项 | blocker / must-fix | Wrong behavior, regression, or a violated product gate | Must be fixed before merge; review state `CHANGES_REQUESTED` |
+| 非阻塞建议 | non-blocking suggestion | Correct as-is, but could be improved | Does **not** block merge; review state `COMMENTED`; fix now or later |
+| nit | nit | Pure style, naming, wording, formatting | Optional; never blocks |
+| follow-up | follow-up | Out of scope for this PR | Record as a separate issue/PR; do not bundle |
+
+Rules:
+
+- Label each finding explicitly. A review mixing blockers and suggestions must
+  say which is which.
+- "Non-blocking" means exactly that: the PR may merge with it open. If a change
+  is required, mark it 阻塞项 / blocker.
+- Avoid ad-hoc shorthand (e.g. 软注, 小问题, 顺便看一眼) in place of the terms
+  above — they read differently to different people. Historical reviews used
+  软注 for what is now 非阻塞建议; use the table term going forward.
+- When reporting status, give counts: "N blockers, M non-blocking suggestions
+  (X nit, Y follow-up)".
+
+中文评审请直接写「阻塞项」「非阻塞建议」「nit」「follow-up」，不要另造缩写。
+
 ### Branches
 
 - Base your PR on `main`
