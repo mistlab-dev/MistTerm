@@ -39,6 +39,12 @@
 
 use super::shell_integration::RemoteIdentity;
 
+/// 继承刷新查询的超时（毫秒）。开新标签/分屏前对源会话再查一次 `/proc` cwd，
+/// 必须在用户可感知的时间内结束：泵线程处理 exec 期间 PTY 读写暂停，
+/// 不能用满 [`crate::ssh::PUMP_EXEC_TIMEOUT_MS`] 的 15s 上限。
+/// 超时/失败由发起方退回已缓存目录，不猜。
+pub const OOB_REFRESH_TIMEOUT_MS: u32 = 1000;
+
 /// 带外查询命令，交给 [`crate::ssh::SshSessionHandle::enqueue_remote_exec`]。
 ///
 /// 输出三行（顺序无关，`cwd=` 仅在命中时出现）：
