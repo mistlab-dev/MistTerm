@@ -76,17 +76,32 @@ classified by **whether it blocks merging**:
 | nit | nit | Pure style, naming, wording, formatting | Optional; never blocks |
 | follow-up | follow-up | Out of scope for this PR | Record as a separate issue/PR; do not bundle |
 
+The table has **two levels**, not four parallel categories: 阻塞项 / blocker is
+the only blocking category; 非阻塞建议 / non-blocking suggestion is the umbrella
+term for everything non-blocking, and `nit` / `follow-up` are two specialised
+subcategories of it — they say *why* a finding is non-blocking, not a third or
+fourth verdict. Every finding is either a blocker or a non-blocking suggestion,
+optionally tagged `nit` / `follow-up`.
+
 Rules:
 
-- Label each finding explicitly. A review mixing blockers and suggestions must
-  say which is which.
+- Label each finding explicitly, by level: first blocking vs non-blocking,
+  then (if non-blocking) the optional `nit` / `follow-up` tag.
 - "Non-blocking" means exactly that: the PR may merge with it open. If a change
   is required, mark it 阻塞项 / blocker.
+- GitHub allows only one review state per review. If a review contains **any**
+  blocker, use `CHANGES_REQUESTED` even when the same review also carries
+  non-blocking suggestions. Only-non-blocking reviews use `COMMENTED` (or
+  `APPROVED` if the reviewer is approving).
 - Avoid ad-hoc shorthand (e.g. 软注, 小问题, 顺便看一眼) in place of the terms
   above — they read differently to different people. Historical reviews used
   软注 for what is now 非阻塞建议; use the table term going forward.
-- When reporting status, give counts: "N blockers, M non-blocking suggestions
-  (X nit, Y follow-up)".
+- When reporting status, keep the two levels separate and give an explicit
+  breakdown: "N blockers; M non-blocking suggestions total (X nit, Y follow-up,
+  rest general)". **M is the total of all non-blocking findings**, the
+  parenthetical is a breakdown (X + Y + general = M), not extra counts on top.
+  Never write "M non-blocking suggestions (X nit, Y follow-up)" without the
+  "total / breakdown" wording — that reads as if nit / follow-up were outside M.
 
 中文评审请直接写「阻塞项」「非阻塞建议」「nit」「follow-up」，不要另造缩写。
 
