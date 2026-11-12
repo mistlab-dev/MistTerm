@@ -88,6 +88,9 @@ async-trait = "0.1"
 # SSH - Pure Rust implementation
 ssh2 = "0.9"
 
+# 泵线程事件驱动（#419 后继：替代 8ms 轮询）。winit/egui 依赖树里已有同款。
+polling = "3"
+
 # Terminal emulation - vte for ANSI parsing
 vte = "0.11"
 unicode-width = "0.1"

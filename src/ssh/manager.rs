@@ -134,6 +134,13 @@ pub type ShellPumpTx = std::sync::mpsc::SyncSender<ShellPumpCommand>;
 
 /// shell 泵命令队列容量（条）
 const SHELL_PUMP_QUEUE_CAP: usize = 512;
+
+/// 泵 poll.wait 的最长等待：到点 tick keepalive 兜底。
+/// socket 数据到达 / 命令入队都会提前唤醒，此值只影响 keepalive 精度。
+const PUMP_POLL_KEEPALIVE_MS: u64 = 10_000;
+
+/// `polling::Poller` 里 SSH socket fd 的 key。
+const PUMP_POLL_SOCKET_KEY: usize = 0;
 const RESIZE_QUEUE_CAP: usize = 16;
 /// 泵线程上一次 `exec_remote` 单次阻塞调用最长等待（毫秒）。
 const PUMP_EXEC_TIMEOUT_MS: u32 = 15_000;
@@ -174,6 +181,9 @@ pub struct SshSessionHandle {
     interrupt_tx: std::sync::mpsc::SyncSender<Vec<u8>>,
     resize_tx: std::sync::mpsc::SyncSender<(u32, u32)>,
     upload_bypass_slot: Arc<Mutex<Option<Arc<UploadPtyBypass>>>>,
+    /// 泵线程的 poller：`pump_send` 入队后 `notify()` 唤醒 `poll.wait`，
+    /// 替代旧的 8ms 轮询（PTY 回显与命令都零轮询间隙）。
+    pump_poller: Arc<polling::Poller>,
 }
 
 impl SshSessionHandle {
@@ -184,9 +194,10 @@ impl SshSessionHandle {
     /// 这是 Tab 补全触发「UI 整个不动 10+ 秒」的根因之一：旧代码用阻塞 `send`，
     /// 泵一旦慢于 UI 输入（`SHELL_PUMP_QUEUE_CAP=512` 被打满），UI 线程就卡在同步队列上。
     fn pump_send(&self, cmd: ShellPumpCommand) -> Result<(), String> {
-        self.pump_tx
-            .try_send(cmd)
-            .map_err(|e| match e {
+        let queued = self.pump_tx.try_send(cmd);
+        // 成功→唤醒泵处理新命令；满→唤醒泵立刻看到拥塞并排空 PTY。
+        let _ = self.pump_poller.notify();
+        queued.map_err(|e| match e {
                 std::sync::mpsc::TrySendError::Full(c) => {
                     format!(
                         "shell pump queue full (cap={}), dropped cmd variant={}",
@@ -648,6 +659,22 @@ impl SshManager {
         };
         let channel = super::client::open_shell_channel(&session, initial_cols, initial_rows)?;
 
+        // 泵线程 poll 事件驱动（#419 后继性能改造）：注册 SSH socket fd 为
+        // level-triggered readable。PTY 回显/输出一到达内核即唤醒泵线程，
+        // 不再依赖 recv_timeout(8ms) 轮询；pump_tx 入队经 poller.notify() 唤醒。
+        let pump_poller = Arc::new(
+            polling::Poller::new().map_err(|e| format!("poller create failed: {e}"))?,
+        );
+        {
+            use std::os::fd::AsRawFd;
+            // SAFETY：fd 由 Session 持有（生命周期覆盖泵线程），注册不与其它 poller 竞争。
+            unsafe {
+                pump_poller
+                    .add(session.as_raw_fd(), polling::Event::readable(PUMP_POLL_SOCKET_KEY))
+                    .map_err(|e| format!("poller register failed: {e}"))?;
+            }
+        }
+
         shell_pump::spawn_shell_pump(
             channel,
             pump_rx,
@@ -657,6 +684,7 @@ impl SshManager {
             session_id,
             upload_bypass_slot.clone(),
             mgr_for_pump,
+            pump_poller.clone(),
         );
 
         Ok(SshSessionHandle {
@@ -665,6 +693,7 @@ impl SshManager {
             interrupt_tx,
             resize_tx,
             upload_bypass_slot,
+            pump_poller,
         })
     }
 
@@ -760,6 +789,7 @@ impl SshManager {
 
 /// Shell 泵：专用 OS 线程 + `sync_channel`，避免 Tokio `block_on`/`recv` 与上传线程的调度死锁。
 mod shell_pump {
+    use crate::ssh::manager::{PUMP_POLL_KEEPALIVE_MS, PUMP_POLL_SOCKET_KEY};
     use super::{ShellPumpCommand, SshManager, SshMessage, SshSessionId, UploadPtyBypass};
     use ssh2::Channel;
     use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
@@ -776,13 +806,14 @@ mod shell_pump {
         session_id: SshSessionId,
         upload_bypass_slot: Arc<Mutex<Option<Arc<UploadPtyBypass>>>>,
         mgr: SshManager,
+        pump_poller: Arc<polling::Poller>,
     ) {
         let channel = Arc::new(Mutex::new(channel));
         thread::Builder::new()
             .name(format!("mistterm-shell-pump-{}", session_id))
             .spawn(move || {
                 log::info!(
-                    "shell 泵线程启动 session_id={} queue_cap={}",
+                    "shell 泵线程启动 session_id={} queue_cap={} poll=事件驱动",
                     session_id,
                     super::SHELL_PUMP_QUEUE_CAP
                 );
@@ -795,6 +826,7 @@ mod shell_pump {
                     session_id,
                     upload_bypass_slot,
                     mgr,
+                    pump_poller,
                 );
                 log::warn!("shell pump thread exited session_id={}", session_id);
             })
@@ -810,6 +842,7 @@ mod shell_pump {
         session_id: SshSessionId,
         upload_bypass_slot: Arc<Mutex<Option<Arc<UploadPtyBypass>>>>,
         mgr: SshManager,
+        pump_poller: Arc<polling::Poller>,
     ) {
         let mut read_buffer = [0u8; 16384];
         let mut input_line_buf: Vec<u8> = Vec::new();
@@ -856,19 +889,41 @@ mod shell_pump {
                 }
             }
 
-            // ZMODEM 上传旁路开启时缩短空闲读间隔，尽快把 ZACK/ZRPOS 交给发送线程。
-            let idle_ms = if upload_bypass_slot
-                .lock()
-                .ok()
-                .and_then(|g| g.as_ref().map(|_| ()))
-                .is_some()
-            {
-                1
-            } else {
-                8
-            };
-            match pump_rx.recv_timeout(Duration::from_millis(idle_ms)) {
-                Ok(cmd) => {
+            // 事件驱动等待（#419 后继性能改造）：poll 同时盯
+            //   ① SSH socket fd readable —— PTY 回显/输出到达即醒（替代 8ms 轮询）
+            //   ② poller notify —— pump_tx 入队新命令即醒
+            //   ③ 超时（PUMP_POLL_KEEPALIVE_MS）—— tick keepalive 兜底
+            let poll_timeout = Some(Duration::from_millis(PUMP_POLL_KEEPALIVE_MS));
+            let mut poll_events =
+                polling::Events::with_capacity(std::num::NonZeroUsize::new(8).unwrap());
+            match pump_poller.wait(&mut poll_events, poll_timeout) {
+                Ok(_) => {}
+                Err(e) => {
+                    log::warn!("PUMP_POLL_ERR session={} {}", session_id, e);
+                    thread::sleep(Duration::from_millis(50));
+                }
+            }
+
+            // socket 可读 → 先排空 PTY（回显/输出立即上送）。
+            if poll_events.iter().any(|ev| ev.key == PUMP_POLL_SOCKET_KEY) {
+                if let Ok(mut ch) = channel.lock() {
+                    if SshManager::pump_channel_reads(
+                        &mut *ch,
+                        &mut read_buffer,
+                        &message_tx,
+                        session_id,
+                        &upload_bypass_slot,
+                        None,
+                    )
+                    .is_err()
+                    {
+                        return;
+                    }
+                }
+            }
+
+            // 命令：非阻塞取一条；poll 超时（keepalive 到点）时为 None。
+            if let Some(cmd) = pump_rx.try_recv().ok() {
                     // PtyInput 合并：把泵队列中相邻的 PtyInput 小 Vec<u8> 拼成一条大的再下发。
                     // 这是「Tab + 连续按键挤满 pump_rx（SHELL_PUMP_QUEUE_CAP=512）」的治本方案：
                     // 过去每按一次字母/Tab 就是一条 PtyInput（哪怕只有 1-4 字节），512 条很快被占满，
@@ -977,52 +1032,28 @@ mod shell_pump {
                         other => other,
                     };
 
-                    if !dispatch_pump_command_coalesced(
-                        &mgr,
-                        &channel,
-                        &message_tx,
-                        session_id,
-                        cmd,
-                        &pump_rx,
-                        &mut read_buffer,
-                        &upload_bypass_slot,
-                        &interrupt_rx,
-                    ) {
-                        return;
-                    }
-                }
-                Err(RecvTimeoutError::Timeout) => {
-                    let __s = std::time::Instant::now();
-                    mgr.tick_session_keepalive(session_id);
-                    let __ka = __s.elapsed();
-                    let __s2 = std::time::Instant::now();
-                    let ok = process_idle_read_sync(
-                        &channel,
-                        &message_tx,
-                        session_id,
-                        &mut read_buffer,
-                        &upload_bypass_slot,
-                    );
-                    let __idle = __s2.elapsed();
-                    if __ka.as_millis() as u64 >= 200 || __idle.as_millis() as u64 >= 200 {
-                        log::warn!(
-                            "PUMP_IDLE_SLOW session={} keepalive_ms={} idle_read_ms={}",
-                            session_id,
-                            __ka.as_millis(),
-                            __idle.as_millis()
-                        );
-                    }
-                    if !ok {
-                        return;
-                    }
-                }
-                Err(RecvTimeoutError::Disconnected) => {
-                    log::warn!(
-                        "shell 泵 session={} pump_rx Disconnected，线程结束",
-                        session_id
-                    );
+                if !dispatch_pump_command_coalesced(
+                    &mgr,
+                    &channel,
+                    &message_tx,
+                    session_id,
+                    cmd,
+                    &pump_rx,
+                    &mut read_buffer,
+                    &upload_bypass_slot,
+                    &interrupt_rx,
+                ) {
                     return;
                 }
+            } else {
+                // poll 超时：tick keepalive 兜底。socket 事件已在上方处理。
+                let __s = std::time::Instant::now();
+                mgr.tick_session_keepalive(session_id);
+                let __ka = __s.elapsed();
+                if __ka.as_millis() as u64 >= 200 {
+                    log::warn!("PUMP_IDLE_SLOW session={} keepalive_ms={}", session_id, __ka.as_millis());
+                }
+                // pump_rx 断开：handle drop 后 try_send 会失败，泵由 Disconnected/EOF 读路径退出。
             }
         }
     }
@@ -1389,6 +1420,7 @@ mod shell_pump {
         commands
     }
 
+    #[allow(dead_code)]
     fn process_idle_read_sync(
         channel: &Arc<Mutex<Channel>>,
         message_tx: &Sender<SshMessage>,
@@ -1756,6 +1788,7 @@ mod tests {
             interrupt_tx,
             resize_tx,
             upload_bypass_slot: Arc::new(Mutex::new(None)),
+            pump_poller: Arc::new(polling::Poller::new().expect("poller for test")),
         };
         (handle, (pump_rx, interrupt_rx, resize_rx))
     }
