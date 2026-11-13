@@ -312,12 +312,18 @@ impl CloudSyncPanel {
                 &mut self.settings.sync_host_metadata,
                 loc.tr("Sync host list after sign-in", "登录后同步主机列表"),
             );
+            // #418：egui 用 unicode-linebreak 对 CJK 逐字断行，「密钥路径」会被拆成
+            // 「密 / 钥路径」。cjk_word_safe 在词组内插 U+2060 WORD JOINER 禁止字间
+            // 断行，换行只发生在词组边界。
             ui.label(
                 chrome::rich_caption(
                     theme,
-                    loc.tr(
-                        "Name, host, port, user, group, auth hint, and key path only. Passwords and private key files stay on this machine.",
-                        "只同步名称、主机、端口、用户、分组、认证提示和密钥路径。密码和私钥文件留在本机。",
+                    &cjk_word_safe(
+                        loc.tr(
+                            "Name, host, port, user, group, auth hint, and key path only. Passwords and private key files stay on this machine.",
+                            "只同步名称、主机、端口、用户、分组、认证提示和密钥路径。密码和私钥文件留在本机。",
+                        ),
+                        &["名称", "主机", "端口", "用户", "分组", "认证提示", "密钥路径", "密码", "私钥文件", "本机"],
                     ),
                 )
                 .color(theme.color_form_hint()),
@@ -1364,11 +1370,14 @@ impl CloudSyncPanel {
                             Self::paint_sync_status(ui, theme, &self.settings, lang);
                             chrome::settings_row_divider(ui, theme);
                             // 三枚操作按钮通栏等分同一行。
+                            // #424：宽度在 horizontal 闭包内取（外层取值会含卡片后续
+                            // 边距差），并把 min 下限让位给等分——下限顶满时第三枚
+                            // 被右边界裁掉；hover 保留全称兜底。
                             let gap = theme.spacing_sm();
-                            let third = ((ui.available_width() - gap * 2.0) / 3.0)
-                                .max(theme.size_control_btn_min_w());
                             ui.horizontal(|ui| {
                                 ui.spacing_mut().item_spacing.x = gap;
+                                let third =
+                                    ((ui.available_width() - gap * 2.0) / 3.0).max(80.0);
                                 if chrome::panel_action_button_with_icon_ex_min_w(
                                     ui,
                                     theme,
@@ -1377,6 +1386,10 @@ impl CloudSyncPanel {
                                     true,
                                     third,
                                 )
+                                .on_hover_text(loc.tr(
+                                    "Save selection & interval",
+                                    "保存勾选与间隔",
+                                ))
                                 .clicked()
                                 {
                                     self.save_settings(lang);
@@ -1389,6 +1402,10 @@ impl CloudSyncPanel {
                                     true,
                                     third,
                                 )
+                                .on_hover_text(loc.tr(
+                                    "Export sync pack…",
+                                    "导出同步包…",
+                                ))
                                 .on_hover_text(loc.tr(
                                     "Create mistterm-sync-timestamp folder and copy selected files",
                                     "新建 mistterm-sync-时间戳 目录并复制勾选文件",
@@ -1410,6 +1427,10 @@ impl CloudSyncPanel {
                                     true,
                                     third,
                                 )
+                                .on_hover_text(loc.tr(
+                                    "Import from sync pack…",
+                                    "从同步包导入…",
+                                ))
                                 .clicked()
                                 {
                                     self.pick_import_folder(deps, lang, &mut team_service);
@@ -1519,4 +1540,26 @@ fn paint_bullet_list(
                 .color(theme.color_form_hint()),
         );
     }
+}
+
+
+/// #418：在 CJK 词组内部插入 U+2060 WORD JOINER，禁止 egui 在词组字间断行。
+/// 只处理中文文案；拉丁文本不受影响。词组按给出顺序查找替换。
+pub(crate) fn cjk_word_safe(text: &str, phrases: &[&str]) -> String {
+    let mut out = text.to_string();
+    for phrase in phrases {
+        let joined = phrase
+            .chars()
+            .enumerate()
+            .flat_map(|(i, c)| {
+                if i == 0 {
+                    vec![c]
+                } else {
+                    vec!['\u{2060}', c]
+                }
+            })
+            .collect::<String>();
+        out = out.replace(phrase, &joined);
+    }
+    out
 }

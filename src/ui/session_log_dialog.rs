@@ -122,6 +122,11 @@ impl SessionLogDialog {
         }
     }
 
+    /// 当前选中的原始日志文件路径（#425：页脚「见日志文件」的直达入口）。
+    fn current_raw_path(&self) -> Option<&std::path::Path> {
+        self.log_files.get(self.selected_file).map(|p| p.as_path())
+    }
+
     fn filtered_content(&self) -> String {
         let q = self.search_query.trim();
         if q.is_empty() {
@@ -141,6 +146,9 @@ impl SessionLogDialog {
         }
         let mut should_close = false;
         let mut reload = false;
+        let current_raw = self.current_raw_path().map(|p| p.to_path_buf());
+        let mut open_raw_file: Option<std::path::PathBuf> = None;
+        let mut reveal_dir: Option<std::path::PathBuf> = None;
         let mut copy_all = false;
         let display = self.filtered_content();
         // #240：筛选无命中时给出下一步（换关键词 / 清空），对齐 #215 空态。
@@ -312,6 +320,38 @@ impl SessionLogDialog {
                         ui.with_layout(
                             egui::Layout::right_to_left(egui::Align::Center),
                             |ui| {
+                                // #425：页脚既然说「见日志文件」，就要给出直达入口——
+                                // 打开原始日志文件 / 在文件管理器中显示所在目录。
+                                if chrome::modal_secondary_icon_button(
+                                    ui,
+                                    theme,
+                                    crate::ui::icons::IconId::File,
+                                    crate::i18n::tr(ctx, "Open log file", "打开日志文件"),
+                                )
+                                .on_hover_text(crate::i18n::tr(
+                                    ctx,
+                                    "Open the raw log file with the system default app",
+                                    "用系统默认应用打开原始日志文件",
+                                ))
+                                .clicked()
+                                {
+                                    open_raw_file = current_raw.clone();
+                                }
+                                if chrome::modal_secondary_icon_button(
+                                    ui,
+                                    theme,
+                                    crate::ui::icons::IconId::Folder,
+                                    crate::i18n::tr(ctx, "Show in folder", "在文件管理器中显示"),
+                                )
+                                .on_hover_text(crate::i18n::tr(
+                                    ctx,
+                                    "Reveal the log file's folder in the file manager",
+                                    "在文件管理器中显示日志所在目录",
+                                ))
+                                .clicked()
+                                {
+                                    reveal_dir = current_raw.clone();
+                                }
                                 if chrome::modal_secondary_icon_button(
                                     ui,
                                     theme,
@@ -341,6 +381,29 @@ impl SessionLogDialog {
                     });
                 });
             });
+        if let Some(path) = reveal_dir {
+            // 文件可能已轮转；目录一定存在（不存在则 reveal 返回 false，见下方错误提示）。
+            let dir = path.parent().map(|p| p.to_path_buf()).unwrap_or(path.clone());
+            if !crate::platform::shell::reveal_directory(&dir) {
+                self.content = crate::i18n::tr(
+                    ctx,
+                    "Couldn't open the log folder.",
+                    "无法打开日志目录。",
+                )
+                .to_string();
+            }
+        }
+        if let Some(path) = open_raw_file {
+            if let Err(e) = crate::platform::shell::open_file(&path) {
+                self.content = crate::i18n::tr(
+                    ctx,
+                    "Couldn't open this log.",
+                    "无法打开日志文件。",
+                )
+                .to_string();
+                log::debug!("session log open_file failed: {e}");
+            }
+        }
         if reload {
             self.reload_content(ctx, settings);
         }
