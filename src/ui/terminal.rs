@@ -1944,7 +1944,7 @@ impl TerminalView {
         // 会覆盖 `oob_cwd_rx` 丢掉登录回执 —— 先排空在途回执再发刷新。
         // 排空最多等 `OOB_REFRESH_TIMEOUT_MS`，超时就丢弃旧回执（登录目录本来
         // 也只是兑底，刷新结果才是这次要用的）。
-        if let Some(mut rx) = self.oob_cwd_rx.take() {
+        if let Some(rx) = self.oob_cwd_rx.take() {
             use std::sync::mpsc::TryRecvError;
             let prior_intent = self.oob_cwd_intent;
             let drain_deadline =
@@ -6186,6 +6186,34 @@ fn apply_cd_line(cwd: Option<&str>, line: &str, local_home: Option<&str>) -> Opt
     if arg == "-" {
         return None;
     }
+    // F（#422 点查）：无引号且参数后还有尾随内容的行（`cd /tmp/oob cwd 419`、
+    // `mkdir ... && cd ...`）说明这不是一条干净的单参数 cd。宁可保持旧缓存
+    // （靠带外刷新兜底），也不能按空格取第一段把目录截成 /tmp。
+    {
+        let t = rest.trim();
+        // 复合行：含 && 或 ; —— 解析不了，保持旧缓存。
+        if t.contains("&&") || t.contains(';') {
+            return None;
+        }
+        // 无引号含空格：normalize 取到的 arg 若 != 去掉选项后的第一段（即后面还有
+        // 未消费的内容），判定为歧义输入，不更新缓存。
+        let has_quote = t.contains('\'') || t.contains('"');
+        if !has_quote {
+            let tokens: Vec<&str> = t.split_ascii_whitespace().collect();
+            // 跳过选项 token 后剩余 token 数 >1 即含空格未加引号。
+            let mut skipped = 0usize;
+            for tok in &tokens {
+                if tok.starts_with('-') || tok.starts_with('/') {
+                    skipped += 1;
+                } else {
+                    break;
+                }
+            }
+            if tokens.len() - skipped > 1 {
+                return None;
+            }
+        }
+    }
     if arg.is_empty() || arg == "~" {
         return local_home
             .map(|s| s.to_string())
@@ -6992,8 +7020,44 @@ mod cwd_tests {
             String::from_utf8(startup_cd_payload("~/src")).unwrap(),
             "cd -- \"$HOME/\"'src'\r"
         );
+        assert_eq!(String::from_utf8(startup_cd_payload("~/src")).unwrap(),
+            "cd -- \"$HOME/\"'src'\r"
+        );
         assert_eq!(String::from_utf8(startup_cd_payload("~")).unwrap(), "cd -- $HOME\r");
         assert!(posix.starts_with("cd -- "));
+    }
+
+    #[test]
+    fn cd_parses_cd_dashdash_with_spaces() {
+        // F：`cd -- '/tmp/oob cwd 419'`（继承时发出的就是这种形式）。
+        assert_eq!(
+            apply_cd_line(Some("/home"), "cd -- '/tmp/oob cwd 419'", None),
+            Some("/tmp/oob cwd 419".into())
+        );
+    }
+
+    #[test]
+    fn compound_cd_line_never_truncates() {
+        // F：复合行解析不了就保持旧缓存（靠刷新兜底），禁止按空格取首 token。
+        assert_eq!(
+            apply_cd_line(Some("/tmp"), "mkdir -p '/tmp/oob cwd 419' && cd '/tmp/oob cwd 419'", None),
+            None,
+            "复合行不解析，但绝不能变成 /tmp"
+        );
+        assert_eq!(
+            apply_cd_line(Some("/tmp"), "cd /tmp/oob cwd 419", None),
+            None,
+            "无引号含空格参数：不解析成 /tmp，保持旧缓存"
+        );
+    }
+
+    #[test]
+    fn startup_cd_space_path_regression() {
+        // F 回归：输入带空格路径必须生成完整单引号 payload，禁止退化为 '/tmp'。
+        assert_eq!(
+            String::from_utf8(startup_cd_payload("/tmp/oob cwd 419")).unwrap(),
+            "cd -- '/tmp/oob cwd 419'\r"
+        );
     }
 }
 
@@ -7558,6 +7622,22 @@ mod oob_cwd_tests {
         view.poll_oob_cwd_query();
     }
 
+    /// 给 view 挂一个测试句柄（无真实泵线程），使入队路径可用；接收端保活到测试结束。
+    fn attach_test_handle(view: &mut TerminalView) {
+        let (handle, pump_rx, _int_rx, _resize_rx) =
+            crate::ssh::SshSessionHandle::new_for_test(0);
+        // pump_rx 必须保活：sync_channel 发送端在接收端 drop 后会 Disconnected。
+        // 排空它避免测试内多次入队塞满 512 容量（本测试最多入队 2 条，不会满）。
+        std::thread::spawn(move || {
+            for cmd in pump_rx {
+                if let crate::ssh::ShellPumpCommand::ExecRemote { reply, .. } = cmd {
+                    let _ = reply.send(Err("test pump: no remote".into()));
+                }
+            }
+        });
+        view.ssh_handle = Some(handle);
+    }
+
     #[test]
     fn query_fills_cwd_and_identity_when_nothing_known() {
         // #414 关掉注入探测后 remote_identity 恒为空；带外查询要补上，
@@ -7597,6 +7677,7 @@ mod oob_cwd_tests {
         // B 主路径：登录时缓存了 home，之后用户 cd（无 OSC 7 的 zsh）。
         // 继承刷新要拿到真实 /proc cwd 并覆盖旧缓存。
         let mut view = TerminalView::new();
+        attach_test_handle(&mut view);
         view.shell_cwd = Some("/home/u".into());
         view.start_oob_cwd_refresh();
         assert!(view.oob_cwd_rx.is_some(), "refresh 应发出短超时查询");
@@ -7612,6 +7693,7 @@ mod oob_cwd_tests {
     fn refresh_does_not_touch_pending_inheritance_cd() {
         // 刷新不得覆盖尚未发出的继承目标（pending_startup_cd）。
         let mut view = TerminalView::new();
+        attach_test_handle(&mut view);
         view.arm_startup_directory("/inherited/project");
         view.start_oob_cwd_refresh();
         deliver(&mut view, "user=u\nhost=box\ncwd=/home/u\n");
@@ -7643,6 +7725,7 @@ mod oob_cwd_tests {
         // 登录查询还在途时发起刷新：先排空旧回执（按 InitialFill 语义填空目录），
         // 再发新查询，不得把旧 rx 覆盖丢掉。
         let mut view = TerminalView::new();
+        attach_test_handle(&mut view);
         let (tx, rx) = std::sync::mpsc::channel();
         tx.send(Ok("user=u\nhost=box\ncwd=/login/home\n".to_string()))
             .unwrap();

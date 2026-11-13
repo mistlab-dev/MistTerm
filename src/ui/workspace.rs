@@ -375,10 +375,13 @@ impl MistTermApp {
                                     if let Some(session) =
                                         self.session_manager.get_session(&session_id).cloned()
                                     {
-                                        // #392：侧栏「复制/打开标签」同样继承当前活动 pane cwd。
+                                        // #392：侧栏「复制/打开标签」同样继承当前活动 pane cwd；E：先带外刷新。
                                         let inherit = self
                                             .active_tab
-                                            .and_then(|i| self.tab_pane_inherit_cwd(i));
+                                            .and_then(|i| self.active_pane_idx(i).map(|p| (i, p)))
+                                            .and_then(|(i, p)| {
+                                                self.refresh_source_cwd_for_inherit(ctx, i, p)
+                                            });
                                         self.open_new_tab_for_session_with_cwd(
                                             ctx, &session, inherit,
                                         );
@@ -2264,8 +2267,10 @@ impl MistTermApp {
             let mut close_right = None;
             let mut disconnect_ssh_idx = None;
             let mut reconnect_idx = None;
-            let mut open_another_sid: Option<(String, Option<String>)> = None;
             let mut open_another_local_cwd: Option<Option<String>> = None;
+            // E：复制标签/本机新标签闭包内只记下源 (tab, pane)，闭包结束后再做带外刷新
+            //（刷新需 &mut self 且最多阻塞 ~1.2s，禁止在 egui 菜单闭包里同步等待）。
+            let mut duplicate_source: Option<(usize, usize, bool)> = None;
             let mut rename_tab_idx: Option<usize> = None;
             let mut split_h_idx = None;
             let mut split_v_idx = None;
@@ -2378,20 +2383,20 @@ impl MistTermApp {
                         )
                         .clicked()
                     {
-                        // #392：从右键源 tab 显式继承 cwd，避免焦点已切走时误用 active_tab。
+                        // #392：从右键源 tab 显式确定继承源；E：远程会话改为闭包外带外刷新。
                         let active = tab
                             .active_pane
                             .min(tab.panes.len().saturating_sub(1));
-                        let inherit = tab.panes.get(active).and_then(|p| {
-                            p.terminal
-                                .shell_cwd()
-                                .map(|s| s.to_string())
-                                .or_else(|| p.shell_cwd.clone())
-                        });
                         if is_local {
+                            let inherit = tab.panes.get(active).and_then(|p| {
+                                p.terminal
+                                    .shell_cwd()
+                                    .map(|s| s.to_string())
+                                    .or_else(|| p.shell_cwd.clone())
+                            });
                             open_another_local_cwd = Some(inherit);
                         } else {
-                            open_another_sid = Some((sid.clone(), inherit));
+                            duplicate_source = Some((idx, active, false));
                         }
                     }
                     if crate::ui::chrome::popup_menu_button(
@@ -2543,9 +2548,14 @@ impl MistTermApp {
             }
             if let Some(cwd) = open_another_local_cwd {
                 self.open_local_shell_tab_with_cwd(ctx, cwd);
-            } else if let Some((sid, cwd)) = open_another_sid {
-                if let Some(session) = self.session_manager.get_session(&sid).cloned() {
-                    self.open_new_tab_for_session_with_cwd(ctx, &session, cwd);
+            } else if let Some((idx, pane_idx, _is_local)) = duplicate_source {
+                // E：复制标签——与 ⌘T / 分屏同一刷新入口，闭包结束后再带外刷新源 cwd。
+                let sid = self.tabs.get(idx).map(|t| t.primary_session_id());
+                if let Some(sid) = sid {
+                    if let Some(session) = self.session_manager.get_session(&sid).cloned() {
+                        let inherit = self.refresh_source_cwd_for_inherit(ctx, idx, pane_idx);
+                        self.open_new_tab_for_session_with_cwd(ctx, &session, inherit);
+                    }
                 }
             }
             if let Some(idx) = rename_tab_idx {
@@ -2772,7 +2782,7 @@ impl MistTermApp {
 
         if let Some(sid) = open_session_id {
             if let Some(session) = self.session_manager.get_session(&sid).cloned() {
-                // #392：与 ⌘T 一致，继承当前活动 pane 的 shell cwd。
+                // #392：与 ⌘T 一致，继承当前活动 pane 的 shell cwd。本机 shell 只读缓存。
                 let inherit = self
                     .active_tab
                     .and_then(|i| self.tab_pane_inherit_cwd(i));

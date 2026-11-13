@@ -340,6 +340,25 @@ impl SshSessionHandle {
             *g = bypass;
         }
     }
+
+    /// 测试专用：构造一个仅用于入队路径的句柄（无真实泵线程，接收端由调用方持有）。
+    /// 供 UI 层单测模拟「带外 exec 已入队」；调用方必须持有返回的接收端避免通道断开。
+    #[cfg(test)]
+    pub(crate) fn new_for_test(
+        session_id: SshSessionId,
+    ) -> (SshSessionHandle, Receiver<ShellPumpCommand>, Receiver<Vec<u8>>, Receiver<(u32, u32)>) {
+        let (pump_tx, pump_rx) = sync_channel::<ShellPumpCommand>(SHELL_PUMP_QUEUE_CAP);
+        let (interrupt_tx, interrupt_rx) = sync_channel::<Vec<u8>>(8);
+        let (resize_tx, resize_rx) = sync_channel::<(u32, u32)>(RESIZE_QUEUE_CAP);
+        let handle = SshSessionHandle {
+            session_id,
+            pump_tx,
+            interrupt_tx,
+            resize_tx,
+            upload_bypass_slot: Arc::new(Mutex::new(None)),
+        };
+        (handle, pump_rx, interrupt_rx, resize_rx)
+    }
 }
 
 /// SSH 管理器

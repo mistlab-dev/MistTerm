@@ -186,6 +186,19 @@ mod tests {
     }
 
     #[test]
+    fn osc7_space_paths_stay_whole() {
+        // F：带空格路径不得截断成 /tmp 或 /tmp/oob（#422 点查 Fail 项）。
+        let got = parse_osc7("file://host/tmp/oob cwd 419").unwrap();
+        assert_eq!(got.path, "/tmp/oob cwd 419");
+        let got = parse_osc7("file://host/tmp/oob%20cwd%20419").unwrap();
+        assert_eq!(got.path, "/tmp/oob cwd 419");
+        let got = parse_osc99("/tmp/oob cwd 419").unwrap();
+        assert_eq!(got.path, "/tmp/oob cwd 419");
+        let got = parse_osc99("\"/tmp/oob cwd 419\"").unwrap();
+        assert_eq!(got.path, "/tmp/oob cwd 419", "引号包裹的空格路径");
+    }
+
+    #[test]
     fn cwd_host_is_optional_not_fatal() {
         // 主机段含控制字符：路径照收，主机名丢弃（不因参考信息不合规就丢整条 cwd）。
         let got = parse_osc7("file://bad\u{7}host/home/u").unwrap();
