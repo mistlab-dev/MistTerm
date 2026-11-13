@@ -4483,6 +4483,14 @@ impl MistTermApp {
             if switched_to_different {
                 self.pending_foreground_reconnect = Some(idx);
             }
+            // 点击标签标题（含已活动标签）激活后，键盘应立即可用：
+            // 同帧标签条先渲染、终端后渲染，any_click 会把 terminal_wants_keyboard
+            // 清掉，但 request_keyboard_focus 同时置 pending_focus_terminal，
+            // 终端绘制时在 any_click 清除之后消费 pending，焦点得以保留。
+            // 仅作用于活动 pane（pending 是 per-terminal 字段，非活动窗格不受影响）。
+            if self.tabs[idx].active_terminal().is_some() {
+                self.focus_active_terminal();
+            }
         }
     }
 

@@ -7395,3 +7395,42 @@ mod oob_cwd_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod tab_title_focus_tests {
+    use super::*;
+
+    /// 点击标签标题激活后的焦点缺口（main 既有问题，非 #422 回归）：
+    /// 同帧标签条先渲染，any_click 把 terminal_wants_keyboard 清掉；
+    /// 修复用的是 request_keyboard_focus → pending_focus_terminal，
+    /// 终端绘制时在 any_click 清除**之后**消费 pending，焦点得以保留。
+    /// 真正的 UI 同帧竞态无法在无 egui context 的单测里复现，这里锁定
+    /// 意图置位语义：wants 与 pending 必须同时为真，缺一不可。
+    #[test]
+    fn request_keyboard_focus_arms_both_flags_for_same_frame_race() {
+        let mut view = TerminalView::new();
+        // 模拟同帧先发生标题点击清掉 wants：
+        view.terminal_wants_keyboard = false;
+        view.terminal_focused = false;
+        view.request_keyboard_focus();
+        assert!(
+            view.terminal_wants_keyboard,
+            "wants 必须置回，否则下一帧点击终端正文前键盘仍不可用"
+        );
+        assert!(
+            view.pending_focus_terminal,
+            "pending 必须置位：终端绘制时 any_click 清 wants 之后才消费 pending，同帧焦点不丢"
+        );
+    }
+
+    /// 让焦点给 UI 输入（偏好/查找/命令面板/重命名等）时，不能残留 pending
+    /// 把焦点再偷回终端。
+    #[test]
+    fn release_keyboard_clears_pending_too() {
+        let mut view = TerminalView::new();
+        view.request_keyboard_focus();
+        view.release_keyboard_for_overlay();
+        assert!(!view.terminal_wants_keyboard);
+        assert!(!view.pending_focus_terminal, "释放焦点必须连 pending 一起清，否则下一帧终端把焦点抢回");
+    }
+}
