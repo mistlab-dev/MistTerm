@@ -727,8 +727,12 @@ impl Terminal {
 
     /// 返回当前视口（screen）可见文本，保持固定列宽，避免表格错位
     pub fn get_formatted_output(&self) -> String {
-        let mut rows = vec![vec![' '; self.width]; self.height];
         let content = self.term.renderable_content();
+        self.formatted_from_content(content)
+    }
+
+    fn formatted_from_content(&self, content: alacritty_terminal::term::RenderableContent) -> String {
+        let mut rows = vec![vec![' '; self.width]; self.height];
 
         for indexed in content.display_iter {
             if let Some(vp) = point_to_viewport(content.display_offset, indexed.point) {
@@ -790,11 +794,48 @@ impl Terminal {
         highlight: Option<(usize, usize, usize)>,
         selection: Option<(i32, usize, i32, usize, Color32, Color32)>,
     ) -> (LayoutJob, Vec<Vec<Color32>>) {
+        let content = self.term.renderable_content();
+        let (job, bgs, _) =
+            self.layout_job_from_content(content, font_size, line_height, cell_w, wide_char_pad, shell, highlight, selection);
+        (job, bgs)
+    }
+
+    /// 单次 `renderable_content` 同时产出 LayoutJob / cell_bgs / 视口文本。
+    /// 布局缓存重建路径（UI 每帧检查）用它把两次全网格遍历合成一次；
+    /// 输出高频时 content_epoch 每帧失效，这里就是热点路径的减半点。
+    pub fn get_visual_data(
+        &self,
+        font_size: f32,
+        line_height: f32,
+        cell_w: f32,
+        wide_char_pad: f32,
+        shell: &TerminalShellStyle,
+        highlight: Option<(usize, usize, usize)>,
+        selection: Option<(i32, usize, i32, usize, Color32, Color32)>,
+    ) -> (LayoutJob, Vec<Vec<Color32>>, String) {
+        let content = self.term.renderable_content();
+        // 单次 renderable_content 双产出：formatted 从布局构建的同一 rows 推导，
+        // 不再二次遍历 display_iter（GridIterator 按值消费，无法共享借用）。
+        let (job, bgs, formatted) =
+            self.layout_job_from_content(content, font_size, line_height, cell_w, wide_char_pad, shell, highlight, selection);
+        (job, bgs, formatted)
+    }
+
+    fn layout_job_from_content(
+        &self,
+        content: alacritty_terminal::term::RenderableContent,
+        font_size: f32,
+        line_height: f32,
+        cell_w: f32,
+        wide_char_pad: f32,
+        shell: &TerminalShellStyle,
+        highlight: Option<(usize, usize, usize)>,
+        selection: Option<(i32, usize, i32, usize, Color32, Color32)>,
+    ) -> (LayoutJob, Vec<Vec<Color32>>, String) {
         let default_fg = shell.default_fg;
         let terminal_bg = shell.terminal_bg;
         let mut rows =
             vec![vec![(' ', default_fg, terminal_bg, Flags::empty()); self.width]; self.height];
-        let content = self.term.renderable_content();
 
         for indexed in content.display_iter {
             if let Some(vp) = point_to_viewport(content.display_offset, indexed.point) {
@@ -896,8 +937,12 @@ impl Terminal {
             }
         };
         let row_count = rows.len();
+        let mut formatted = String::with_capacity(rows.len() * (self.width + 1));
         for (row_i, row) in rows.into_iter().enumerate() {
-            for (ch, color, _bg, flags) in row {
+            for (ch, color, _bg, flags) in &row {
+                let ch = *ch;
+                let color = *color;
+                let flags = *flags;
                 if flags.contains(Flags::LEADING_WIDE_CHAR_SPACER) {
                     // 折行前的占位格：独占一列，无字形。
                     flush_run(&mut job, &mut run_text, &mut run_fmt);
@@ -922,13 +967,23 @@ impl Terminal {
                 run_fmt = Some(fmt);
             }
             flush_run(&mut job, &mut run_text, &mut run_fmt);
-            // 最后一行后勿再 append '\n'，否则 egui 会多出一行空 galley（底栏上方多一截空白）。
+            // formatted 与布局同源：同一行字符流（spacer 记空格），与 get_formatted_output 等价。
+            for (ch, _, _, flags) in &row {
+                if flags.contains(Flags::WIDE_CHAR_SPACER)
+                    || flags.contains(Flags::LEADING_WIDE_CHAR_SPACER)
+                {
+                    formatted.push(' ');
+                } else {
+                    formatted.push(*ch);
+                }
+            }
             if row_i + 1 < row_count {
+                formatted.push('\n');
                 job.append("\n", 0.0, cell_fmt(default_fg));
             }
         }
         flush_run(&mut job, &mut run_text, &mut run_fmt);
-        (job, cell_bgs)
+        (job, cell_bgs, formatted)
     }
 }
 

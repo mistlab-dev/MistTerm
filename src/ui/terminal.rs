@@ -2376,16 +2376,17 @@ impl TerminalView {
                                     c.formatted.clone(),
                                 )
                             } else {
-                                let (layout_job, cell_bgs) = self.terminal.get_layout_job(
-                                    self.font_size,
-                                    line_height,
-                                    cell_w,
-                                    wide_char_pad,
-                                    &shell,
-                                    self.search_highlight,
-                                    selection_arg,
-                                );
-                                let formatted = self.terminal.get_formatted_output();
+                                // 单次 renderable_content 双产出（高频输出时重建热点减半）。
+                                let (layout_job, cell_bgs, formatted) =
+                                    self.terminal.get_visual_data(
+                                        self.font_size,
+                                        line_height,
+                                        cell_w,
+                                        wide_char_pad,
+                                        &shell,
+                                        self.search_highlight,
+                                        selection_arg,
+                                    );
                                 let display_links =
                                     Self::scan_display_links(&self.module_registry, &formatted);
                                 self.visual_layout_cache = Some(TerminalVisualLayoutCache {
@@ -2408,16 +2409,17 @@ impl TerminalView {
                                 (layout_job, cell_bgs, formatted)
                             }
                         } else {
-                            let (layout_job, cell_bgs) = self.terminal.get_layout_job(
-                                self.font_size,
-                                line_height,
-                                cell_w,
-                                wide_char_pad,
-                                &shell,
-                                self.search_highlight,
-                                selection_arg,
-                            );
-                            let formatted = self.terminal.get_formatted_output();
+                            // 单次 renderable_content 双产出（高频输出时重建热点减半）。
+                            let (layout_job, cell_bgs, formatted) =
+                                self.terminal.get_visual_data(
+                                    self.font_size,
+                                    line_height,
+                                    cell_w,
+                                    wide_char_pad,
+                                    &shell,
+                                    self.search_highlight,
+                                    selection_arg,
+                                );
                             let display_links =
                                 Self::scan_display_links(&self.module_registry, &formatted);
                             self.visual_layout_cache = Some(TerminalVisualLayoutCache {
