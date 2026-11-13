@@ -563,6 +563,25 @@ pub fn ensure_terminal_ime_focus(memory: &mut egui::Memory, ime_id: egui::Id) {
 /// preedit into the capture buffer, and some platforms may also emit `Event::Text` for
 /// the same keystrokes or the commit string. Feeding those bytes would leave Latin
 /// pinyin at the caret while Chinese commits afterward (Tian: 汉字在行尾 / 前面留下 ls).
+/// #430：本帧是否处于 IME 活动窗口（组字中 / 本帧有 Ime 事件）。
+///
+/// winit X11 在 `is_composing` 状态失步时会把组字期间的**原始键事件**（字母、
+/// 空格、候选数字键）照常发给应用——这些键随后被终端转发写进 PTY，表现就是
+/// 「提交『你好』却收到 Tab/数字/乱码」。ibus-libpinyin 的 XIM preedit 回调
+/// 与 winit 的 `is_composing` 同步存在缺口（见 winit 0.30.13 X11
+/// event_processor 的 `keycode != 0 && !is_composing` 原始转发分支）。
+///
+/// 终端侧兜底：只要本帧出现任何 Ime 事件（含空 Preedit 的 Start/End 边沿），
+/// 就认为这个帧在组字窗口内，把原始键转发全部让位——Commit 文本本身仍单独写
+/// PTY，不受此开关影响。方向键/F 键等导航键也一并让位：组字会话内它们属于
+/// 候选翻页/移动，不构成终端输入。
+pub fn ime_activity_frame(events: &[Event], composing_at_frame_start: bool) -> bool {
+    composing_at_frame_start
+        || events
+            .iter()
+            .any(|event| matches!(event, Event::Ime(_)))
+}
+
 pub fn suppress_plain_text_for_ime(events: &[Event], composing_at_frame_start: bool) -> bool {
     if composing_at_frame_start {
         return true;
@@ -721,7 +740,7 @@ mod tests {
     use eframe::egui;
     use eframe::egui::{Event, Key, Modifiers};
 
-    fn key_press(key: Key, modifiers: Modifiers) -> Event {
+    pub(super) fn key_press(key: Key, modifiers: Modifiers) -> Event {
         Event::Key {
             key,
             physical_key: None,
@@ -1915,5 +1934,33 @@ mod tests {
         // 0.37：IME 框不再覆盖剪贴板；此测试守护 Cut 路径不会把 "APP" 之外的内容放进剪贴板。
         let o = one_frame(winit_like(Key::X, cs(), None), |_| true);
         assert_eq!(o.copied, "APP");
+    }
+}
+#[cfg(test)]
+mod ime_activity_tests {
+    use super::*;
+    use super::tests::key_press;
+
+    #[test]
+    fn ime_activity_frame_detects_any_ime_event() {
+        // #430：winit X11 is_composing 失步会把组字期间的原始键（空格/数字/字母）
+        // 照常发进应用。本帧只要出现任何 Ime 事件（含空 Preedit 的 Start/End 边沿），
+        // 就让位原始键转发，避免「提交你好却收到 Tab/数字」。
+        let events = vec![
+            Event::Ime(egui::ImeEvent::Preedit {
+                text: String::new(),
+                active_range_chars: None,
+            }),
+            key_press(Key::Space, Modifiers::NONE),
+        ];
+        assert!(ime_activity_frame(&events, false));
+        assert!(!ime_activity_frame(&[key_press(Key::Space, Modifiers::NONE)], false));
+        assert!(ime_activity_frame(&[], true), "组字态延续也要让位");
+        // Commit 帧同样属于活动窗口；Commit 文本本身由 Ime 臂单独写 PTY。
+        let commit = vec![
+            Event::Ime(egui::ImeEvent::Commit("你好".into())),
+            key_press(Key::Space, Modifiers::NONE),
+        ];
+        assert!(ime_activity_frame(&commit, false));
     }
 }
