@@ -72,6 +72,9 @@ pub enum ShellPumpCommand {
     ExecRemote {
         cmd: String,
         reply: mpsc::Sender<Result<String, String>>,
+        /// 可选短超时（毫秒）。`None` = 用泵默认 `PUMP_EXEC_TIMEOUT_MS`（15s）。
+        /// 交互刷新类查询传短值，避免慢 exec 长时间占用泵线程、冻结 PTY 读写。
+        timeout_ms: Option<u32>,
     },
     /// 在 shell 泵线程内独占执行的 Session 任务（SFTP 等）。
     ///
@@ -295,6 +298,26 @@ impl SshSessionHandle {
         self.pump_send(ShellPumpCommand::ExecRemote {
             cmd: command.to_string(),
             reply: reply_tx,
+            timeout_ms: None,
+        })?;
+        Ok(reply_rx)
+    }
+
+    /// 同 [`Self::enqueue_remote_exec`]，但给整个 exec 一个更短的 libssh2 阻塞超时。
+    ///
+    /// #419 产品点查后的目录继承刷新：开新标签/分屏前对源会话再查一次 `/proc` cwd。
+    /// 这类查询必须在用户可感知的时间内结束（建议 1s 量级），否则泵线程被占住时
+    /// PTY 读写暂停，终端会「假死」。超时/失败一律由调用方退回缓存目录。
+    pub fn enqueue_remote_exec_with_timeout(
+        &self,
+        command: &str,
+        timeout_ms: u32,
+    ) -> Result<mpsc::Receiver<Result<String, String>>, String> {
+        let (reply_tx, reply_rx) = mpsc::channel();
+        self.pump_send(ShellPumpCommand::ExecRemote {
+            cmd: command.to_string(),
+            reply: reply_tx,
+            timeout_ms: Some(timeout_ms),
         })?;
         Ok(reply_rx)
     }
@@ -316,6 +339,25 @@ impl SshSessionHandle {
         if let Ok(mut g) = self.upload_bypass_slot.lock() {
             *g = bypass;
         }
+    }
+
+    /// 测试专用：构造一个仅用于入队路径的句柄（无真实泵线程，接收端由调用方持有）。
+    /// 供 UI 层单测模拟「带外 exec 已入队」；调用方必须持有返回的接收端避免通道断开。
+    #[cfg(test)]
+    pub(crate) fn new_for_test(
+        session_id: SshSessionId,
+    ) -> (SshSessionHandle, Receiver<ShellPumpCommand>, Receiver<Vec<u8>>, Receiver<(u32, u32)>) {
+        let (pump_tx, pump_rx) = sync_channel::<ShellPumpCommand>(SHELL_PUMP_QUEUE_CAP);
+        let (interrupt_tx, interrupt_rx) = sync_channel::<Vec<u8>>(8);
+        let (resize_tx, resize_rx) = sync_channel::<(u32, u32)>(RESIZE_QUEUE_CAP);
+        let handle = SshSessionHandle {
+            session_id,
+            pump_tx,
+            interrupt_tx,
+            resize_tx,
+            upload_bypass_slot: Arc::new(Mutex::new(None)),
+        };
+        (handle, pump_rx, interrupt_rx, resize_rx)
     }
 }
 
@@ -691,13 +733,30 @@ impl SshManager {
         let session = self
             .get_session(session_id)
             .ok_or_else(|| format!("会话 {} 不可用（未连接或已移除）", session_id))?;
-        Self::exec_on_cloned_session(&session, command)
+        Self::exec_on_cloned_session(&session, command, PUMP_EXEC_TIMEOUT_MS)
     }
 
-    fn exec_on_cloned_session(session: &ssh2::Session, command: &str) -> Result<String, String> {
+    /// 同 [`Self::exec_remote`]，但覆盖 libssh2 阻塞超时（短查询用）。
+    pub fn exec_remote_with_timeout(
+        &self,
+        session_id: SshSessionId,
+        command: &str,
+        timeout_ms: u32,
+    ) -> Result<String, String> {
+        let session = self
+            .get_session(session_id)
+            .ok_or_else(|| format!("会话 {} 不可用（未连接或已移除）", session_id))?;
+        Self::exec_on_cloned_session(&session, command, timeout_ms)
+    }
+
+    fn exec_on_cloned_session(
+        session: &ssh2::Session,
+        command: &str,
+        timeout_ms: u32,
+    ) -> Result<String, String> {
         use std::io::Read;
-        // 在 shell 泵线程执行，期间 PTY 读写暂停，超时要比默认更短。
-        let _guard = SessionBlockingGuard::with_timeout(session, PUMP_EXEC_TIMEOUT_MS);
+        // 在 shell 泵线程执行，期间 PTY 读写暂停；超时由调用方按需给短值。
+        let _guard = SessionBlockingGuard::with_timeout(session, timeout_ms);
         let mut channel = session
             .channel_session()
             .map_err(|e| format!("打开 exec 通道失败: {}", e))?;
@@ -1270,9 +1329,12 @@ mod shell_pump {
                     );
                 }
             }
-            ShellPumpCommand::ExecRemote { cmd, reply } => {
+            ShellPumpCommand::ExecRemote { cmd, reply, timeout_ms } => {
                 drop(ch);
-                let res = mgr.exec_remote(session_id, &cmd);
+                let res = match timeout_ms {
+                    Some(ms) => mgr.exec_remote_with_timeout(session_id, &cmd, ms),
+                    None => mgr.exec_remote(session_id, &cmd),
+                };
                 let _ = reply.send(res);
             }
             ShellPumpCommand::SessionJob(job) => {
