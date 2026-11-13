@@ -457,6 +457,11 @@ pub struct TerminalView {
     pending_open_paste_history: bool,
     /// 「仅断开 SSH 保留画面」后为 true：键盘输入写入 [`Self::disconnected_input_buffer`] 而非 PTY(FUNCTIONAL_SPEC §2.4)。
     buffer_input_while_disconnected: bool,
+    /// #428 连接成功后的首屏自醒：Connected 帧起 2 秒内每帧无条件请求重绘，
+    /// 保证 Last login / 首行提示符无需点击或按键就自动出现。
+    /// 焦点态光标相位重绘只在 `terminal_focused` 时跑；偶发的「连接成功但焦点没跟上」
+    /// 帧序下 VTE 已有内容却没有任何 repaint 驱动 → 首屏空白，点一下正文才画出来。
+    connect_first_paint_until: Option<Instant>,
     /// 意外断开时 `ssh_rx` 仍被本帧借用，排空后再丢掉。
     release_ssh_rx_after_drain: bool,
     /// 断开态键入提示的节流时刻（约 3 秒一次）。
@@ -1132,6 +1137,7 @@ impl TerminalView {
             pending_open_paste_history: false,
             buffer_input_while_disconnected: false,
             release_ssh_rx_after_drain: false,
+            connect_first_paint_until: None,
             disconnect_input_toast_at: None,
             disconnect_input_toast_armed: false,
             disconnected_input_buffer: Vec::new(),
@@ -2172,6 +2178,15 @@ impl TerminalView {
         if self.shows_persistent_disconnect_banner() {
             // 横幅在本帧 show() 之前已排过版，再要一帧才能画出来。
             ui.ctx().request_repaint();
+        }
+        // #428：连接成功后的首屏自醒（见字段注释）。与焦点无关，仅在新连接后 2s 内生效；
+        // 重连（走同一个 Connected 分支）与断开（窗口随字段重置自然失效）不受影响。
+        if let Some(until) = self.connect_first_paint_until {
+            if Instant::now() < until {
+                ui.ctx().request_repaint();
+            } else {
+                self.connect_first_paint_until = None;
+            }
         }
         self.flush_paste_queue(ui.ctx());
         self.process_transfer_events(theme, ui.ctx());
@@ -3660,6 +3675,10 @@ impl TerminalView {
                         self.connected = true;
                         self.connecting_fido2 = false;
                         self.connected_at = Some(Instant::now());
+                        // #428：首屏自醒窗口开 2s。窗口内每帧无条件 `request_repaint()`，
+                        // 不依赖焦点/光标相位/输出脏位；首帧内容（Last login/提示符）到达即被画出。
+                        self.connect_first_paint_until =
+                            Some(Instant::now() + Duration::from_secs(2));
                         self.terminal_wants_keyboard = true;
                         self.terminal_focused = true;
                         self.pending_focus_terminal = true;
@@ -3740,7 +3759,8 @@ impl TerminalView {
                         self.connected = false;
                         self.connected_at = None;
                         self.auto_follow_output = true;
-                        self.resend_offline_input_dialog_open = false;
+                        // #428：断开后首屏自醒窗口立即失效，不应在断开态无条件重绘。
+                        self.connect_first_paint_until = None;
                         self.seal_open_capture();
                         // 意外 EOF 不能再留着 ssh_manager，否则 is_connecting() 仍为真，
                         // 标签/侧栏绿点不灭，还会盖上一层「正在连接」。
@@ -7392,6 +7412,145 @@ mod oob_cwd_tests {
                 .cwd
                 .as_deref(),
             Some("/tmp/a b")
+        );
+    }
+}
+
+#[cfg(test)]
+mod connect_first_paint_tests {
+    use super::*;
+
+    fn pump(ctx: &egui::Context, view: &mut TerminalView, time: f64) -> Duration {
+        let theme = Theme::dark();
+        let got = std::sync::Arc::new(std::sync::Mutex::new(None::<std::time::Duration>));
+        {
+            let got = got.clone();
+            ctx.set_repaint_observer(move |info: egui::RequestRepaintInfo| {
+                let mut g = got.lock().unwrap();
+                *g = Some(match *g {
+                    Some(prev) => prev.min(info.delay),
+                    None => info.delay,
+                });
+            });
+        }
+        let raw = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(900.0, 600.0),
+            )),
+            time: Some(time),
+            ..Default::default()
+        };
+        let mut out = ctx.run_pass(raw, |ctx| {
+            ctx.root_ui(|root| {
+                egui::CentralPanel::default().show(root, |ui| {
+                    view.show(ui, &theme, 860.0, false, true);
+                });
+            });
+        });
+        out.textures_delta.clear();
+        let delay = *got.lock().unwrap();
+        delay.unwrap_or_default()
+    }
+
+    /// #428：连接成功帧（含重连）必须武装 2s 首屏自醒窗口。
+    /// 直接断言 Connected 分支的行为；不依赖 SSH 真连接。
+    #[test]
+    fn connected_message_arms_first_paint_window() {
+        let mut view = TerminalView::new();
+        view.session_id = Some(1);
+        let theme = Theme::dark();
+        view.process_ssh_messages(&theme); // 空 rx，仅确认未武装
+        assert!(view.connect_first_paint_until.is_none());
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        tx.send(SshMessage::Connected { session_id: 1 })
+            .expect("send Connected");
+        view.ssh_rx = Some(rx);
+        // Connected 分支会尝试 start_interactive_shell：无 manager 时走 Err 臂，
+        // 但窗口武装发生在其之前，不受影响。
+        let _ = view.process_ssh_messages(&theme);
+        let armed = view
+            .connect_first_paint_until
+            .expect("Connected must arm the first-paint window");
+        let lead = armed.duration_since(Instant::now());
+        assert!(
+            lead <= Duration::from_secs(2),
+            "window should be ~2s, got {lead:?}"
+        );
+    }
+
+    /// #428：窗口期内 show() 必须发出零延迟（立即）重绘请求，
+    /// 且此时焦点/光标相位路径不参与（VTE 可能有内容但没有任何焦点侧驱动）。
+    #[test]
+    fn window_requests_immediate_repaint_in_show() {
+        let ctx = egui::Context::default();
+        let mut view = TerminalView::new();
+        view.connected = true;
+        // 模拟「焦点没跟上」的帧序：不给 wants_keyboard/pending_focus，
+        // 只给首屏窗口 + VTE 内容。
+        view.terminal_wants_keyboard = false;
+        view.terminal_focused = false;
+        view.connect_first_paint_until = Some(Instant::now() + Duration::from_secs(2));
+        view.terminal.feed(b"Last login: ... \r\nuser@box:~$ ");
+        let _ = pump(&ctx, &mut view, 0.0);
+        let dt = pump(&ctx, &mut view, 0.0);
+        assert!(
+            dt.is_zero(),
+            "armed first-paint window must repaint immediately even without focus, got {dt:?}"
+        );
+        // 窗口仍在：未被过期清掉。
+        assert!(view.connect_first_paint_until.is_some());
+    }
+
+    /// #428：窗口过期后不再请求重绘，恢复空闲（无字段驱动）。
+    /// bash/zsh 的首帧输出通常 1s 内到达，2s 窗口足够覆盖；fish 同机制无需单独分支。
+    #[test]
+    fn expired_window_stops_repaint_requests() {
+        let ctx = egui::Context::default();
+        let mut view = TerminalView::new();
+        view.connected = true;
+        view.terminal_wants_keyboard = false;
+        view.terminal_focused = false;
+        view.connect_first_paint_until = Some(Instant::now() - Duration::from_millis(1));
+        let _ = pump(&ctx, &mut view, 0.0);
+        assert!(
+            view.connect_first_paint_until.is_none(),
+            "expired window must be cleared"
+        );
+        let dt = pump(&ctx, &mut view, 0.0);
+        // 无焦点、无窗口、无选区 → 不应有 33ms 之类的活动重绘。
+        // IME TextEdit 自身闪烁 (~0.5s) 可能仍在，这里只断言不是活动短间隔。
+        assert!(
+            dt >= Duration::from_millis(crate::terminal::style::TERMINAL_LIVE_REPAINT_MS),
+            "expired window must not keep live repaints alive, got {dt:?}"
+        );
+    }
+
+    /// #428：断开后窗口自然失效——重连走 Connected 分支重新武装，
+    /// 断开态不应继续无条件重绘。
+    #[test]
+    fn window_survives_disconnected_then_rearm_on_reconnect() {
+        let mut view = TerminalView::new();
+        view.session_id = Some(2);
+        let theme = Theme::dark();
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        tx.send(SshMessage::Connected { session_id: 2 }).unwrap();
+        view.ssh_rx = Some(rx);
+        let _ = view.process_ssh_messages(&theme);
+        assert!(view.connect_first_paint_until.is_some());
+
+        // 断开：字段保留但窗口是墙钟判断，断开期间 show() 仍会在窗口内空转极少量帧；
+        // 为保证断开不无条件重绘，Disconnected 显式清窗。
+        let (tx2, rx2) = std::sync::mpsc::channel();
+        tx2.send(SshMessage::Disconnected { session_id: 2 })
+            .unwrap();
+        view.ssh_rx = Some(rx2);
+        let _ = view.process_ssh_messages(&theme);
+        assert!(
+            view.connect_first_paint_until.is_none(),
+            "Disconnected must clear the first-paint window"
         );
     }
 }
