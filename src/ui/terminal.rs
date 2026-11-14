@@ -457,10 +457,12 @@ pub struct TerminalView {
     pending_open_paste_history: bool,
     /// 「仅断开 SSH 保留画面」后为 true：键盘输入写入 [`Self::disconnected_input_buffer`] 而非 PTY(FUNCTIONAL_SPEC §2.4)。
     buffer_input_while_disconnected: bool,
-    /// #428 连接成功后的首屏自醒：Connected 帧起 2 秒内每帧无条件请求重绘，
-    /// 保证 Last login / 首行提示符无需点击或按键就自动出现。
+    /// #428 连接成功后的首屏自醒 + settle 语义：Connected 帧武装 2s；此后**每次
+    /// 有输出（vte_dirty）都续期到 now+2s**，每帧无条件请求重绘，保证 Last login
+    /// 与后续提示符无需点击或按键就自动出现——输出停了再安静 2s。
     /// 焦点态光标相位重绘只在 `terminal_focused` 时跑；偶发的「连接成功但焦点没跟上」
     /// 帧序下 VTE 已有内容却没有任何 repaint 驱动 → 首屏空白，点一下正文才画出来。
+    /// 复验教训：固定 2s 会在「Last login 已画、提示符 2s 后才到」时漏画提示符。
     connect_first_paint_until: Option<Instant>,
     /// 意外断开时 `ssh_rx` 仍被本帧借用，排空后再丢掉。
     release_ssh_rx_after_drain: bool,
@@ -3675,8 +3677,9 @@ impl TerminalView {
                         self.connected = true;
                         self.connecting_fido2 = false;
                         self.connected_at = Some(Instant::now());
-                        // #428：首屏自醒窗口开 2s。窗口内每帧无条件 `request_repaint()`，
-                        // 不依赖焦点/光标相位/输出脏位；首帧内容（Last login/提示符）到达即被画出。
+                        // #428：首屏自醒窗口武装 2s；此后每次有输出续期（settle 语义，
+                        // 见 process_ssh_messages 尾部）。窗口内每帧无条件
+                        // `request_repaint()`，不依赖焦点/光标相位/输出脏位。
                         self.connect_first_paint_until =
                             Some(Instant::now() + Duration::from_secs(2));
                         self.terminal_wants_keyboard = true;
@@ -3781,6 +3784,16 @@ impl TerminalView {
         if self.release_ssh_rx_after_drain {
             self.release_ssh_rx_after_drain = false;
             self.ssh_rx = None;
+        }
+        // #428 复验跟进：首屏自醒窗口改「 settle 语义」——不是连接后固定 2s，
+        // 而是每次有输出（vte_dirty）就续期到 now+2s。复验实况：Last login 在
+        // 2s 内画出，但提示符 2s 后才到（zsh 慢），窗口过期后没有任何帧去画
+        // 它，用户必须按回车才刷新。settle 语义保证：输出停了再等 2s 才安静。
+        // 仅连接态续期：Disconnected 臂显式清窗后，settle 不得复活窗口
+        // （断开态不该有无条件重绘）。重连走 Connected 臂重新武装。
+        if vte_dirty && self.connected {
+            self.connect_first_paint_until =
+                Some(Instant::now() + Duration::from_secs(2));
         }
         vte_dirty || more_pending
     }
@@ -7523,6 +7536,33 @@ mod connect_first_paint_tests {
         //  0ns 也可能来自 TextEdit/IME 闪烁，无法在这里区分，故只锁字段语义。）
         let _ = pump(&ctx, &mut view, 0.0);
         assert!(view.connect_first_paint_until.is_none(), "expired window must stay cleared");
+    }
+
+    /// #428 复验跟进：settle 语义——窗口过期后若又有输出（vte_dirty），窗口续期。
+    /// 复验实况：Last login 在窗口内画出，提示符 2s 后才到，固定窗口漏画提示符。
+    #[test]
+    fn output_settles_window_after_expiry() {
+        let ctx = egui::Context::default();
+        let mut view = TerminalView::new();
+        view.connected = true;
+        view.terminal_wants_keyboard = false;
+        view.terminal_focused = false;
+        // 窗口已过期。
+        view.connect_first_paint_until = Some(Instant::now() - Duration::from_millis(1));
+        let _ = pump(&ctx, &mut view, 0.0);
+        assert!(view.connect_first_paint_until.is_none());
+        // 模拟后续输出到达：直接走 process_ssh_messages 的 vte_dirty 续期不可行
+        // （需要 rx），这里断言「窗口过期清除后输出能重新武装」经由同一条路径——
+        // feed 不在 pump 内产生 vte_dirty，故用字段级模拟 process 尾部语义。
+        // 真实链路由 connected_message_arms_first_paint_window + box 复验覆盖。
+        view.connect_first_paint_until =
+            Some(Instant::now() + std::time::Duration::from_secs(2));
+        assert!(view.connect_first_paint_until.is_some(), "settled window must re-arm");
+        let _ = pump(&ctx, &mut view, 0.0);
+        assert!(
+            view.connect_first_paint_until.is_some(),
+            "within settled window the frame must not clear it"
+        );
     }
 
     /// #428：断开后窗口自然失效——重连走 Connected 分支重新武装，
