@@ -312,18 +312,20 @@ impl CloudSyncPanel {
                 &mut self.settings.sync_host_metadata,
                 loc.tr("Sync host list after sign-in", "登录后同步主机列表"),
             );
-            // #418：egui 用 unicode-linebreak 对 CJK 逐字断行，「密钥路径」会被拆成
-            // 「密 / 钥路径」。cjk_word_safe 在词组内插 U+2060 WORD JOINER 禁止字间
-            // 断行，换行只发生在词组边界。
+            // #418：egui 折行是自家启发式（CJK 逐字可断，U+2060 无效），改应用层
+            // 预折行：词组原子 + 标点边界，超宽前插 \n。
             ui.label(
                 chrome::rich_caption(
                     theme,
-                    &cjk_word_safe(
+                    &cjk_wrap_lines(
+                        ui,
+                        theme,
                         loc.tr(
                             "Name, host, port, user, group, auth hint, and key path only. Passwords and private key files stay on this machine.",
                             "只同步名称、主机、端口、用户、分组、认证提示和密钥路径。密码和私钥文件留在本机。",
                         ),
-                        &CLOUD_SYNC_ZH_PHRASES,
+                        CLOUD_SYNC_ZH_PHRASES,
+                        ui.available_width(),
                     ),
                 )
                 .color(theme.color_form_hint()),
@@ -1644,7 +1646,13 @@ fn paint_bullet_list(
 ) {
     for (en, zh) in items {
         // #418：中文说明逐条过词组保护，杜绝「密 / 钥路径」类拆字。
-        let zh = cjk_word_safe(loc.tr(*en, *zh), CLOUD_SYNC_ZH_PHRASES);
+        let zh = cjk_wrap_lines(
+            ui,
+            theme,
+            loc.tr(*en, *zh),
+            CLOUD_SYNC_ZH_PHRASES,
+            ui.available_width(),
+        );
         ui.label(
             chrome::rich_caption(theme, &zh).color(theme.color_form_hint()),
         );
@@ -1660,23 +1668,182 @@ const CLOUD_SYNC_ZH_PHRASES: &[&str] = &[
     "凭证库", "同步包", "主机列表", "丢失", "数据", "令牌",
 ];
 
-/// #418：在 CJK 词组内部插入 U+2060 WORD JOINER，禁止 egui 在词组字间断行。
-/// 只处理中文文案；拉丁文本不受影响。词组按给出顺序查找替换。
-pub(crate) fn cjk_word_safe(text: &str, phrases: &[&str]) -> String {
-    let mut out = text.to_string();
-    for phrase in phrases {
-        let joined = phrase
-            .chars()
-            .enumerate()
-            .flat_map(|(i, c)| {
-                if i == 0 {
-                    vec![c]
-                } else {
-                    vec!['\u{2060}', c]
-                }
-            })
-            .collect::<String>();
-        out = out.replace(phrase, &joined);
+/// #418 复验定性：egui 0.37 的折行是自家启发式（epaint text_layout
+/// RowBreakCandidates——CJK 逐字都是 good candidate），U+2060 WORD JOINER
+/// 是 invisible_char（无字形、不参与断行判定），对 egui 完全无效（已用
+/// galley 探针实证）。因此改为**应用层预折行**：按词组+标点切 token，
+/// 逐 token 量宽，超宽前在词组/标点边界插 \n，一行一个 Label 不会自折。
+///
+/// `phrases`：不可拆的词组（原子 token）。
+pub(crate) fn cjk_wrap_lines(
+    ui: &egui::Ui,
+    theme: &Theme,
+    text: &str,
+    phrases: &[&str],
+    max_width: f32,
+) -> String {
+    // 1) 切 token：词组优先（原子），其余逐字符（CJK）或按非 CJK 连续段。
+    let mut tokens: Vec<String> = Vec::new();
+    let mut rest = text.to_string();
+    // 先把词组替换成占位符防止被逐字切开。
+    let mut placeholders: Vec<(String, String)> = Vec::new();
+    for (i, phrase) in phrases.iter().enumerate() {
+        let ph = format!("\u{E000}{i}\u{E001}"); // 私有区占位，不会与正文冲突
+        placeholders.push((ph.clone(), phrase.to_string()));
+        rest = rest.replace(phrase, &ph);
     }
-    out
+    // 逐字符切 token（标点附着在前一 token 上，词组占位符是原子）。
+    let mut cur = String::new();
+    let chars: Vec<char> = rest.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if c == '\u{E000}' {
+            // 占位符起点：读到 E001
+            let mut ph = String::new();
+            ph.push(c);
+            i += 1;
+            while i < chars.len() && chars[i] != '\u{E001}' {
+                ph.push(chars[i]);
+                i += 1;
+            }
+            if i < chars.len() {
+                ph.push('\u{E001}');
+                i += 1;
+            }
+            if !cur.is_empty() {
+                tokens.push(cur.clone());
+                cur.clear();
+            }
+            tokens.push(ph);
+        } else if is_cjk_char(c) || (c.is_ascii_punctuation() && !cur.is_empty() && !cur.chars().all(|x| x.is_ascii_alphanumeric())) {
+            // CJK 字符与 ASCII 标点：标点贴前面。句读（、。；：！？）作为边界
+            // 附着当前 token；非句读 ASCII 标点（如 URL 里的 / .）与前后合并。
+            if !cur.is_empty() {
+                tokens.push(cur.clone());
+            cur.clear();
+            }
+            cur.push(c);
+            tokens.push(cur.clone());
+            cur.clear();
+            i += 1;
+        } else {
+            // 拉丁/数字/空白：连续段为 token（空白也并入，折行时 trim 尾部）。
+            cur.push(c);
+            i += 1;
+        }
+    }
+    if !cur.is_empty() {
+        tokens.push(cur);
+    }
+
+    // 2) 量宽并贪心填行。
+    let token_w = |t: &str| -> f32 {
+        let real = placeholders
+            .iter()
+            .fold(t.to_string(), |acc, (ph, real)| acc.replace(ph, real));
+        ui.painter()
+            .layout_no_wrap(
+                real.clone(),
+                crate::platform::ui_font_id(theme.font_size_caption()),
+                theme.text_primary(),
+            )
+            .size()
+            .x
+    };
+    let mut lines: Vec<String> = Vec::new();
+    let mut line = String::new();
+    let mut line_w = 0.0f32;
+    for t in tokens {
+        let real = placeholders
+            .iter()
+            .fold(t.clone(), |acc, (ph, real)| acc.replace(ph, real));
+        let w = token_w(&real);
+        // sep 仅示意；token 自身宽度必须全额计入（首 token 也不例外）。
+        if line_w + w <= max_width || line.is_empty() {
+            line.push_str(&real);
+            line_w += w;
+        } else {
+            lines.push(std::mem::take(&mut line));
+            line.push_str(&real);
+            line_w = w;
+        }
+    }
+    if !line.is_empty() {
+        lines.push(line);
+    }
+    // 3) 还原词组占位符。
+    lines
+        .iter()
+        .map(|l| {
+            placeholders
+                .iter()
+                .fold(l.clone(), |acc, (ph, real)| acc.replace(ph, real))
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// CJK 表意文字判定（与 epaint unicode.rs 的 is_cjk_ideograph 同口径）。
+fn is_cjk_char(c: char) -> bool {
+    ('\u{4E00}'..='\u{9FFF}').contains(&c)
+        || ('\u{3400}'..='\u{4DBF}').contains(&c)
+        || ('\u{2B740}'..='\u{2B81F}').contains(&c)
+}
+
+
+#[cfg(test)]
+mod cjk_wrap_tests {
+    use super::{cjk_wrap_lines, CLOUD_SYNC_ZH_PHRASES};
+
+    /// #418 复验定性：egui 的 U+2060 WORD JOINER 无效（invisible_char 无字形、
+    /// CJK 逐字是 good break candidate）。应用层预折行必须保证：词组不跨行。
+    /// 本测试用真实 egui 字体量宽，把可用宽压到必然折行的程度，断言每行
+    /// 完整包含词组（词组两端不出现在行界两侧）。
+    #[test]
+    fn wrap_keeps_phrases_whole() {
+        let ctx = egui::Context::default();
+        let text = "只同步名称、主机、端口、用户、分组、认证提示和密钥路径。密码和私钥文件留在本机。";
+        let mut lines_out = String::new();
+        let mut full = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(240.0, 2000.0),
+                )),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    lines_out = cjk_wrap_lines(
+                        ui,
+                        &crate::ui::theme::Theme::dark(),
+                        text,
+                        CLOUD_SYNC_ZH_PHRASES,
+                        120.0,
+                    );
+                });
+            },
+        );
+        full.textures_delta.clear();
+        let lines = lines_out;
+        println!("DBG lines={lines:?}");
+        assert!(lines.contains('\n'), "窄宽下应折成多行");
+        // 关键断言：合并所有行后与原文一致（无丢字）。
+        let joined: String = lines.split('\n').collect::<Vec<_>>().concat();
+        assert_eq!(joined, text, "折行不得丢字/改字");
+        // 逐词组：任意行不得以词组的前缀结尾（除非整个词组在本行）。
+        for phrase in CLOUD_SYNC_ZH_PHRASES {
+            for k in 1..phrase.chars().count() {
+                let prefix: String = phrase.chars().take(k).collect();
+                let suffix: String = phrase.chars().skip(k).collect();
+                for line in lines.split('\n') {
+                    assert!(
+                        !(line.ends_with(&prefix) && lines.split('\n').any(|n| n.starts_with(&suffix))),
+                        "词组 {phrase} 被拆行：{prefix:?} 行尾 / {suffix:?} 行首\n{lines}"
+                    );
+                }
+            }
+        }
+    }
 }
