@@ -314,7 +314,11 @@ impl MistTermApp {
         let spawned = std::thread::Builder::new()
             .name("mist-update-check".into())
             .spawn(move || {
-                let mut state = UpdateState::load();
+                // #417：区分 FirstRun / Ok / Corrupt / Unreadable，不再静默当首次安装。
+                let (mut state, integrity) = UpdateState::load_with_integrity();
+                if matches!(integrity, updater::state::StateIntegrity::Corrupt) {
+                    log::warn!("updater: state file corrupt; will rebuild after a successful check");
+                }
                 // #149：匿名使用统计 ping，搭版本检查的车（同线程、失败静默）。
                 let cid_new = state.client_id.is_none();
                 let cid = updater::ping::ensure_client_id(&mut state);
@@ -326,8 +330,21 @@ impl MistTermApp {
                 let opts = CheckOptions::for_current_build(channel);
                 let result = updater::check_for_update(&opts, &mut state);
                 if result.is_ok() {
-                    let _ = state.save();
+                    // Corrupt：备份坏文件后再写重建状态；备份/写盘失败保留现场并告警。
+                    if matches!(integrity, updater::state::StateIntegrity::Corrupt) {
+                        match state.rebuild_over_corrupt(&updater::paths::state_file()) {
+                            Ok(()) => log::warn!(
+                                "updater: corrupt state rebuilt (backup at update-state.json.bak-corrupt)"
+                            ),
+                            Err(e) => {
+                                log::error!("updater: corrupt state rebuild failed: {e}");
+                            }
+                        }
+                    } else {
+                        let _ = state.save();
+                    }
                 }
+                // 检查失败时不写盘：坏文件不被空状态覆盖（#417）。
                 let _ = tx.send(Msg::Checked { manual, result });
                 ctx2.request_repaint();
             });
