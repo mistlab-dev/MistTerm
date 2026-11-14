@@ -307,8 +307,8 @@ impl SessionLogDialog {
                                     egui::Label::new(
                                         egui::RichText::new(crate::i18n::tr(
                                             ctx,
-                                            "Locally recorded terminal output (not live). Color codes are stripped; see the log file for raw content.",
-                                            "本地录制的终端输出（非实时）。已去除颜色控制符；完整原始内容见日志文件。",
+                                            "Locally recorded terminal output (not live). Color codes are stripped; the raw log file is below—use the buttons to open it.",
+                                            "本地录制的终端输出（非实时）。已去除颜色控制符；完整原始内容见日志文件，可用下方按钮打开。",
                                         ))
                                         .size(theme.font_size_panel_title())
                                         .color(theme.text_secondary()),
