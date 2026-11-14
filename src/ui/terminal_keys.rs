@@ -586,9 +586,13 @@ pub fn suppress_plain_text_for_ime(events: &[Event], composing_at_frame_start: b
     if composing_at_frame_start {
         return true;
     }
+    let has_commit = events.iter().any(|e| matches!(e, Event::Ime(egui::ImeEvent::Commit(_))));
     events.iter().any(|event| match event {
-        Event::Ime(egui::ImeEvent::Commit(_)) => true,
+        // Commit 帧：X11 上提交串可能同时以 Ime::Commit 与合成 Text 到达，
+        // 由调用方去重；不再一律压掉 Text（否则 commit 串直接丢失）。
+        Event::Ime(egui::ImeEvent::Commit(_)) => false,
         Event::Ime(egui::ImeEvent::Preedit { text, .. }) => !text.is_empty(),
+        Event::Text(_) => has_commit,
         _ => false,
     })
 }
@@ -1963,4 +1967,14 @@ mod ime_activity_tests {
         ];
         assert!(ime_activity_frame(&commit, false));
     }
+}
+
+/// #430：Commit 帧里 Ime::Commit 与合成 Text 可能携带同一提交串；写 PTY 前去重。
+/// 返回真正要写的文本（Commit 优先；Text 与 Commit 重复时丢弃）。
+pub fn dedupe_commit_texts<'a>(commit: &'a str, texts: &[&'a str]) -> Vec<&'a str> {
+    texts
+        .iter()
+        .filter(|t| **t != commit)
+        .copied()
+        .collect()
 }

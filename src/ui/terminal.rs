@@ -4222,6 +4222,29 @@ impl TerminalView {
         let mut do_copy = false;
 
         ui.input_mut(|i| {
+            // #430 诊断：完整事件流 dump（MISTTERM_IME_DEBUG=1 时启用）。
+            // 组字键在 winit X11 失步时以原始键事件形态漏入，这份日志就是
+            // 定界「commit 是否到达 / Text 与 Key 的实际内容」的证据。
+            if std::env::var_os("MISTTERM_IME_DEBUG").is_some() {
+                for e in &i.events {
+                    match e {
+                        egui::Event::Ime(ime) => {
+                            log::warn!("[ime-debug] Ime {ime:?}");
+                        }
+                        egui::Event::Text(t) => {
+                            log::warn!("[ime-debug] Text {:?} mods={{ctrl:{},alt:{},shift:{},command:{}}}",
+                                t, i.modifiers.ctrl, i.modifiers.alt, i.modifiers.shift, i.modifiers.command);
+                        }
+                        egui::Event::Key { key, pressed, modifiers, .. } => {
+                            if *pressed {
+                                log::warn!("[ime-debug] Key {key:?} mods={{ctrl:{},alt:{},shift:{},command:{}}}",
+                                    modifiers.ctrl, modifiers.alt, modifiers.shift, modifiers.command);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
             if crate::ui::terminal_keys::consume_terminal_paste_shortcut(i) {
                 if let Ok(mut clip) = Clipboard::new() {
                     if let Ok(text) = clip.get_text() {
