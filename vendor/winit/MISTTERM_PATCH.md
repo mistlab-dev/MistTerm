@@ -5,6 +5,8 @@ Upstream crate: `winit 0.30.13` (eframe/egui 0.37 stack).
 Changed files:
 
 - `src/platform_impl/linux/x11/event_processor.rs` (X11)
+- `src/platform_impl/linux/x11/ime/mod.rs` (X11, #430)
+- `src/platform_impl/linux/x11/ime/inner.rs` (X11, #430)
 - `src/platform_impl/macos/view.rs` (macOS)
 - `src/platform_impl/ime_bypass.rs` (shared Control-chord policy, used by macOS; unit-tested on every OS)
 - `src/platform_impl/redraw_guard.rs` (shared illegal-size predicate for #188; unit-tested on every OS)
@@ -68,3 +70,20 @@ Lock-screen / Spaces tile-resize can synchronously enter `WinitView::drawRect:` 
 - Switching the runtime renderer to wgpu
 - Wayland-specific Control bypass
 - Deleting this vendor path while the patches above are still required
+
+
+## #430 (2026-11-14): X11 allow-toggle loses IC focus
+
+`Ime::set_ime_allowed(false→true)` destroys and recreates the X11 IC.
+`XSetICFocus` is only applied on XIFocusIn (`xinput2_focused`). An in-place
+toggle — egui-winit does one for every `should_interrupt_composition` while the
+IME area is reported — happens while the window is already focused, so the
+recreated IC never gets `XSetICFocus`. ibus/XIM then treats the IC as unfocused
+and stops filtering keys: every keystroke arrives raw (Key+Text, zero Ime
+events) until the next window refocus. This is the "#430: 组字拉不起来 / 零
+Ime 事件" failure mode.
+
+Fix: mirror `active_window` into `ImeInner`, and after `create_context(allowed)
+re-apply `context.focus()` when that window is the active one (mirroring
+`xinput2_focused`). App event_processor keeps the mirror in sync on focus-in
+and focus-out.

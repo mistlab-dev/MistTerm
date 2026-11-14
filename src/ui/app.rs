@@ -9530,7 +9530,13 @@ impl eframe::App for MistTermApp {
         let ctx = &ctx;
         // macOS Option-as-Alt（#207）：首帧拿到 winit 窗口后补设一次（once 标记防重复）。
         #[cfg(target_os = "macos")]
+        #[cfg(target_os = "macos")]
         self.apply_macos_option_as_alt_once(frame);
+        // #430 复验取证：X11 上零 Ime 事件（组字拉不起来）疑似 egui-winit 的
+        // should_interrupt_composition → set_ime_allowed(false/true) 风暴把
+        // ibus 的 IC 焦点打死（#352 在 macOS 是同类问题）。记录允许态变化，
+        // 与 box 事件日志对照即可定性。
+
         if let Some(url) = self.pending_ssh_url.take() {
             self.open_ssh_url(ctx, url);
         }

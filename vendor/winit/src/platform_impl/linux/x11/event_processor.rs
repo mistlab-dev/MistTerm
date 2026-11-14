@@ -1293,6 +1293,10 @@ impl EventProcessor {
         }
 
         self.active_window = Some(window);
+        // MISTTERM (#430): keep the IME mirror in sync (see ime/mod.rs).
+        if let Some(ime) = wt.ime.as_ref() {
+            ime.borrow_mut().set_active_window(Some(window as xproto::Window));
+        }
 
         wt.update_listen_device_events(true);
 
@@ -1352,6 +1356,10 @@ impl EventProcessor {
         }
 
         if self.active_window.take() == Some(window) {
+            // MISTTERM (#430): mirror cleared on focus-out.
+            if let Some(ime) = wt.ime.as_ref() {
+                ime.borrow_mut().set_active_window(None);
+            }
             let window_id = mkwid(window);
 
             wt.update_listen_device_events(false);
