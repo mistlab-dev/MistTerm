@@ -25,8 +25,6 @@ enum Msg {
     Checked {
         manual: bool,
         result: Result<CheckOutcome, UpdateError>,
-        /// #417 复审：状态损坏/重建的用户可见说明（None = 正常）。
-        state_notice: Option<&'static str>,
     },
     Progress(ApplyStage),
     Applied(Result<ApplyOutcome, UpdateError>),
@@ -321,21 +319,12 @@ impl MistTermApp {
                 if matches!(integrity, updater::state::StateIntegrity::Corrupt) {
                     log::warn!("updater: state file corrupt; will rebuild after a successful check");
                 }
-                // #417 复审：Corrupt/Unreadable 时**禁止**在检查前写盘（含 client_id
-                // 首次落盘）——空状态会把坏文件覆盖掉。cid 保持在内存，检查成功后
-                // 随重建状态一起写。
-                let corrupt_or_unreadable = matches!(
-                    integrity,
-                    updater::state::StateIntegrity::Corrupt
-                        | updater::state::StateIntegrity::Unreadable
-                );
                 // #149：匿名使用统计 ping，搭版本检查的车（同线程、失败静默）。
-                let cid_new = state.client_id.is_none() && !corrupt_or_unreadable;
+                let cid_new = state.client_id.is_none();
                 let cid = updater::ping::ensure_client_id(&mut state);
                 updater::ping::send_startup_ping(&cid);
                 if cid_new {
                     // 首次生成的 cid 立即落盘：即便本次检查失败，实例 ID 也保持稳定。
-                    // （仅 FirstRun/Ok 路径；损坏态不写盘。）
                     let _ = state.save();
                 }
                 let opts = CheckOptions::for_current_build(channel);
@@ -356,18 +345,7 @@ impl MistTermApp {
                     }
                 }
                 // 检查失败时不写盘：坏文件不被空状态覆盖（#417）。
-                let notice: Option<&'static str> = match integrity {
-                    updater::state::StateIntegrity::Corrupt => match &result {
-                        Ok(_) => Some("更新记录文件已损坏，本次检查后已自动重建"),
-                        Err(_) => Some("更新记录文件已损坏；本次检查未成功，未改动该文件"),
-                    },
-                    updater::state::StateIntegrity::Unreadable => match &result {
-                        Ok(_) => Some("更新记录文件无法读写，已按本次检查结果重建"),
-                        Err(_) => Some("更新记录文件无法读写；本次检查未成功，未改动该文件，请手动检查文件权限"),
-                    },
-                    _ => None,
-                };
-                let _ = tx.send(Msg::Checked { manual, result, state_notice: notice });
+                let _ = tx.send(Msg::Checked { manual, result });
                 ctx2.request_repaint();
             });
         if spawned.is_err() {
@@ -473,12 +451,9 @@ impl MistTermApp {
                 }
             };
             match msg {
-                Msg::Checked { manual, result, state_notice } => {
+                Msg::Checked { manual, result } => {
                     self.update_ui.rx = None;
                     self.update_on_checked(ctx, manual, result);
-                    if let (true, Some(note)) = (manual, state_notice) {
-                        self.notify_auto(note.to_string());
-                    }
                 }
                 Msg::Progress(stage) => {
                     if matches!(self.update_ui.phase, Phase::Working(_)) {
@@ -658,18 +633,7 @@ impl MistTermApp {
         if let Some(info) = &self.update_ui.info {
             let mut state = UpdateState::load();
             state.skipped_version = Some(info.manifest.version.clone());
-            // #417 复审：损坏/不可读状态不覆盖坏文件。
-            let (_, integrity) =
-                UpdateState::load_from_with_integrity(&updater::paths::state_file());
-            if !matches!(
-                integrity,
-                updater::state::StateIntegrity::Corrupt
-                    | updater::state::StateIntegrity::Unreadable
-            ) {
-                let _ = state.save();
-            } else {
-                log::warn!("updater: state corrupt/unreadable; skip skipped-version write");
-            }
+            let _ = state.save();
         }
         self.update_ui.show_dialog = false;
         self.update_ui.phase = Phase::Idle;
