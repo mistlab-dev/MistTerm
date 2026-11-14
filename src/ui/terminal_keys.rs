@@ -592,7 +592,11 @@ pub fn suppress_plain_text_for_ime(events: &[Event], composing_at_frame_start: b
         // 由调用方去重；不再一律压掉 Text（否则 commit 串直接丢失）。
         Event::Ime(egui::ImeEvent::Commit(_)) => false,
         Event::Ime(egui::ImeEvent::Preedit { text, .. }) => !text.is_empty(),
-        Event::Text(_) => has_commit,
+        // #430 四轮：Commit 帧上若还有原始 Key，说明 winit is_composing 失步仍
+        // 在发原始键——其合成 Text 是组字键本身（字母/空格/数字），不是提交串。
+        // 提交串由 Ime::Commit 臂单独写 PTY；这类 Text 若放行，PTY 会多出拼音
+        // 首字母（Tian: 「你好」后只剩 n / 「中文」后只剩 z）。
+        Event::Text(_) => has_commit && events.iter().any(|e| matches!(e, Event::Key { pressed: true, .. })),
         _ => false,
     })
 }
@@ -1250,9 +1254,11 @@ mod tests {
             suppress_plain_text_for_ime(&[preedit.clone(), plain.clone()], false),
             "non-empty preedit in the frame must suppress Text"
         );
+        // #430 四轮：无原始 Key 的 Commit 帧上，合成 Text 改由调用方
+        // dedupe_commit_texts 去重（压掉会丢掉非重复的提交串副本）。
         assert!(
-            suppress_plain_text_for_ime(&[commit.clone(), plain.clone()], false),
-            "commit in the frame must suppress Text (avoid double-insert)"
+            !suppress_plain_text_for_ime(&[commit.clone(), plain.clone()], false),
+            "commit-frame Text without raw keys is deduped by the caller, not suppressed"
         );
         assert!(
             suppress_plain_text_for_ime(&[plain.clone()], true),
@@ -1966,6 +1972,29 @@ mod ime_activity_tests {
             key_press(Key::Space, Modifiers::NONE),
         ];
         assert!(ime_activity_frame(&commit, false));
+    }
+
+    #[test]
+    fn commit_frame_suppresses_raw_key_text_but_keeps_dedup_text() {
+        // #430 四轮：Commit 帧带原始 Key 时，其合成 Text 是组字键本身
+        // （拼音首字母），必须压掉；Ime::Commit 由调用方单独写 PTY。
+        let raw_key_text = vec![
+            Event::Ime(egui::ImeEvent::Commit("你好".into())),
+            key_press(Key::N, Modifiers::NONE),
+            Event::Text("n".into()),
+        ];
+        assert!(
+            suppress_plain_text_for_ime(&raw_key_text, false),
+            "原始键同帧的 Text(n) 必须被压掉"
+        );
+
+        // 无原始 Key 的 Commit 帧：合成 Text 可能是提交串副本，仍走调用方去重
+        // （dedupe_commit_texts），不在此压掉。
+        let dedup_case = vec![
+            Event::Ime(egui::ImeEvent::Commit("你好".into())),
+            Event::Text("你好".into()),
+        ];
+        assert!(!suppress_plain_text_for_ime(&dedup_case, false));
     }
 }
 

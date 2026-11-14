@@ -87,3 +87,33 @@ Fix: mirror `active_window` into `ImeInner`, and after `create_context(allowed)
 re-apply `context.focus()` when that window is the active one (mirroring
 `xinput2_focused`). App event_processor keeps the mirror in sync on focus-in
 and focus-out.
+
+
+## #430 round 4 (2026-11-14): composition started, commit still lost
+
+After the focus fix, preedit + candidates now appear (grouping works), but the
+commit text still never reached the PTY — only the first Latin letter
+(`n` for 你好, `z` for 中文). Two remaining X11-path defects, both fixed here:
+
+1. `event_processor.rs` raw-key branch (`keycode != 0 && !is_composing`): an
+   in-place allow-toggle recreates the IC mid-composition and the winit Ime
+   drain in `process_event` can deliver the XIM `End` callback (clearing
+   `is_composing`) before the last composition keypress is processed. The
+   raw key then took the early-return KeyboardInput path and the
+   `lookup_utf8` commit-extraction below was skipped — the final
+   `Xutf8LookupString` commit string was never read. Fix: in that branch,
+   when IME is allowed and not a Control bypass, run `lookup_utf8` first and
+   deliver any non-empty result as `Ime::Preedit("")+Ime::Commit` (same shape
+   as the normal path) before falling back to the raw key.
+
+2. `ime/context.rs` `set_spot`: egui-winit re-reports the IME cursor area on
+   every frame carrying any input event (including preedit/commit Ime
+   events), so `XSetICValues(XNSpotLocation)` fires between the last
+   composition key and the commit and can disturb the server-side IC focus
+   on ibus/XIM. Fix: re-apply `XSetICFocus` after `set_spot` so the IC stays
+   focused while it exists.
+
+App-side belt-and-braces (`src/ui/terminal_keys.rs`): on a Commit frame that
+also carries raw Key events, synthetic `Event::Text` is suppressed (it is the
+composition key itself, not the commit); the commit string is written to the
+PTY exclusively by the `Ime::Commit` arm.
