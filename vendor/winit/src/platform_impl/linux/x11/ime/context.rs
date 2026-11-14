@@ -372,5 +372,16 @@ impl ImeContext {
                 ptr::null_mut::<()>(),
             );
         }
+
+        // MISTTERM (#430): XSetICValues(XNSpotLocation) can disturb the
+        // server-side IC focus state on ibus/XIM during an active composition.
+        // egui-winit re-reports the IME cursor area on every frame that carries
+        // any input event — including preedit/commit Ime events — so this fires
+        // between the user's last composition key and the commit. If the IC
+        // loses focus there, the final commit key bypasses XIM lookup and the
+        // composed string is never delivered (MistTerm #430: only the first
+        // Latin letter reached the PTY). Re-apply XSetICFocus afterwards so the
+        // IC stays focused while it exists.
+        let _ = self.focus(xconn);
     }
 }

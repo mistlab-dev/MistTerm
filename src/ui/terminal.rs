@@ -3891,6 +3891,12 @@ impl TerminalView {
         let mut ctrl_to_send: Vec<u8> = Vec::new();
 
         ui.input_mut(|i| {
+            // #430：组字窗口内原始键一律让位（winit X11 is_composing 失步会把
+            // 组字键当普通键发进来）。Commit 文本在下方 Ime 臂单独写，不受影响。
+            let ime_guard = crate::ui::terminal_keys::ime_activity_frame(
+                &i.events,
+                !self.ime_preedit.is_empty(),
+            );
             let tab_plain = i.consume_key(egui::Modifiers::NONE, egui::Key::Tab);
             let tab_shift = i.consume_key(
                 egui::Modifiers {
@@ -3899,28 +3905,35 @@ impl TerminalView {
                 },
                 egui::Key::Tab,
             );
-            if tab_plain || tab_shift {
+            if (tab_plain || tab_shift) && !ime_guard {
                 self.append_offline_bytes(b"\t");
                 // EventFilter 需上一帧已聚焦才生效；首帧 Tab 仍可能失焦
                 self.pending_focus_terminal = true;
             }
-            if crate::ui::terminal_keys::forward_non_text_keys(i, |bytes| {
-                self.append_offline_bytes(bytes);
-            }) {
+            if !ime_guard
+                && crate::ui::terminal_keys::forward_non_text_keys(i, |bytes| {
+                    self.append_offline_bytes(bytes);
+                })
+            {
                 self.pending_focus_terminal = true;
             }
             let mut sent_ctrl = [false; 32];
-            if crate::ui::terminal_keys::forward_ctrl_keys(i, |b| {
-                if b < 32 {
-                    sent_ctrl[b as usize] = true;
-                }
-                ctrl_to_send.push(b);
-            }) && !ctrl_to_send.is_empty() {
+            if !ime_guard
+                && crate::ui::terminal_keys::forward_ctrl_keys(i, |b| {
+                    if b < 32 {
+                        sent_ctrl[b as usize] = true;
+                    }
+                    ctrl_to_send.push(b);
+                })
+                && !ctrl_to_send.is_empty()
+            {
                 // pending_focus set after input_mut
             }
-            if crate::ui::terminal_keys::forward_alt_meta_keys(i, |bytes| {
-                self.append_offline_bytes(bytes);
-            }) {
+            if !ime_guard
+                && crate::ui::terminal_keys::forward_alt_meta_keys(i, |bytes| {
+                    self.append_offline_bytes(bytes);
+                })
+            {
                 self.pending_focus_terminal = true;
             }
 
@@ -4209,6 +4222,29 @@ impl TerminalView {
         let mut do_copy = false;
 
         ui.input_mut(|i| {
+            // #430 诊断：完整事件流 dump（MISTTERM_IME_DEBUG=1 时启用）。
+            // 组字键在 winit X11 失步时以原始键事件形态漏入，这份日志就是
+            // 定界「commit 是否到达 / Text 与 Key 的实际内容」的证据。
+            if std::env::var_os("MISTTERM_IME_DEBUG").is_some() {
+                for e in &i.events {
+                    match e {
+                        egui::Event::Ime(ime) => {
+                            log::warn!("[ime-debug] Ime {ime:?}");
+                        }
+                        egui::Event::Text(t) => {
+                            log::warn!("[ime-debug] Text {:?} mods={{ctrl:{},alt:{},shift:{},command:{}}}",
+                                t, i.modifiers.ctrl, i.modifiers.alt, i.modifiers.shift, i.modifiers.command);
+                        }
+                        egui::Event::Key { key, pressed, modifiers, .. } => {
+                            if *pressed {
+                                log::warn!("[ime-debug] Key {key:?} mods={{ctrl:{},alt:{},shift:{},command:{}}}",
+                                    modifiers.ctrl, modifiers.alt, modifiers.shift, modifiers.command);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
             if crate::ui::terminal_keys::consume_terminal_paste_shortcut(i) {
                 if let Ok(mut clip) = Clipboard::new() {
                     if let Ok(text) = clip.get_text() {
@@ -4218,6 +4254,12 @@ impl TerminalView {
             } else if crate::ui::terminal_keys::consume_terminal_copy_shortcut(i) {
                 do_copy = true;
             }
+            // #430：组字窗口内（本帧有 Ime 事件或上一帧组字未清）不让 Tab 进终端，
+            // 空格/数字键由下方 ime_guard 统一让位。
+            let ime_guard = crate::ui::terminal_keys::ime_activity_frame(
+                &i.events,
+                !self.ime_preedit.is_empty(),
+            );
             // 强制拦截 Tab 焦点遍历，把 Tab/Shift+Tab 交给终端
             let tab_plain = i.consume_key(egui::Modifiers::NONE, egui::Key::Tab);
             let tab_shift = i.consume_key(
@@ -4227,30 +4269,37 @@ impl TerminalView {
                 },
                 egui::Key::Tab,
             );
-            if tab_plain || tab_shift {
+            if (tab_plain || tab_shift) && !ime_guard {
                 let _ = self.send_pty_input(b"\t");
                 // EventFilter 需上一帧已聚焦才生效；首帧 Tab 仍可能失焦
                 self.pending_focus_terminal = true;
             }
             // Esc / F1–F12 / Insert / 带修饰方向键等(egui 常无 Text 事件)
-            if crate::ui::terminal_keys::forward_non_text_keys(i, |bytes| {
-                let _ = self.send_pty_input(bytes);
-            }) {
+            // #430：组字窗口内原始键一律让位（winit X11 失步会把组字键发进来）。
+            if !ime_guard
+                && crate::ui::terminal_keys::forward_non_text_keys(i, |bytes| {
+                    let _ = self.send_pty_input(bytes);
+                })
+            {
                 // EventFilter 生效前的兜底(帧初 Tab/Esc/方向键抢焦点)
                 self.pending_focus_terminal = true;
             }
             let mut sent_ctrl = [false; 32];
-            if crate::ui::terminal_keys::forward_ctrl_keys(i, |b| {
-                if b < 32 {
-                    sent_ctrl[b as usize] = true;
-                }
-                ctrl_to_send.push(b);
-            }) {
+            if !ime_guard
+                && crate::ui::terminal_keys::forward_ctrl_keys(i, |b| {
+                    if b < 32 {
+                        sent_ctrl[b as usize] = true;
+                    }
+                    ctrl_to_send.push(b);
+                })
+            {
                 // pending_focus set after input_mut
             }
-            if crate::ui::terminal_keys::forward_alt_meta_keys(i, |bytes| {
-                let _ = self.send_pty_input(bytes);
-            }) {
+            if !ime_guard
+                && crate::ui::terminal_keys::forward_alt_meta_keys(i, |bytes| {
+                    let _ = self.send_pty_input(bytes);
+                })
+            {
                 self.pending_focus_terminal = true;
             }
             // 同一帧内可能既有 Key 又有 Text(如 Delete / 退格)，避免重复或错发

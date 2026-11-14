@@ -11,6 +11,7 @@ use std::sync::Arc;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
+use x11rb::protocol::xproto;
 use self::callbacks::*;
 use self::context::ImeContext;
 pub use self::context::ImeContextCreationError;
@@ -210,6 +211,31 @@ impl Ime {
 
         // Create new context supporting IME input.
         let _ = self.create_context(window, allowed);
+
+        // MISTTERM (#430): XSetICFocus is only applied on XIFocusIn
+        // (xinput2_focused). An in-place allow-toggle (egui-winit
+        // interrupt_ime → set_ime_allowed(false→true)) recreates the IC while
+        // the window is already focused — no new XIFocusIn will arrive, so the
+        // new IC never gets XSetICFocus and ibus/XIM treats it as unfocused:
+        // every key then bypasses the IME (raw Key/Text, zero Ime events) until
+        // the next window refocus. Re-apply focus here when this window is the
+        // active one, mirroring xinput2_focused.
+        if allowed {
+            if let Some(active) = self.inner.active_window {
+                if active as ffi::Window == window {
+                    let _ = self.focus(window);
+                }
+            }
+        }
+    }
+
+    /// MISTTERM (#430): keep the active-window mirror in sync (see
+    /// ImeInner::active_window and Ime::set_ime_allowed).
+    pub(crate) fn set_active_window(&mut self, window: Option<xproto::Window>) {
+        if self.is_destroyed() {
+            return;
+        }
+        self.inner.active_window = window;
     }
 
     pub fn is_ime_allowed(&self, window: ffi::Window) -> bool {

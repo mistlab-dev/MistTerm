@@ -987,6 +987,49 @@ impl EventProcessor {
 
         // MistTerm: still emit KeyboardInput for Control chords during preedit.
         if keycode != 0 && (!self.is_composing || bypass_ime) {
+            // MISTTERM (#430): when an in-place allow-toggle (egui-winit
+            // interrupt_ime → set_ime_allowed(false→true)) recreated the IC
+            // mid-composition, winit's own Ime drain (see process_event) may have
+            // already delivered the XIM `End` callback — clearing `is_composing`
+            // — BEFORE the raw keys of the same composition were processed.
+            // With `is_composing == false` the guard above let those keys through
+            // as plain KeyboardInput, and the commit extraction below was
+            // skipped, so the final `Xutf8LookupString` commit (“你好”/“中文”)
+            // never reached the app: the user saw only the first Latin letter
+            // (“n”/“z”) in the PTY. Try to extract the commit text first and
+            // deliver it as an Ime::Commit so apps that write only Ime commits
+            // to the PTY keep the full composed string. When the IME is not
+            // allowed (or there is no IC) `lookup_utf8` cannot run — deliver the
+            // raw key as before.
+            let mut ime_commit: Option<String> = None;
+            if !bypass_ime {
+                let wt = Self::window_target(&self.target);
+                if let Some(ic) = wt
+                    .ime
+                    .as_ref()
+                    .and_then(|ime| ime.borrow().get_context(window as XWindow))
+                {
+                    let written = wt.xconn.lookup_utf8(ic, xev);
+                    if !written.is_empty() {
+                        ime_commit = Some(written);
+                    }
+                }
+            }
+            if let Some(written) = ime_commit {
+                let event = Event::WindowEvent {
+                    window_id,
+                    event: WindowEvent::Ime(Ime::Preedit(String::new(), None)),
+                };
+                callback(&self.target, event);
+
+                let event =
+                    Event::WindowEvent { window_id, event: WindowEvent::Ime(Ime::Commit(written)) };
+
+                self.is_composing = false;
+                callback(&self.target, event);
+                return;
+            }
+
             // Don't alter the modifiers state from replaying.
             if replay {
                 self.send_synthic_modifier_from_core(window_id, xev.state as u16, &mut callback);
@@ -1293,6 +1336,10 @@ impl EventProcessor {
         }
 
         self.active_window = Some(window);
+        // MISTTERM (#430): keep the IME mirror in sync (see ime/mod.rs).
+        if let Some(ime) = wt.ime.as_ref() {
+            ime.borrow_mut().set_active_window(Some(window as xproto::Window));
+        }
 
         wt.update_listen_device_events(true);
 
@@ -1352,6 +1399,10 @@ impl EventProcessor {
         }
 
         if self.active_window.take() == Some(window) {
+            // MISTTERM (#430): mirror cleared on focus-out.
+            if let Some(ime) = wt.ime.as_ref() {
+                ime.borrow_mut().set_active_window(None);
+            }
             let window_id = mkwid(window);
 
             wt.update_listen_device_events(false);
