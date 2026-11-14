@@ -323,7 +323,7 @@ impl CloudSyncPanel {
                             "Name, host, port, user, group, auth hint, and key path only. Passwords and private key files stay on this machine.",
                             "只同步名称、主机、端口、用户、分组、认证提示和密钥路径。密码和私钥文件留在本机。",
                         ),
-                        &["名称", "主机", "端口", "用户", "分组", "认证提示", "密钥路径", "密码", "私钥文件", "本机"],
+                        &CLOUD_SYNC_ZH_PHRASES,
                     ),
                 )
                 .color(theme.color_form_hint()),
@@ -538,6 +538,81 @@ impl CloudSyncPanel {
                 ],
             );
         });
+    }
+
+    /// #424：操作行三枚按钮抽成辅助函数（等分 / 两行两种布局复用）。
+    /// `w3 = f32::MAX` 表示该枚不在此行（两行布局的第二行独占）。
+    fn cloud_sync_action_buttons_row(
+        &mut self,
+        ui: &mut egui::Ui,
+        theme: &Theme,
+        lang: UiLanguage,
+        deps: &mut CloudSyncDeps<'_>,
+        user_id: &str,
+        team_logged_in: bool,
+        team_service: &mut Option<&mut TeamService>,
+        w1: f32,
+        w2: f32,
+        w3: f32,
+    ) {
+        let loc = i18n::Locale::from(lang);
+        if chrome::panel_action_button_with_icon_ex_min_w(
+            ui,
+            theme,
+            crate::ui::icons::IconId::Check,
+            loc.tr("Save selection & interval", "保存勾选与间隔"),
+            true,
+            w1,
+        )
+        .on_hover_text(loc.tr("Save selection & interval", "保存勾选与间隔"))
+        .clicked()
+        {
+            self.save_settings(lang);
+        }
+        if chrome::panel_action_primary_button_with_icon_ex_min_w(
+            ui,
+            theme,
+            crate::ui::icons::IconId::Upload,
+            loc.tr("Export sync pack…", "导出同步包…"),
+            true,
+            w2,
+        )
+        .on_hover_text(loc.tr("Export sync pack…", "导出同步包…"))
+        .clicked()
+        {
+            self.run_export(deps, lang, user_id);
+        }
+        if w3 != f32::MAX {
+            self.cloud_sync_action_import_button(
+                ui, theme, lang, deps, team_logged_in, team_service, w3,
+            );
+        }
+    }
+
+    fn cloud_sync_action_import_button(
+        &mut self,
+        ui: &mut egui::Ui,
+        theme: &Theme,
+        lang: UiLanguage,
+        deps: &mut CloudSyncDeps<'_>,
+        team_logged_in: bool,
+        team_service: &mut Option<&mut TeamService>,
+        min_w: f32,
+    ) {
+        let loc = i18n::Locale::from(lang);
+        if chrome::panel_action_button_with_icon_ex_min_w(
+            ui,
+            theme,
+            crate::ui::icons::IconId::Package,
+            loc.tr("Import from sync pack…", "从同步包导入…"),
+            team_logged_in,
+            min_w,
+        )
+        .on_hover_text(loc.tr("Import from sync pack…", "从同步包导入…"))
+        .clicked()
+        {
+            self.pick_import_folder(deps, lang, team_service);
+        }
     }
 
     fn paint_sync_status(ui: &mut egui::Ui, theme: &Theme, settings: &CloudSyncSettings, lang: UiLanguage) {
@@ -1370,72 +1445,105 @@ impl CloudSyncPanel {
                             Self::paint_sync_status(ui, theme, &self.settings, lang);
                             chrome::settings_row_divider(ui, theme);
                             // 三枚操作按钮通栏等分同一行。
-                            // #424：宽度在 horizontal 闭包内取（外层取值会含卡片后续
-                            // 边距差），并把 min 下限让位给等分——下限顶满时第三枚
-                            // 被右边界裁掉；hover 保留全称兜底。
+                            // #424 复验跟进：等分 thirds 只对「natural 宽 ≤ third」成立；
+                            // 「从同步包导入…」natural 宽超出等分时整行溢出，第三枚被
+                            // dock 右边界裁掉。改为先量三枚 natural 总宽：放得下就等分，
+                            // 放不下拆两行（前两枚一行，导入按钮独占一行完整可见）。
                             let gap = theme.spacing_sm();
-                            ui.horizontal(|ui| {
-                                ui.spacing_mut().item_spacing.x = gap;
-                                let third =
-                                    ((ui.available_width() - gap * 2.0) / 3.0).max(80.0);
-                                if chrome::panel_action_button_with_icon_ex_min_w(
-                                    ui,
-                                    theme,
-                                    crate::ui::icons::IconId::Check,
-                                    loc.tr("Save selection & interval", "保存勾选与间隔"),
-                                    true,
-                                    third,
-                                )
-                                .on_hover_text(loc.tr(
-                                    "Save selection & interval",
-                                    "保存勾选与间隔",
-                                ))
-                                .clicked()
-                                {
-                                    self.save_settings(lang);
-                                }
-                                if chrome::panel_action_primary_button_with_icon_ex_min_w(
-                                    ui,
-                                    theme,
-                                    crate::ui::icons::IconId::Upload,
-                                    loc.tr("Export sync pack…", "导出同步包…"),
-                                    true,
-                                    third,
-                                )
-                                .on_hover_text(loc.tr(
-                                    "Export sync pack…",
-                                    "导出同步包…",
-                                ))
-                                .on_hover_text(loc.tr(
-                                    "Create mistterm-sync-timestamp folder and copy selected files",
-                                    "新建 mistterm-sync-时间戳 目录并复制勾选文件",
-                                ))
-                                .clicked()
-                                {
+                            let natural = |label: &str, icon: bool| -> f32 {
+                                let text_w = ui
+                                    .painter()
+                                    .layout_no_wrap(
+                                        label.to_owned(),
+                                        crate::platform::ui_font_id(theme.font_size_control_btn()),
+                                        theme.text_primary(),
+                                    )
+                                    .size()
+                                    .x;
+                                text_w
+                                    + if icon { theme.size_icon_glyph() + 4.0 } else { 0.0 }
+                                    + 2.0 * theme.spacing_control_btn_pad_x()
+                            };
+                            let n1 = natural(&loc.tr("Save selection & interval", "保存勾选与间隔"), true);
+                            let n2 = natural(&loc.tr("Export sync pack…", "导出同步包…"), true);
+                            let n3 = natural(&loc.tr("Import from sync pack…", "从同步包导入…"), true);
+                            let avail = ui.available_width();
+                            let fits_one_row =
+                                n1 + n2 + n3 + 2.0 * gap <= avail;
+                            if fits_one_row {
+                                ui.horizontal(|ui| {
+                                    ui.spacing_mut().item_spacing.x = gap;
+                                    let third = (avail - gap * 2.0) / 3.0;
                                     let user_id = team_service
                                         .as_ref()
                                         .and_then(|svc| svc.state.user.as_ref())
                                         .map(|u| u.id.clone())
                                         .unwrap_or_default();
-                                    self.run_export(deps, lang, &user_id);
-                                }
-                                if chrome::panel_action_button_with_icon_ex_min_w(
-                                    ui,
-                                    theme,
-                                    crate::ui::icons::IconId::Package,
-                                    loc.tr("Import from sync pack…", "从同步包导入…"),
-                                    true,
-                                    third,
-                                )
-                                .on_hover_text(loc.tr(
-                                    "Import from sync pack…",
-                                    "从同步包导入…",
-                                ))
-                                .clicked()
-                                {
-                                    self.pick_import_folder(deps, lang, &mut team_service);
-                                }
-                            });
+                                    let logged_in = team_service
+                                        .as_ref()
+                                        .map(|svc| svc.is_logged_in())
+                                        .unwrap_or(false);
+                                    self.cloud_sync_action_buttons_row(
+                                        ui,
+                                        theme,
+                                        lang,
+                                        deps,
+                                        &user_id,
+                                        logged_in,
+                                        &mut team_service,
+                                        third,
+                                        third,
+                                        third,
+                                    );
+                                });
+                            } else {
+                                ui.horizontal(|ui| {
+                                    ui.spacing_mut().item_spacing.x = gap;
+                                    let half = (avail - gap) / 2.0;
+                                    let user_id = team_service
+                                        .as_ref()
+                                        .and_then(|svc| svc.state.user.as_ref())
+                                        .map(|u| u.id.clone())
+                                        .unwrap_or_default();
+                                    let logged_in = team_service
+                                        .as_ref()
+                                        .map(|svc| svc.is_logged_in())
+                                        .unwrap_or(false);
+                                    self.cloud_sync_action_buttons_row(
+                                        ui,
+                                        theme,
+                                        lang,
+                                        deps,
+                                        &user_id,
+                                        logged_in,
+                                        &mut team_service,
+                                        half,
+                                        half,
+                                        f32::MAX,
+                                    );
+                                });
+                                // 第二行：导入按钮独占，绝不裁切。
+                                ui.horizontal(|ui| {
+                                    let user_id = team_service
+                                        .as_ref()
+                                        .and_then(|svc| svc.state.user.as_ref())
+                                        .map(|u| u.id.clone())
+                                        .unwrap_or_default();
+                                    let logged_in = team_service
+                                        .as_ref()
+                                        .map(|svc| svc.is_logged_in())
+                                        .unwrap_or(false);
+                                    self.cloud_sync_action_import_button(
+                                        ui,
+                                        theme,
+                                        lang,
+                                        deps,
+                                        logged_in,
+                                        &mut team_service,
+                                        n3.max(80.0),
+                                    );
+                                });
+                            }
                         });
                     });
 
@@ -1535,13 +1643,22 @@ fn paint_bullet_list(
     items: &[(&'static str, &'static str)],
 ) {
     for (en, zh) in items {
+        // #418：中文说明逐条过词组保护，杜绝「密 / 钥路径」类拆字。
+        let zh = cjk_word_safe(loc.tr(*en, *zh), CLOUD_SYNC_ZH_PHRASES);
         ui.label(
-            chrome::rich_caption(theme, &format!("• {}", loc.tr(*en, *zh)))
-                .color(theme.color_form_hint()),
+            chrome::rich_caption(theme, &zh).color(theme.color_form_hint()),
         );
     }
 }
 
+
+/// #418：云端同步面板中文文案里的词组表（点查复验：除「密钥路径」外还有
+/// 「登录令牌」「丢失时」等同类拆字）。cjk_word_safe 逐个插 U+2060。
+const CLOUD_SYNC_ZH_PHRASES: &[&str] = &[
+    "名称", "主机", "端口", "用户", "分组", "认证提示", "密钥路径", "密码",
+    "私钥文件", "本机", "登录令牌", "云端凭证", "加密密码", "解锁码",
+    "凭证库", "同步包", "主机列表", "丢失", "数据", "令牌",
+];
 
 /// #418：在 CJK 词组内部插入 U+2060 WORD JOINER，禁止 egui 在词组字间断行。
 /// 只处理中文文案；拉丁文本不受影响。词组按给出顺序查找替换。
