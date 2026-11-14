@@ -83,10 +83,13 @@ and stops filtering keys: every keystroke arrives raw (Key+Text, zero Ime
 events) until the next window refocus. This is the "#430: 组字拉不起来 / 零
 Ime 事件" failure mode.
 
-Fix: mirror `active_window` into `ImeInner`, and after `create_context(allowed)
-re-apply `context.focus()` when that window is the active one (mirroring
-`xinput2_focused`). App event_processor keeps the mirror in sync on focus-in
-and focus-out.
+Fix attempt (round-3/4): mirror `active_window` + re-apply `context.focus()`
+after `create_context(allowed)`. **REVERTED in round-5**: box point-check showed
+the out-of-band `XSetICFocus` breaks composition START on ibus (no preedit, no
+candidates, raw keys) — ibus XIM tracks window focus via real XIFocusIn events
+and desyncs on a lone XSetICFocus. Stock winit behavior (IC focus on next
+XIFocusIn) starts composition correctly; the leftover mirror fields stay but
+are inert.
 
 
 ## #430 round 4 (2026-11-14): composition started, commit still lost
