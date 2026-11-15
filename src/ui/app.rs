@@ -9517,6 +9517,27 @@ impl eframe::App for MistTermApp {
     // 「绘制 + 输入驱动的 UI 动作 + 面板/弹窗」留在 ui，轮询调用点同步採到 logic，
     // 防一帧两跑。
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // #430 诊断：顶层事件流 dump（MISTTERM_IME_DEBUG=1）。terminal.rs 里的
+        // dump 在 capture_inline_input 内、要求连接+焦点，未连接时完全静默——
+        // 这层对所有键盘/IME 事件无条件生效，专供「组字是否拉起」定界。
+        if std::env::var_os("MISTTERM_IME_DEBUG").is_some() {
+            ctx.input(|i| {
+                for e in &i.events {
+                    match e {
+                        egui::Event::Ime(ime) => {
+                            log::warn!("[ime-debug] TOP Ime {ime:?}");
+                        }
+                        egui::Event::Text(t) => {
+                            log::warn!("[ime-debug] TOP Text {t:?} mods={{c:{},a:{},s:{}}}", i.modifiers.ctrl, i.modifiers.alt, i.modifiers.shift);
+                        }
+                        egui::Event::Key { key, pressed: true, modifiers, .. } => {
+                            log::warn!("[ime-debug] TOP Key {key:?} mods={{c:{},a:{},s:{}}}", modifiers.ctrl, modifiers.alt, modifiers.shift);
+                        }
+                        _ => {}
+                    }
+                }
+            });
+        }
         // 监控：`exec` 由 shell 泵串行执行，在此处轮询结果并驱动自动刷新。
         // 掳出 ui（#207）：无论面板是否可见、无论是否重绘，每帧恰好跑一次。
         self.monitor_panel.update(ctx, self.show_monitor_panel);

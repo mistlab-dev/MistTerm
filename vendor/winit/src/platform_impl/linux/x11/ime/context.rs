@@ -228,6 +228,7 @@ impl ImeContext {
 
         xconn.check_errors().map_err(ImeContextCreationError::XError)?;
 
+        eprintln!("[ime-vendor] IC created: allowed={}", allowed);
         let mut context = ImeContext {
             ic,
             ic_spot: ffi::XPoint { x: 0, y: 0 },
@@ -324,6 +325,7 @@ impl ImeContext {
     }
 
     pub(crate) fn focus(&self, xconn: &Arc<XConnection>) -> Result<(), XError> {
+        eprintln!("[ime-vendor] XSetICFocus called");
         unsafe {
             (xconn.xlib.XSetICFocus)(self.ic);
         }
@@ -331,6 +333,7 @@ impl ImeContext {
     }
 
     pub(crate) fn unfocus(&self, xconn: &Arc<XConnection>) -> Result<(), XError> {
+        eprintln!("[ime-vendor] XUnsetICFocus called");
         unsafe {
             (xconn.xlib.XUnsetICFocus)(self.ic);
         }
