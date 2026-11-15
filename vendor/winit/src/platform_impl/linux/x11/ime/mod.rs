@@ -200,10 +200,24 @@ impl Ime {
             return;
         }
 
+        // MISTTERM (#431 round-9 修复): egui-winit 的 interrupt 路径会连发
+        // set_ime_allowed(false)+(true)——旧实现每次都销毁重建 IC，组字中途
+        // 的 pending commit 随旧 IC 丢失（box 复测「提交后 PTY 全空」）。
+        // 修复：IC 已存在时不再销毁重建——若 IC 是 preedit 样式，false/true
+        // 切换只影响 XFilterEvent 的放行判断（见 event_processor 的
+        // is_ime_allowed），无需拆 IC。仅当 IC 尚不存在时才创建。
         if let Some(&mut Some(ref mut context)) = self.inner.contexts.get_mut(&window) {
             if allowed == context.is_allowed() {
                 return;
             }
+            if allowed {
+                // 重新启用：保留现有 IC（preedit 样式已具备），只恢复过滤。
+                context.set_allowed(allowed);
+                let _ = self.focus(window);
+                return;
+            }
+            context.set_allowed(allowed);
+            return;
         }
 
         // Remove context for that window.

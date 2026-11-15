@@ -83,23 +83,22 @@ extern "C" fn preedit_draw_callback(
     let call_data = unsafe { &mut *(call_data as *mut XIMPreeditDrawCallbackStruct) };
     client_data.cursor_pos = call_data.caret as usize;
 
-    let chg_range =
+    let mut chg_range =
         call_data.chg_first as usize..(call_data.chg_first + call_data.chg_length) as usize;
-    if !chg_range_valid(client_data.text.len(), &chg_range) {
-        // MISTTERM (#431/#430): `tracing::warn!` is invisible in GUI runs where
-        // RUST_LOG is unset; escalate this diagnostic to stderr. A dropped Draw
-        // leaves the preedit buffer empty ("Ime Preedit {\"text: \"\"}") and,
-        // on ibus/XIM, correlates with the commit never being delivered to the
-        // app — exactly the observed failure signature.
+    // MISTTERM (#431 round-9 定性): ibus 在**空缓冲**上发来 0..N 的 Draw（N>0），
+    // stock winit 的 chg_range_valid（end<=buf_len）会整条丢弃 → 客户端预编辑
+    // 缓冲永远为空 → ibus 认为 IC 已持有 preedit 而 app 端一无所知。
+    // 修复：把越界 replace 夹成「清空缓冲 + 插入新文本」。
+    if chg_range.end > client_data.text.len() || chg_range.start > client_data.text.len() {
         if ime_debug() {
             eprintln!(
-                "[ime-xim] DRAW-DROP invalid-chg-range buf_len={} chg_first={} chg_length={}",
+                "[ime-xim] DRAW-CLAMP buf_len={} chg_first={} chg_length={} -> replace-all",
                 client_data.text.len(),
-                call_data.chg_first,
-                call_data.chg_length
+                chg_range.start,
+                chg_range.end - chg_range.start
             );
         }
-        return;
+        chg_range = 0..client_data.text.len();
     }
 
     // NULL indicate text deletion
@@ -261,6 +260,9 @@ pub struct ImeContext {
     pub(crate) ic: ffi::XIC,
     pub(crate) ic_spot: ffi::XPoint,
     pub(crate) allowed: bool,
+    // MISTTERM (#431 round-9): kept so set_allowed can re-assert focus without
+    // destroying the IC (egui-winit interrupt toggles must not lose pending commit).
+    pub(crate) xconn_for_focus: std::sync::Arc<XConnection>,
     // Since the data is passed shared between X11 XIM callbacks, but couldn't be directly free
     // from there we keep the pointer to automatically deallocate it.
     _client_data: Box<ImeContextClientData>,
@@ -312,6 +314,7 @@ impl ImeContext {
             ic,
             ic_spot: ffi::XPoint { x: 0, y: 0 },
             allowed,
+            xconn_for_focus: std::sync::Arc::clone(xconn),
             _client_data: unsafe { Box::from_raw(client_data) },
         };
 
@@ -425,6 +428,23 @@ impl ImeContext {
 
     pub fn is_allowed(&self) -> bool {
         self.allowed
+    }
+
+    /// MISTTERM (#431 round-9): toggle the allowed flag WITHOUT destroying the IC.
+    /// Destroys nothing; XFilterEvent gating (event_processor is_ime_allowed) reads
+    /// this flag. XSetICFocus re-asserted so ibus keeps the IC engaged.
+    pub fn set_allowed(&mut self, allowed: bool) {
+        if self.allowed == allowed {
+            return;
+        }
+        self.allowed = allowed;
+        if allowed {
+            let xconn = &self.xconn_for_focus;
+            let _ = self.focus(xconn);
+        } else {
+            let xconn = &self.xconn_for_focus;
+            let _ = self.unfocus(xconn);
+        }
     }
 
     // Set the spot for preedit text. Setting spot isn't working with libX11 when preedit callbacks
