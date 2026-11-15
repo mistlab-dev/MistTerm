@@ -356,16 +356,16 @@ impl MistTermApp {
                     }
                 }
                 // 检查失败时不写盘：坏文件不被空状态覆盖（#417）。
-                let notice: Option<&'static str> = if matches!(
-                    integrity,
-                    updater::state::StateIntegrity::Corrupt
-                ) {
-                    match &result {
+                let notice: Option<&'static str> = match integrity {
+                    updater::state::StateIntegrity::Corrupt => match &result {
                         Ok(_) => Some("更新记录文件已损坏，本次检查后已自动重建"),
                         Err(_) => Some("更新记录文件已损坏；本次检查未成功，未改动该文件"),
-                    }
-                } else {
-                    None
+                    },
+                    updater::state::StateIntegrity::Unreadable => match &result {
+                        Ok(_) => Some("更新记录文件无法读写，已按本次检查结果重建"),
+                        Err(_) => Some("更新记录文件无法读写；本次检查未成功，未改动该文件，请手动检查文件权限"),
+                    },
+                    _ => None,
                 };
                 let _ = tx.send(Msg::Checked { manual, result, state_notice: notice });
                 ctx2.request_repaint();

@@ -1,3 +1,0 @@
-Do not cargo build --release or use LTO on this ~4G host — OOM/hang.
-Debug only: CARGO_BUILD_JOBS=1 cargo check -j1, then cargo test -j1.
-No full GUI acceptance testing here (no desktop); use CI + product local checks.
