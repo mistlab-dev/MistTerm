@@ -182,7 +182,19 @@ pub fn apply_update(
     let mut state = super::state::UpdateState::load();
     if matches!(outcome, ApplyOutcome::Installed { .. }) {
         state.installed_pending_restart = Some(version);
-        let _ = state.save();
+        // #417 复审：损坏/不可读状态不覆盖坏文件（安装成功后此写入非关键，
+        // pending 重启标记丢失可接受，坏状态由检查路径重建）。
+        let (_, integrity) =
+            super::state::UpdateState::load_from_with_integrity(&super::paths::state_file());
+        if !matches!(
+            integrity,
+            super::state::StateIntegrity::Corrupt
+                | super::state::StateIntegrity::Unreadable
+        ) {
+            let _ = state.save();
+        } else {
+            log::warn!("updater: state corrupt/unreadable; skip pending-restart write to avoid overwriting");
+        }
     }
     Ok(outcome)
 }
@@ -727,7 +739,17 @@ pub fn rollback(exe: &Path) -> Result<String, UpdateError> {
     state.installed_pending_restart = Some(version.clone());
     // 回退后不应马上再提示同一个新版本。
     state.skipped_version = Some(super::APP_VERSION.to_string());
-    let _ = state.save();
+    // #417 复审：损坏/不可读状态不覆盖坏文件。
+    let (_, integrity) =
+        super::state::UpdateState::load_from_with_integrity(&super::paths::state_file());
+    if !matches!(
+        integrity,
+        super::state::StateIntegrity::Corrupt | super::state::StateIntegrity::Unreadable
+    ) {
+        let _ = state.save();
+    } else {
+        log::warn!("updater: state corrupt/unreadable; skip rollback-state write to avoid overwriting");
+    }
     Ok(version)
 }
 
@@ -760,7 +782,18 @@ pub fn cleanup_after_start(exe: Option<&Path>) {
     if let Some(p) = state.installed_pending_restart.as_deref() {
         if semver::Version::parse(p).map(|v| v == current).unwrap_or(true) {
             state.installed_pending_restart = None;
-            let _ = state.save();
+            // #417 复审：损坏/不可读状态不覆盖坏文件（清理是非关键写）。
+            let (_, integrity) =
+                super::state::UpdateState::load_from_with_integrity(&super::paths::state_file());
+            if !matches!(
+                integrity,
+                super::state::StateIntegrity::Corrupt
+                    | super::state::StateIntegrity::Unreadable
+            ) {
+                let _ = state.save();
+            } else {
+                log::warn!("updater: state corrupt/unreadable; skip cleanup write to avoid overwriting");
+            }
         }
     }
 }

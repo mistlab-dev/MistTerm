@@ -2,14 +2,16 @@
 
 ## 本机构建约束（重要）
 
-**开发机（本机，4GB 内存）禁止跑 `cargo build` / `cargo test` 全量构建** —— 链接阶段会 OOM（ld killed）。
+**本机（约 4G 内存）只做 debug 验证，禁止 release 编译。** 提代码前必须先测过，禁止不编译、不测试就直接提 PR。（Tian，2026-11-15）
 
-- 验证一律走 GitHub Actions（push / PR 自动触发）
-- 本机只允许小范围快速检查：`cargo check`（配合 `CARGO_BUILD_JOBS=2`）
-- 跑测试需 `CARGO_BUILD_JOBS=2 cargo test --lib -- --test-threads=2`；确需全量链接时先加临时 swap，用完必须 swapoff + 清理
-- 此约束原记录于仓库根 `DO_NOT_BUILD_HERE.txt`（#301 P0 已移入本文件）
+- 提代码前固定两步，且只用 debug：先 `CARGO_BUILD_JOBS=1 cargo check -j1`，通过后再 `CARGO_BUILD_JOBS=1 cargo test -j1 -- --test-threads=1`（可用 `--lib` 减轻链接压力）。
+- **禁止** `cargo build --release`、任何 LTO（含 thin LTO）、本机出包或完整 release 链接。2026-11-15 已发生过一次 release + thin LTO 编译，必须刹住。
+- 本机可以用 Xvfb 等虚拟屏幕跑 debug 包，做启动、输入法、按键和日志一类的自动验证；涉及 UI 的改动在提代码前应尽量在本机跑这类测试。
+- 本机没有真实桌面，不能做完整 GUI 点查（窗口布局、分屏、目录继承等肉眼验收）。这类问题仍交给 GitHub Actions 的 Linux 无头测试，以及产品本地点查。
+- 若编译或链接把内存打满、出现 OOM 或明显拖死网关，立即停掉，不要继续硬编。
+- 多 worktree 时共用 `CARGO_TARGET_DIR`，避免每个目录一份 `target/` 把磁盘写满。详细说明见 OpenClaw skill `mistlab-workspace` 的 `references/build-test-env.md`。
 
 ## 与其他环境的分工
 
 - **生产机 / 发版机**：main 上合入更高的正式版本后，Tag release 会打 `v*` 标签并启动 Build & Test。不在开发机上出包，也不要手工移动已有标签。
-- **代理（OpenClaw）**：改代码、提交、push、开 PR 均可。发版是把版本号和中英 notes 合进 main；不要自行推送或覆盖 `v*` 标签。
+- **代理（OpenClaw）**：改代码、提交、push、开 PR 均可，但开 PR 前必须完成本机 debug `check` + `test`。发版是把版本号和中英 notes 合进 main；不要自行推送或覆盖 `v*` 标签。
