@@ -36,6 +36,9 @@ extern "C" fn preedit_start_callback(
 ) -> i32 {
     let client_data = unsafe { &mut *(client_data as *mut ImeContextClientData) };
 
+    if ime_debug() {
+        eprintln!("[ime-xim] PREEDIT-START win={:#x}", client_data.window);
+    }
     client_data.text.clear();
     client_data.cursor_pos = 0;
     client_data
@@ -53,6 +56,9 @@ extern "C" fn preedit_done_callback(
 ) {
     let client_data = unsafe { &mut *(client_data as *mut ImeContextClientData) };
 
+    if ime_debug() {
+        eprintln!("[ime-xim] PREEDIT-END win={:#x} buffered_chars={}", client_data.window, client_data.text.len());
+    }
     // Drop text buffer and reset cursor position on done.
     client_data.text = Vec::new();
     client_data.cursor_pos = 0;
@@ -79,13 +85,20 @@ extern "C" fn preedit_draw_callback(
 
     let chg_range =
         call_data.chg_first as usize..(call_data.chg_first + call_data.chg_length) as usize;
-    if chg_range.start > client_data.text.len() || chg_range.end > client_data.text.len() {
-        tracing::warn!(
-            "invalid chg range: buffer length={}, but chg_first={} chg_length={}",
-            client_data.text.len(),
-            call_data.chg_first,
-            call_data.chg_length
-        );
+    if !chg_range_valid(client_data.text.len(), &chg_range) {
+        // MISTTERM (#431/#430): `tracing::warn!` is invisible in GUI runs where
+        // RUST_LOG is unset; escalate this diagnostic to stderr. A dropped Draw
+        // leaves the preedit buffer empty ("Ime Preedit {\"text: \"\"}") and,
+        // on ibus/XIM, correlates with the commit never being delivered to the
+        // app — exactly the observed failure signature.
+        if ime_debug() {
+            eprintln!(
+                "[ime-xim] DRAW-DROP invalid-chg-range buf_len={} chg_first={} chg_length={}",
+                client_data.text.len(),
+                call_data.chg_first,
+                call_data.chg_length
+            );
+        }
         return;
     }
 
@@ -95,12 +108,45 @@ extern "C" fn preedit_draw_callback(
     } else {
         let xim_text = unsafe { &mut *(call_data.text) };
         if xim_text.encoding_is_wchar > 0 {
+            // MISTTERM (#431/#430): wchar-encoded Draw payloads were silently
+            // dropped (silent `return` + no log). ibus/XIM is not known to use
+            // wchar here, but if a server ever does, this is where the preedit
+            // would vanish without a trace. Reconstruct the text in Rust,
+            // store it, and emit the update instead of dropping it.
+            let chars: Vec<char> = if xim_text.length == 0 {
+                Vec::new()
+            } else {
+                let wide = unsafe {
+                    std::slice::from_raw_parts(xim_text.string.wide_char, xim_text.length as usize)
+                };
+                match String::from_utf16(&wide.iter().map(|w| *w as u16).collect::<Vec<_>>()) {
+                    Ok(s) => s.chars().collect(),
+                    Err(err) => {
+                        if ime_debug() {
+                            eprintln!("[ime-xim] DRAW-DROP wchar-decode-failed err={err}");
+                        }
+                        Vec::new()
+                    },
+                }
+            };
+            if ime_debug() {
+                eprintln!("[ime-xim] DRAW wchar path len={}", chars.len());
+            }
+            apply_draw(
+                client_data,
+                &chg_range,
+                chars,
+                call_data.caret as usize,
+            );
             return;
         }
 
         let new_text = unsafe { xim_text.string.multi_byte };
 
         if new_text.is_null() {
+            if ime_debug() {
+                eprintln!("[ime-xim] DRAW null-text win={:#x}", client_data.window);
+            }
             return;
         }
 
@@ -108,10 +154,35 @@ extern "C" fn preedit_draw_callback(
 
         String::from(new_text.to_str().expect("Invalid UTF-8 String from IME")).chars().collect()
     };
+    apply_draw(client_data, &chg_range, new_chars, call_data.caret as usize);
+}
+
+/// MISTTERM (#431/#430): shared tail of `preedit_draw_callback` — splice
+/// `new_chars` into the buffered preedit at `chg_range` and emit
+/// `ImeEvent::Update`. Also logs the draw payload when IME debugging is on.
+fn apply_draw(
+    client_data: &mut ImeContextClientData,
+    chg_range: &std::ops::Range<usize>,
+    new_chars: Vec<char>,
+    caret: usize,
+) {
+    if ime_debug() {
+        let text: String = new_chars.iter().collect();
+        eprintln!(
+            "[ime-xim] DRAW win={:#x} buf_len={} chg_first={} chg_length={} caret={} text={:?}",
+            client_data.window,
+            client_data.text.len(),
+            chg_range.start,
+            chg_range.end - chg_range.start,
+            caret,
+            text
+        );
+    }
     let mut old_text_tail = client_data.text.split_off(chg_range.end);
     client_data.text.truncate(chg_range.start);
-    client_data.text.append(&mut new_chars);
+    client_data.text.append(&mut new_chars.clone());
     client_data.text.append(&mut old_text_tail);
+    client_data.cursor_pos = caret;
     let cursor_byte_pos = calc_byte_position(&client_data.text, client_data.cursor_pos);
 
     client_data
@@ -121,6 +192,12 @@ extern "C" fn preedit_draw_callback(
             ImeEvent::Update(client_data.text.iter().collect(), cursor_byte_pos),
         ))
         .expect("failed to send preedit update event");
+}
+
+/// MISTTERM (#431/#430): stderr-only IME diagnostics gate (matches app-side
+/// `MISTTERM_IME_DEBUG`). Kept as a helper so probe sites stay one-liners.
+fn ime_debug() -> bool {
+    std::env::var_os("MISTTERM_IME_DEBUG").is_some()
 }
 
 /// Handling of cursor movements in preedit text.
@@ -392,5 +469,94 @@ impl ImeContext {
         // Latin letter reached the PTY). Re-apply XSetICFocus afterwards so the
         // IC stays focused while it exists.
         let _ = self.focus(xconn);
+    }
+}
+
+/// MISTTERM (#431/#430): validity predicate for an XIM PreeditDraw chg range
+/// against the current buffered preedit length, extracted so it can be unit
+/// tested without a live X server.
+fn chg_range_valid(buffer_len: usize, chg_range: &std::ops::Range<usize>) -> bool {
+    chg_range.start <= buffer_len && chg_range.end <= buffer_len
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::mpsc;
+
+    fn client_data() -> (ImeContextClientData, mpsc::Receiver<(ffi::Window, ImeEvent)>) {
+        let (tx, rx) = mpsc::channel();
+        (
+            ImeContextClientData { window: 42, event_sender: tx, text: Vec::new(), cursor_pos: 0 },
+            rx,
+        )
+    }
+
+    fn chars(s: &str) -> Vec<char> {
+        s.chars().collect()
+    }
+
+    #[test]
+    fn chg_range_valid_rejects_out_of_bounds() {
+        assert!(chg_range_valid(6, &(0..6)));
+        assert!(chg_range_valid(6, &(6..6)));
+        assert!(!chg_range_valid(6, &(0..7)));
+        assert!(!chg_range_valid(6, &(7..7)));
+        // Empty preedit buffer: only a full-replace 0..0 draw is valid.
+        assert!(chg_range_valid(0, &(0..0)));
+        assert!(!chg_range_valid(0, &(0..1)));
+    }
+
+    #[test]
+    fn apply_draw_replaces_ascii_preedit_with_cjk_commit_shape() {
+        // ibus/XIM draws "ni hao" first, then replaces the whole buffer with
+        // "你好" before the commit; the splice must not lose or corrupt text.
+        let (mut cd, rx) = client_data();
+        cd.text = chars("ni hao");
+        apply_draw(&mut cd, &(0..6), chars("你好"), 2);
+        assert_eq!(cd.text.iter().collect::<String>(), "你好");
+        assert_eq!(cd.cursor_pos, 2);
+        let (win, ev) = rx.try_recv().expect("update event emitted");
+        assert_eq!(win, 42);
+        match ev {
+            ImeEvent::Update(text, cursor_byte_pos) => {
+                assert_eq!(text, "你好");
+                assert_eq!(cursor_byte_pos, 6); // 2 CJK chars = 6 UTF-8 bytes
+            },
+            other => panic!("expected Update, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn apply_draw_preserves_tail_outside_chg_range() {
+        let (mut cd, rx) = client_data();
+        cd.text = chars("zhong wen123");
+        apply_draw(&mut cd, &(0..9), chars("中文"), 2);
+        assert_eq!(cd.text.iter().collect::<String>(), "中文123");
+        drop(rx);
+    }
+
+    #[test]
+    fn apply_draw_null_text_deletes_range() {
+        let (mut cd, _rx) = client_data();
+        cd.text = chars("n hao");
+        apply_draw(&mut cd, &(0..5), Vec::new(), 0);
+        assert!(cd.text.is_empty());
+    }
+
+    #[test]
+    fn calc_byte_position_counts_utf8_bytes_of_cjk() {
+        assert_eq!(calc_byte_position(&chars("你好"), 0), 0);
+        assert_eq!(calc_byte_position(&chars("你好"), 1), 3);
+        assert_eq!(calc_byte_position(&chars("你好"), 2), 6);
+        assert_eq!(calc_byte_position(&chars("ni 你"), 3), 3); // "ni " = 3 bytes
+    }
+
+    #[test]
+    fn wchar_decode_from_utf16_round_trips_cjk() {
+        // Mirrors the wchar Draw path: UTF-16 code units -> String.
+        let wide: [u16; 2] = [0x4f60, 0x597d]; // 你好
+        let s = String::from_utf16(&wide).expect("CJK decodes from UTF-16");
+        assert_eq!(s, "你好");
     }
 }

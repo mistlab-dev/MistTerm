@@ -135,6 +135,25 @@ impl EventProcessor {
     #[must_use]
     fn filter_event(&mut self, xev: &mut XEvent) -> bool {
         let wt = Self::window_target(&self.target);
+        // MISTTERM (#431/#430): probe which events the IME consumes. ibus/XIM
+        // swallows composition keys (Space / candidate digits) here and is
+        // expected to deliver the commit via a synthetic keycode-0 KeyPress
+        // plus preedit callbacks; logging this boundary distinguishes "key
+        // eaten, commit never sent" from "commit sent but dropped later".
+        let probe = std::env::var_os("MISTTERM_IME_DEBUG").is_some();
+        if probe {
+            let event_type = xev.get_type();
+            if event_type == xlib::KeyPress || event_type == xlib::KeyRelease {
+                let kev: &XKeyEvent = xev.as_ref();
+                eprintln!(
+                    "[ime-xim] FILTER t={} keycode={} state={:#x} win={:#x}",
+                    if event_type == xlib::KeyPress { "press" } else { "release" },
+                    kev.keycode,
+                    kev.state,
+                    kev.window
+                );
+            }
+        }
         unsafe {
             (wt.xconn.xlib.XFilterEvent)(xev, {
                 let xev: &XAnyEvent = xev.as_ref();
@@ -985,6 +1004,22 @@ impl EventProcessor {
             &self.xmodmap,
         );
 
+        // MISTTERM (#431/#430): the XIM synthetic commit path. ibus/XIM
+        // delivers the composed string as a keycode-0 KeyPress AFTER having
+        // filtered the real key; if this probe is silent while the real key
+        // was filtered, the server never sent the commit on THIS IC — that is
+        // the "committed text never reaches the app" signature.
+        let ime_probe = std::env::var_os("MISTTERM_IME_DEBUG").is_some();
+        if ime_probe {
+            eprintln!(
+                "[ime-xim] KEY-IN t={} keycode={} state={:#x} composing={}",
+                if event_type == xlib::KeyPress { "press" } else { "release" },
+                xev.keycode,
+                xev.state,
+                self.is_composing
+            );
+        }
+
         // MistTerm: still emit KeyboardInput for Control chords during preedit.
         if keycode != 0 && (!self.is_composing || bypass_ime) {
             // MISTTERM (#430): when an in-place allow-toggle (egui-winit
@@ -1010,6 +1045,12 @@ impl EventProcessor {
                     .and_then(|ime| ime.borrow().get_context(window as XWindow))
                 {
                     let written = wt.xconn.lookup_utf8(ic, xev);
+                    if ime_probe {
+                        eprintln!(
+                            "[ime-xim] LOOKUP(raw-branch) keycode={} -> {:?}",
+                            xev.keycode, written
+                        );
+                    }
                     if !written.is_empty() {
                         ime_commit = Some(written);
                     }
@@ -1065,6 +1106,14 @@ impl EventProcessor {
             wt.ime.as_ref().and_then(|ime| ime.borrow().get_context(window as XWindow))
         {
             let written = wt.xconn.lookup_utf8(ic, xev);
+            if ime_probe {
+                eprintln!(
+                    "[ime-xim] LOOKUP keycode={} -> {:?} (bytes={})",
+                    xev.keycode,
+                    written,
+                    written.len()
+                );
+            }
             if !written.is_empty() {
                 let event = Event::WindowEvent {
                     window_id,

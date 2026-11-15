@@ -207,6 +207,12 @@ impl Ime {
         }
 
         // Remove context for that window.
+        if std::env::var_os("MISTTERM_IME_DEBUG").is_some() {
+            eprintln!(
+                "[ime-xim] SET-IME-ALLOWED win={:#x} allowed={} (recreating IC)",
+                window, allowed
+            );
+        }
         let _ = self.remove_context(window);
 
         // Create new context supporting IME input.
