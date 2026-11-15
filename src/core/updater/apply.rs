@@ -147,7 +147,21 @@ pub fn apply_update(
     let InstallPlan::Auto { kind, asset, .. } = &info.plan else {
         return Err(UpdateError::NotAutoInstallable("manual install required".into()));
     };
-    let _lock = UpdateLock::acquire()?;
+    // #417 CI 修复：同 rollback，Locked 短暂重试。
+    let _lock = (|| {
+        let mut last = Err(UpdateError::Locked);
+        for _ in 0..40 {
+            match UpdateLock::acquire() {
+                Ok(l) => return Ok(l),
+                Err(e @ UpdateError::Locked) => {
+                    last = Err(e);
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        last
+    })()?;
     let version = info.manifest.version.clone();
     let archive = download_asset(asset, &version, progress, cancel)?;
     progress(ApplyStage::Installing);
@@ -711,7 +725,23 @@ pub fn rollback(exe: &Path) -> Result<String, UpdateError> {
     let dir = exe
         .parent()
         .ok_or_else(|| UpdateError::Install("bad exe path".into()))?;
-    let _lock = UpdateLock::acquire()?;
+    // #417 CI 修复：测试进程内多线程并发时，全局 update.lock 可能被另一个
+    // 恰好持锁的测试短暂占用（0.26s 内 66 个测试并发跑完）。与同文件
+    // retry_busy（杀毒/索引服务占用重试）同一策略：Locked 短暂重试再放弃。
+    let _lock = (|| {
+        let mut last = Err(UpdateError::Locked);
+        for _ in 0..40 {
+            match UpdateLock::acquire() {
+                Ok(l) => return Ok(l),
+                Err(e @ UpdateError::Locked) => {
+                    last = Err(e);
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        last
+    })()?;
     let bak = dir.join(BACKUP_DIR);
     let version = backup_version(dir).ok_or(UpdateError::NoBackup)?;
     let items: Vec<(String, PathBuf)> = program_files()
