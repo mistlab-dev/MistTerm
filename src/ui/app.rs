@@ -9525,13 +9525,13 @@ impl eframe::App for MistTermApp {
                 for e in &i.events {
                     match e {
                         egui::Event::Ime(ime) => {
-                            log::warn!("[ime-debug] TOP Ime {ime:?}");
+                            eprintln!("[ime-debug] TOP Ime {ime:?}");
                         }
                         egui::Event::Text(t) => {
-                            log::warn!("[ime-debug] TOP Text {t:?} mods={{c:{},a:{},s:{}}}", i.modifiers.ctrl, i.modifiers.alt, i.modifiers.shift);
+                            eprintln!("[ime-debug] TOP Text {t:?} mods={{c:{},a:{},s:{}}}", i.modifiers.ctrl, i.modifiers.alt, i.modifiers.shift);
                         }
                         egui::Event::Key { key, pressed: true, modifiers, .. } => {
-                            log::warn!("[ime-debug] TOP Key {key:?} mods={{c:{},a:{},s:{}}}", modifiers.ctrl, modifiers.alt, modifiers.shift);
+                            eprintln!("[ime-debug] TOP Key {key:?} mods={{c:{},a:{},s:{}}}", modifiers.ctrl, modifiers.alt, modifiers.shift);
                         }
                         _ => {}
                     }

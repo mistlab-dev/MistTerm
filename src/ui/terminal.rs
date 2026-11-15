@@ -3930,6 +3930,17 @@ impl TerminalView {
         let mut ctrl_to_send: Vec<u8> = Vec::new();
 
         ui.input_mut(|i| {
+            // #430 诊断：离线路径事件 dump（未连接 SSH 时键盘事件走这里）。
+            if std::env::var_os("MISTTERM_IME_DEBUG").is_some() {
+                for e in &i.events {
+                    match e {
+                        egui::Event::Ime(ime) => eprintln!("[ime-debug] OFFLINE Ime {ime:?}"),
+                        egui::Event::Text(t) => eprintln!("[ime-debug] OFFLINE Text {t:?}"),
+                        egui::Event::Key { key, pressed: true, .. } => eprintln!("[ime-debug] OFFLINE Key {key:?}"),
+                        _ => {}
+                    }
+                }
+            }
             // #430：组字窗口内原始键一律让位（winit X11 is_composing 失步会把
             // 组字键当普通键发进来）。Commit 文本在下方 Ime 臂单独写，不受影响。
             let ime_guard = crate::ui::terminal_keys::ime_activity_frame(
@@ -4005,8 +4016,13 @@ impl TerminalView {
             for event in &i.events {
                 match event {
                     egui::Event::Ime(egui::ImeEvent::Commit(text)) => {
+                        if std::env::var_os("MISTTERM_IME_DEBUG").is_some() {
+                            eprintln!("[ime-debug] OFFLINE-COMMIT {:?} bytes={}", text, text.as_bytes().len());
+                        }
                         if let Some(text) = Self::ime_committed_text(text, i.modifiers) {
                             self.append_offline_bytes(text.as_bytes());
+                        } else if std::env::var_os("MISTTERM_IME_DEBUG").is_some() {
+                            eprintln!("[ime-debug] OFFLINE-COMMIT dropped by modifier gate");
                         }
                     }
                     egui::Event::Text(text) => {
@@ -4268,15 +4284,15 @@ impl TerminalView {
                 for e in &i.events {
                     match e {
                         egui::Event::Ime(ime) => {
-                            log::warn!("[ime-debug] Ime {ime:?}");
+                            eprintln!("[ime-debug] Ime {ime:?}");
                         }
                         egui::Event::Text(t) => {
-                            log::warn!("[ime-debug] Text {:?} mods={{ctrl:{},alt:{},shift:{},command:{}}}",
+                            eprintln!("[ime-debug] Text {:?} mods={{ctrl:{},alt:{},shift:{},command:{}}}",
                                 t, i.modifiers.ctrl, i.modifiers.alt, i.modifiers.shift, i.modifiers.command);
                         }
                         egui::Event::Key { key, pressed, modifiers, .. } => {
                             if *pressed {
-                                log::warn!("[ime-debug] Key {key:?} mods={{ctrl:{},alt:{},shift:{},command:{}}}",
+                                eprintln!("[ime-debug] Key {key:?} mods={{ctrl:{},alt:{},shift:{},command:{}}}",
                                     modifiers.ctrl, modifiers.alt, modifiers.shift, modifiers.command);
                             }
                         }
@@ -4385,11 +4401,16 @@ impl TerminalView {
             for event in &i.events {
                 match event {
                     egui::Event::Ime(egui::ImeEvent::Commit(text)) => {
+                        if std::env::var_os("MISTTERM_IME_DEBUG").is_some() {
+                            eprintln!("[ime-debug] COMMIT-WRITE {:?} bytes={}", text, text.as_bytes().len());
+                        }
                         if let Some(text) = Self::ime_committed_text(text, i.modifiers) {
                             self.track_typed_text(text);
                             if let Err(e) = self.send_pty_input(text.as_bytes()) {
                                 log::error!("PTY write (ime): {}", e);
                             }
+                        } else {
+                            eprintln!("[ime-debug] COMMIT dropped by modifier gate");
                         }
                     }
                     egui::Event::Text(text) => {
