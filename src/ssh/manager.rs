@@ -46,6 +46,9 @@ fn notify_ui(session_id: SshSessionId, kind: &str, bytes: usize) {
     if std::env::var_os("MISTTERM_PUMP_DEBUG").is_some() && kind == "output" {
         log::warn!("[pump-debug] output session={} bytes={} t_us={}", session_id, bytes, now);
     }
+    if std::env::var_os("MISTTERM_PUMP_DEBUG").is_some() && kind == "output" {
+        eprintln!("[pump-debug] output session={} bytes={} t_us={}", session_id, bytes, now);
+    }
     log::debug!(target: "repaint_lag", "ssh {} queued session={} bytes={} t_us={}", kind, session_id, bytes, now);
     if let Some(ctx) = REPAINT_CTX.get() {
         ctx.request_repaint();
