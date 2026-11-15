@@ -2733,8 +2733,14 @@ impl TerminalView {
 
                             if self.terminal_focused {
                                 // egui 0.37: bare request_focus interrupts IME every frame (#352).
+                                // #430 复测定性：组字中途 request_focus 会硬切
+                                // set_ime_allowed → IC 重建 → pending commit 丢失
+                                // （box 复测「提交后 PTY 全空」）。组字中不补焦点。
+                                let composing_now = !self.ime_preedit.is_empty();
                                 ui.memory_mut(|m| {
-                                    crate::ui::terminal_keys::ensure_terminal_ime_focus(m, ime_id)
+                                    crate::ui::terminal_keys::ensure_terminal_ime_focus_ex(
+                                        m, ime_id, composing_now,
+                                    )
                                 });
                             }
 

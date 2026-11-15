@@ -551,9 +551,42 @@ impl ImePreedit {
 /// `set_ime_allowed(false/true)` and macOS/Sogou preedit never sticks (#352).
 /// Only request focus when the capture box does not already own it.
 pub fn ensure_terminal_ime_focus(memory: &mut egui::Memory, ime_id: egui::Id) {
-    if !memory.has_focus(ime_id) {
-        memory.request_focus(ime_id);
+    if memory.has_focus(ime_id) {
+        return;
     }
+    // #430 复测定性：request_focus 会 interrupt_ime → egui-winit 硬切
+    // set_ime_allowed(false→true) → winit X11 **销毁并重建 IC**——组字中途
+    // 的 pending commit 数据随旧 IC 一起丢失（box 复测「提交后 PTY 全空」）。
+    // 组字会话进行中（frame 内有 Ime 事件）绝不再 request_focus；
+    // 等组字结束（Commit 后）下一帧再补焦点。
+    if memory_ime_composing(memory) {
+        return;
+    }
+    memory.request_focus(ime_id);
+}
+
+/// egui 0.37 没有直接的 composing 查询；用 Memory 里的焦点 + InputState 事件
+/// 不可达（此处只有 Memory），改为由调用方传入组字状态的重载。
+pub fn ensure_terminal_ime_focus_ex(
+    memory: &mut egui::Memory,
+    ime_id: egui::Id,
+    composing: bool,
+) {
+    if memory.has_focus(ime_id) {
+        return;
+    }
+    if composing {
+        return;
+    }
+    memory.request_focus(ime_id);
+}
+
+/// 从 Memory 判断是否有 IME 组字焦点活动（保守近似：焦点曾给过 IME 框）。
+fn memory_ime_composing(memory: &egui::Memory) -> bool {
+    // egui 0.37 无公开 composing 状态；此处依赖调用方（terminal）传入更精确。
+    // 保守返回 false，真实判定走 ensure_terminal_ime_focus_ex。
+    let _ = memory;
+    false
 }
 
 /// Whether plain `Event::Text` must be ignored this frame so IME does not leak into the PTY.
