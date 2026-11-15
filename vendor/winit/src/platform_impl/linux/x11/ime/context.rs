@@ -113,21 +113,21 @@ extern "C" fn preedit_draw_callback(
             // wchar here, but if a server ever does, this is where the preedit
             // would vanish without a trace. Reconstruct the text in Rust,
             // store it, and emit the update instead of dropping it.
+            // x11-dl 2.21.0 binds `wide_char` as `wchar_t` VALUE (i32), while the C
+            // union field is `wchar_t*`. The pointer cannot be recovered from the
+            // value on LP64 (wchar_t is 32-bit, pointer slot is 64-bit). ibus XIM
+            // always uses multi_byte (UTF-8), so a wchar Draw payload is unexpected;
+            // log it (not silently dropped) and treat as empty.
             let chars: Vec<char> = if xim_text.length == 0 {
                 Vec::new()
             } else {
-                let wide = unsafe {
-                    std::slice::from_raw_parts(xim_text.string.wide_char, xim_text.length as usize)
-                };
-                match String::from_utf16(&wide.iter().map(|w| *w as u16).collect::<Vec<_>>()) {
-                    Ok(s) => s.chars().collect(),
-                    Err(err) => {
-                        if ime_debug() {
-                            eprintln!("[ime-xim] DRAW-DROP wchar-decode-failed err={err}");
-                        }
-                        Vec::new()
-                    },
+                if ime_debug() {
+                    eprintln!(
+                        "[ime-xim] DRAW wchar payload unsupported by x11-dl 2.21.0 binding (length={}), dropped",
+                        xim_text.length
+                    );
                 }
+                Vec::new()
             };
             if ime_debug() {
                 eprintln!("[ime-xim] DRAW wchar path len={}", chars.len());
