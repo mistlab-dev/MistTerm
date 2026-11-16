@@ -1105,7 +1105,27 @@ impl EventProcessor {
         if let Some(ic) =
             wt.ime.as_ref().and_then(|ime| ime.borrow().get_context(window as XWindow))
         {
-            let written = wt.xconn.lookup_utf8(ic, xev);
+            // MISTTERM (#431 round-11): async XIM_COMMIT 到达与合成事件被处理的
+            // 顺序存在竞争——合成 KeyPress(keycode=0) 可能先于 libX11 排空 XIM
+            // socket 到达，首次 lookup 返回空但提交串随后才入缓冲。空结果时短
+            // 重试（让 libX11 有机会处理 XIM_COMMIT），避免提交串永久滞留。
+            let mut written = wt.xconn.lookup_utf8(ic, xev);
+            if written.is_empty() && xev.keycode == 0 {
+                for _ in 0..10 {
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                    written = wt.xconn.lookup_utf8(ic, xev);
+                    if !written.is_empty() {
+                        break;
+                    }
+                }
+                if ime_probe {
+                    eprintln!(
+                        "[ime-xim] LOOKUP keycode=0 retry -> {:?} (bytes={})",
+                        written,
+                        written.len()
+                    );
+                }
+            }
             if ime_probe {
                 eprintln!(
                     "[ime-xim] LOOKUP keycode={} -> {:?} (bytes={})",
