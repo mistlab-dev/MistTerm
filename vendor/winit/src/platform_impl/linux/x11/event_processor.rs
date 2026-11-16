@@ -135,6 +135,25 @@ impl EventProcessor {
     #[must_use]
     fn filter_event(&mut self, xev: &mut XEvent) -> bool {
         let wt = Self::window_target(&self.target);
+        // MISTTERM (#431/#430): probe which events the IME consumes. ibus/XIM
+        // swallows composition keys (Space / candidate digits) here and is
+        // expected to deliver the commit via a synthetic keycode-0 KeyPress
+        // plus preedit callbacks; logging this boundary distinguishes "key
+        // eaten, commit never sent" from "commit sent but dropped later".
+        let probe = std::env::var_os("MISTTERM_IME_DEBUG").is_some();
+        if probe {
+            let event_type = xev.get_type();
+            if event_type == xlib::KeyPress || event_type == xlib::KeyRelease {
+                let kev: &XKeyEvent = xev.as_ref();
+                eprintln!(
+                    "[ime-xim] FILTER t={} keycode={} state={:#x} win={:#x}",
+                    if event_type == xlib::KeyPress { "press" } else { "release" },
+                    kev.keycode,
+                    kev.state,
+                    kev.window
+                );
+            }
+        }
         unsafe {
             (wt.xconn.xlib.XFilterEvent)(xev, {
                 let xev: &XAnyEvent = xev.as_ref();
@@ -985,8 +1004,73 @@ impl EventProcessor {
             &self.xmodmap,
         );
 
+        // MISTTERM (#431/#430): the XIM synthetic commit path. ibus/XIM
+        // delivers the composed string as a keycode-0 KeyPress AFTER having
+        // filtered the real key; if this probe is silent while the real key
+        // was filtered, the server never sent the commit on THIS IC — that is
+        // the "committed text never reaches the app" signature.
+        let ime_probe = std::env::var_os("MISTTERM_IME_DEBUG").is_some();
+        if ime_probe {
+            eprintln!(
+                "[ime-xim] KEY-IN t={} keycode={} state={:#x} composing={}",
+                if event_type == xlib::KeyPress { "press" } else { "release" },
+                xev.keycode,
+                xev.state,
+                self.is_composing
+            );
+        }
+
         // MistTerm: still emit KeyboardInput for Control chords during preedit.
         if keycode != 0 && (!self.is_composing || bypass_ime) {
+            // MISTTERM (#430): when an in-place allow-toggle (egui-winit
+            // interrupt_ime → set_ime_allowed(false→true)) recreated the IC
+            // mid-composition, winit's own Ime drain (see process_event) may have
+            // already delivered the XIM `End` callback — clearing `is_composing`
+            // — BEFORE the raw keys of the same composition were processed.
+            // With `is_composing == false` the guard above let those keys through
+            // as plain KeyboardInput, and the commit extraction below was
+            // skipped, so the final `Xutf8LookupString` commit (“你好”/“中文”)
+            // never reached the app: the user saw only the first Latin letter
+            // (“n”/“z”) in the PTY. Try to extract the commit text first and
+            // deliver it as an Ime::Commit so apps that write only Ime commits
+            // to the PTY keep the full composed string. When the IME is not
+            // allowed (or there is no IC) `lookup_utf8` cannot run — deliver the
+            // raw key as before.
+            let mut ime_commit: Option<String> = None;
+            if !bypass_ime {
+                let wt = Self::window_target(&self.target);
+                if let Some(ic) = wt
+                    .ime
+                    .as_ref()
+                    .and_then(|ime| ime.borrow().get_context(window as XWindow))
+                {
+                    let written = wt.xconn.lookup_utf8(ic, xev);
+                    if ime_probe {
+                        eprintln!(
+                            "[ime-xim] LOOKUP(raw-branch) keycode={} -> {:?}",
+                            xev.keycode, written
+                        );
+                    }
+                    if !written.is_empty() {
+                        ime_commit = Some(written);
+                    }
+                }
+            }
+            if let Some(written) = ime_commit {
+                let event = Event::WindowEvent {
+                    window_id,
+                    event: WindowEvent::Ime(Ime::Preedit(String::new(), None)),
+                };
+                callback(&self.target, event);
+
+                let event =
+                    Event::WindowEvent { window_id, event: WindowEvent::Ime(Ime::Commit(written)) };
+
+                self.is_composing = false;
+                callback(&self.target, event);
+                return;
+            }
+
             // Don't alter the modifiers state from replaying.
             if replay {
                 self.send_synthic_modifier_from_core(window_id, xev.state as u16, &mut callback);
@@ -1021,7 +1105,35 @@ impl EventProcessor {
         if let Some(ic) =
             wt.ime.as_ref().and_then(|ime| ime.borrow().get_context(window as XWindow))
         {
-            let written = wt.xconn.lookup_utf8(ic, xev);
+            // MISTTERM (#431 round-11): async XIM_COMMIT 到达与合成事件被处理的
+            // 顺序存在竞争——合成 KeyPress(keycode=0) 可能先于 libX11 排空 XIM
+            // socket 到达，首次 lookup 返回空但提交串随后才入缓冲。空结果时短
+            // 重试（让 libX11 有机会处理 XIM_COMMIT），避免提交串永久滞留。
+            let mut written = wt.xconn.lookup_utf8(ic, xev);
+            if written.is_empty() && xev.keycode == 0 {
+                for _ in 0..10 {
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                    written = wt.xconn.lookup_utf8(ic, xev);
+                    if !written.is_empty() {
+                        break;
+                    }
+                }
+                if ime_probe {
+                    eprintln!(
+                        "[ime-xim] LOOKUP keycode=0 retry -> {:?} (bytes={})",
+                        written,
+                        written.len()
+                    );
+                }
+            }
+            if ime_probe {
+                eprintln!(
+                    "[ime-xim] LOOKUP keycode={} -> {:?} (bytes={})",
+                    xev.keycode,
+                    written,
+                    written.len()
+                );
+            }
             if !written.is_empty() {
                 let event = Event::WindowEvent {
                     window_id,
@@ -1293,6 +1405,10 @@ impl EventProcessor {
         }
 
         self.active_window = Some(window);
+        // MISTTERM (#430): keep the IME mirror in sync (see ime/mod.rs).
+        if let Some(ime) = wt.ime.as_ref() {
+            ime.borrow_mut().set_active_window(Some(window as xproto::Window));
+        }
 
         wt.update_listen_device_events(true);
 
@@ -1352,6 +1468,10 @@ impl EventProcessor {
         }
 
         if self.active_window.take() == Some(window) {
+            // MISTTERM (#430): mirror cleared on focus-out.
+            if let Some(ime) = wt.ime.as_ref() {
+                ime.borrow_mut().set_active_window(None);
+            }
             let window_id = mkwid(window);
 
             wt.update_listen_device_events(false);

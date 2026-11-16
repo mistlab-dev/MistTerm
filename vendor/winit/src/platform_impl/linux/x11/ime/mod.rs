@@ -11,6 +11,7 @@ use std::sync::Arc;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
+use x11rb::protocol::xproto;
 use self::callbacks::*;
 use self::context::ImeContext;
 pub use self::context::ImeContextCreationError;
@@ -199,17 +200,54 @@ impl Ime {
             return;
         }
 
+        // MISTTERM (#431 round-9 修复): egui-winit 的 interrupt 路径会连发
+        // set_ime_allowed(false)+(true)——旧实现每次都销毁重建 IC，组字中途
+        // 的 pending commit 随旧 IC 丢失（box 复测「提交后 PTY 全空」）。
+        // 修复：IC 已存在时不再销毁重建——若 IC 是 preedit 样式，false/true
+        // 切换只影响 XFilterEvent 的放行判断（见 event_processor 的
+        // is_ime_allowed），无需拆 IC。仅当 IC 尚不存在时才创建。
         if let Some(&mut Some(ref mut context)) = self.inner.contexts.get_mut(&window) {
             if allowed == context.is_allowed() {
                 return;
             }
+            if allowed {
+                // 重新启用：保留现有 IC（preedit 样式已具备），只恢复过滤。
+                context.set_allowed(allowed);
+                let _ = self.focus(window);
+                return;
+            }
+            context.set_allowed(allowed);
+            return;
         }
 
         // Remove context for that window.
+        if std::env::var_os("MISTTERM_IME_DEBUG").is_some() {
+            eprintln!(
+                "[ime-xim] SET-IME-ALLOWED win={:#x} allowed={} (recreating IC)",
+                window, allowed
+            );
+        }
         let _ = self.remove_context(window);
 
         // Create new context supporting IME input.
         let _ = self.create_context(window, allowed);
+
+        // MISTTERM (#430 round-5 REVERT): the round-3 hunk re-applied
+        // XSetICFocus right after IC recreation. Box point-check showed this
+        // BREAKS composition start on ibus (no preedit, no candidates, raw
+        // keys) — ibus XIM tracks window focus via real XIFocusIn events; a
+        // lone XSetICFocus out-of-band desyncs its engagement. Composition
+        // started fine on stock winit (round-2 build), so we restore stock
+        // behavior here: IC gets focus on the next XIFocusIn.
+    }
+
+    /// MISTTERM (#430): keep the active-window mirror in sync (see
+    /// ImeInner::active_window and Ime::set_ime_allowed).
+    pub(crate) fn set_active_window(&mut self, window: Option<xproto::Window>) {
+        if self.is_destroyed() {
+            return;
+        }
+        self.inner.active_window = window;
     }
 
     pub fn is_ime_allowed(&self, window: ffi::Window) -> bool {

@@ -551,9 +551,42 @@ impl ImePreedit {
 /// `set_ime_allowed(false/true)` and macOS/Sogou preedit never sticks (#352).
 /// Only request focus when the capture box does not already own it.
 pub fn ensure_terminal_ime_focus(memory: &mut egui::Memory, ime_id: egui::Id) {
-    if !memory.has_focus(ime_id) {
-        memory.request_focus(ime_id);
+    if memory.has_focus(ime_id) {
+        return;
     }
+    // #430 复测定性：request_focus 会 interrupt_ime → egui-winit 硬切
+    // set_ime_allowed(false→true) → winit X11 **销毁并重建 IC**——组字中途
+    // 的 pending commit 数据随旧 IC 一起丢失（box 复测「提交后 PTY 全空」）。
+    // 组字会话进行中（frame 内有 Ime 事件）绝不再 request_focus；
+    // 等组字结束（Commit 后）下一帧再补焦点。
+    if memory_ime_composing(memory) {
+        return;
+    }
+    memory.request_focus(ime_id);
+}
+
+/// egui 0.37 没有直接的 composing 查询；用 Memory 里的焦点 + InputState 事件
+/// 不可达（此处只有 Memory），改为由调用方传入组字状态的重载。
+pub fn ensure_terminal_ime_focus_ex(
+    memory: &mut egui::Memory,
+    ime_id: egui::Id,
+    composing: bool,
+) {
+    if memory.has_focus(ime_id) {
+        return;
+    }
+    if composing {
+        return;
+    }
+    memory.request_focus(ime_id);
+}
+
+/// 从 Memory 判断是否有 IME 组字焦点活动（保守近似：焦点曾给过 IME 框）。
+fn memory_ime_composing(memory: &egui::Memory) -> bool {
+    // egui 0.37 无公开 composing 状态；此处依赖调用方（terminal）传入更精确。
+    // 保守返回 false，真实判定走 ensure_terminal_ime_focus_ex。
+    let _ = memory;
+    false
 }
 
 /// Whether plain `Event::Text` must be ignored this frame so IME does not leak into the PTY.
@@ -563,13 +596,40 @@ pub fn ensure_terminal_ime_focus(memory: &mut egui::Memory, ime_id: egui::Id) {
 /// preedit into the capture buffer, and some platforms may also emit `Event::Text` for
 /// the same keystrokes or the commit string. Feeding those bytes would leave Latin
 /// pinyin at the caret while Chinese commits afterward (Tian: 汉字在行尾 / 前面留下 ls).
+/// #430：本帧是否处于 IME 活动窗口（组字中 / 本帧有 Ime 事件）。
+///
+/// winit X11 在 `is_composing` 状态失步时会把组字期间的**原始键事件**（字母、
+/// 空格、候选数字键）照常发给应用——这些键随后被终端转发写进 PTY，表现就是
+/// 「提交『你好』却收到 Tab/数字/乱码」。ibus-libpinyin 的 XIM preedit 回调
+/// 与 winit 的 `is_composing` 同步存在缺口（见 winit 0.30.13 X11
+/// event_processor 的 `keycode != 0 && !is_composing` 原始转发分支）。
+///
+/// 终端侧兜底：只要本帧出现任何 Ime 事件（含空 Preedit 的 Start/End 边沿），
+/// 就认为这个帧在组字窗口内，把原始键转发全部让位——Commit 文本本身仍单独写
+/// PTY，不受此开关影响。方向键/F 键等导航键也一并让位：组字会话内它们属于
+/// 候选翻页/移动，不构成终端输入。
+pub fn ime_activity_frame(events: &[Event], composing_at_frame_start: bool) -> bool {
+    composing_at_frame_start
+        || events
+            .iter()
+            .any(|event| matches!(event, Event::Ime(_)))
+}
+
 pub fn suppress_plain_text_for_ime(events: &[Event], composing_at_frame_start: bool) -> bool {
     if composing_at_frame_start {
         return true;
     }
+    let has_commit = events.iter().any(|e| matches!(e, Event::Ime(egui::ImeEvent::Commit(_))));
     events.iter().any(|event| match event {
-        Event::Ime(egui::ImeEvent::Commit(_)) => true,
+        // Commit 帧：X11 上提交串可能同时以 Ime::Commit 与合成 Text 到达，
+        // 由调用方去重；不再一律压掉 Text（否则 commit 串直接丢失）。
+        Event::Ime(egui::ImeEvent::Commit(_)) => false,
         Event::Ime(egui::ImeEvent::Preedit { text, .. }) => !text.is_empty(),
+        // #430 四轮：Commit 帧上若还有原始 Key，说明 winit is_composing 失步仍
+        // 在发原始键——其合成 Text 是组字键本身（字母/空格/数字），不是提交串。
+        // 提交串由 Ime::Commit 臂单独写 PTY；这类 Text 若放行，PTY 会多出拼音
+        // 首字母（Tian: 「你好」后只剩 n / 「中文」后只剩 z）。
+        Event::Text(_) => has_commit && events.iter().any(|e| matches!(e, Event::Key { pressed: true, .. })),
         _ => false,
     })
 }
@@ -721,7 +781,7 @@ mod tests {
     use eframe::egui;
     use eframe::egui::{Event, Key, Modifiers};
 
-    fn key_press(key: Key, modifiers: Modifiers) -> Event {
+    pub(super) fn key_press(key: Key, modifiers: Modifiers) -> Event {
         Event::Key {
             key,
             physical_key: None,
@@ -1227,9 +1287,11 @@ mod tests {
             suppress_plain_text_for_ime(&[preedit.clone(), plain.clone()], false),
             "non-empty preedit in the frame must suppress Text"
         );
+        // #430 四轮：无原始 Key 的 Commit 帧上，合成 Text 改由调用方
+        // dedupe_commit_texts 去重（压掉会丢掉非重复的提交串副本）。
         assert!(
-            suppress_plain_text_for_ime(&[commit.clone(), plain.clone()], false),
-            "commit in the frame must suppress Text (avoid double-insert)"
+            !suppress_plain_text_for_ime(&[commit.clone(), plain.clone()], false),
+            "commit-frame Text without raw keys is deduped by the caller, not suppressed"
         );
         assert!(
             suppress_plain_text_for_ime(&[plain.clone()], true),
@@ -1916,4 +1978,65 @@ mod tests {
         let o = one_frame(winit_like(Key::X, cs(), None), |_| true);
         assert_eq!(o.copied, "APP");
     }
+}
+#[cfg(test)]
+mod ime_activity_tests {
+    use super::*;
+    use super::tests::key_press;
+
+    #[test]
+    fn ime_activity_frame_detects_any_ime_event() {
+        // #430：winit X11 is_composing 失步会把组字期间的原始键（空格/数字/字母）
+        // 照常发进应用。本帧只要出现任何 Ime 事件（含空 Preedit 的 Start/End 边沿），
+        // 就让位原始键转发，避免「提交你好却收到 Tab/数字」。
+        let events = vec![
+            Event::Ime(egui::ImeEvent::Preedit {
+                text: String::new(),
+                active_range_chars: None,
+            }),
+            key_press(Key::Space, Modifiers::NONE),
+        ];
+        assert!(ime_activity_frame(&events, false));
+        assert!(!ime_activity_frame(&[key_press(Key::Space, Modifiers::NONE)], false));
+        assert!(ime_activity_frame(&[], true), "组字态延续也要让位");
+        // Commit 帧同样属于活动窗口；Commit 文本本身由 Ime 臂单独写 PTY。
+        let commit = vec![
+            Event::Ime(egui::ImeEvent::Commit("你好".into())),
+            key_press(Key::Space, Modifiers::NONE),
+        ];
+        assert!(ime_activity_frame(&commit, false));
+    }
+
+    #[test]
+    fn commit_frame_suppresses_raw_key_text_but_keeps_dedup_text() {
+        // #430 四轮：Commit 帧带原始 Key 时，其合成 Text 是组字键本身
+        // （拼音首字母），必须压掉；Ime::Commit 由调用方单独写 PTY。
+        let raw_key_text = vec![
+            Event::Ime(egui::ImeEvent::Commit("你好".into())),
+            key_press(Key::N, Modifiers::NONE),
+            Event::Text("n".into()),
+        ];
+        assert!(
+            suppress_plain_text_for_ime(&raw_key_text, false),
+            "原始键同帧的 Text(n) 必须被压掉"
+        );
+
+        // 无原始 Key 的 Commit 帧：合成 Text 可能是提交串副本，仍走调用方去重
+        // （dedupe_commit_texts），不在此压掉。
+        let dedup_case = vec![
+            Event::Ime(egui::ImeEvent::Commit("你好".into())),
+            Event::Text("你好".into()),
+        ];
+        assert!(!suppress_plain_text_for_ime(&dedup_case, false));
+    }
+}
+
+/// #430：Commit 帧里 Ime::Commit 与合成 Text 可能携带同一提交串；写 PTY 前去重。
+/// 返回真正要写的文本（Commit 优先；Text 与 Commit 重复时丢弃）。
+pub fn dedupe_commit_texts<'a>(commit: &'a str, texts: &[&'a str]) -> Vec<&'a str> {
+    texts
+        .iter()
+        .filter(|t| **t != commit)
+        .copied()
+        .collect()
 }

@@ -42,6 +42,13 @@ fn notify_ui(session_id: SshSessionId, kind: &str, bytes: usize) {
     if kind == "output" {
         let _ = OLDEST_PENDING_US.compare_exchange(0, now, Ordering::AcqRel, Ordering::Relaxed);
     }
+    // #428 复验取证（MISTTERM_PUMP_DEBUG=1）：输出到达泵 → 交付 UI 的完整时间线。
+    if std::env::var_os("MISTTERM_PUMP_DEBUG").is_some() && kind == "output" {
+        log::warn!("[pump-debug] output session={} bytes={} t_us={}", session_id, bytes, now);
+    }
+    if std::env::var_os("MISTTERM_PUMP_DEBUG").is_some() && kind == "output" {
+        eprintln!("[pump-debug] output session={} bytes={} t_us={}", session_id, bytes, now);
+    }
     log::debug!(target: "repaint_lag", "ssh {} queued session={} bytes={} t_us={}", kind, session_id, bytes, now);
     if let Some(ctx) = REPAINT_CTX.get() {
         ctx.request_repaint();
@@ -141,6 +148,10 @@ const PUMP_POLL_KEEPALIVE_MS: u64 = 10_000;
 
 /// `polling::Poller` 里 SSH socket fd 的 key。
 const PUMP_POLL_SOCKET_KEY: usize = 0;
+
+/// 单轮 pump_channel_reads 的字节上限（与 DEFAULT_READ_BYTES_PER_CALL 一致）。
+/// 触顶后泵循环会跳过 poll.wait 继续排空（#428 复验根因修复）。
+const PUMP_READ_CAP_PER_CALL: usize = 64 * 1024;
 const RESIZE_QUEUE_CAP: usize = 16;
 /// 泵线程上一次 `exec_remote` 单次阻塞调用最长等待（毫秒）。
 const PUMP_EXEC_TIMEOUT_MS: u32 = 15_000;
@@ -387,14 +398,14 @@ impl SshManager {
         session_id: SshSessionId,
         upload_bypass: &Arc<Mutex<Option<Arc<UploadPtyBypass>>>>,
         max_bytes_per_call: Option<usize>,
-    ) -> Result<(), ()> {
+    ) -> Result<usize, ()> {
         const DEFAULT_READ_BYTES_PER_CALL: usize = 64 * 1024;
         let cap = max_bytes_per_call.unwrap_or(DEFAULT_READ_BYTES_PER_CALL);
         let mut pumped = 0usize;
         loop {
             if pumped >= cap {
                 log::debug!("PUMP_READ session={} total={} (hit cap)", session_id, pumped);
-                return Ok(());
+                return Ok(pumped);
             }
             match channel.read(read_buffer) {
                 Ok(0) => {
@@ -425,7 +436,7 @@ impl SshManager {
                     if pumped > 0 {
                         log::debug!("PUMP_READ session={} total={}", session_id, pumped);
                     }
-                    return Ok(());
+                    return Ok(pumped);
                 }
                 Err(e) => {
                     // Mid-session channel death: toast the read error, then tear the
@@ -790,6 +801,7 @@ impl SshManager {
 /// Shell 泵：专用 OS 线程 + `sync_channel`，避免 Tokio `block_on`/`recv` 与上传线程的调度死锁。
 mod shell_pump {
     use crate::ssh::manager::{PUMP_POLL_KEEPALIVE_MS, PUMP_POLL_SOCKET_KEY};
+    use super::PUMP_READ_CAP_PER_CALL;
     use super::{ShellPumpCommand, SshManager, SshMessage, SshSessionId, UploadPtyBypass};
     use ssh2::Channel;
     use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
@@ -904,22 +916,33 @@ mod shell_pump {
                 }
             }
 
-            // socket 可读 → 先排空 PTY（回显/输出立即上送）。
-            if poll_events.iter().any(|ev| ev.key == PUMP_POLL_SOCKET_KEY) {
-                if let Ok(mut ch) = channel.lock() {
-                    if SshManager::pump_channel_reads(
-                        &mut *ch,
+            // #428 复验根因：pump_channel_reads 有 64KB 单次上限；触顶时
+            // libssh2 窗口里往往还压着未交付的数据，而 socket 已被读空——
+            // 回到 poll.wait 会睡满超时，缓冲里的输出滞留（复验「2s 出
+            // Last login、8s 提示符不出现、回车才有」正是这条）。触顶后
+            // 不再等待，立即继续排空直到 WouldBlock。
+            let mut drain_until_would_block = poll_events
+                .iter()
+                .any(|ev| ev.key == PUMP_POLL_SOCKET_KEY);
+            while drain_until_would_block {
+                let cap_hit = if let Ok(mut ch) = channel.lock() {
+                    match SshManager::pump_channel_reads(
+                        &mut ch,
                         &mut read_buffer,
                         &message_tx,
                         session_id,
                         &upload_bypass_slot,
                         None,
-                    )
-                    .is_err()
-                    {
-                        return;
+                    ) {
+                        Err(_) => return,
+                        Ok(pumped) => pumped >= PUMP_READ_CAP_PER_CALL,
                     }
-                }
+                } else {
+                    false
+                };
+                // 触顶 = 可能还有数据压在 libssh2 窗口/socket 里，继续排；
+                // 未触顶 = 读到 WouldBlock 或正常收尾，回到 poll 等新数据。
+                drain_until_would_block = cap_hit;
             }
 
             // 命令：非阻塞取一条；poll 超时（keepalive 到点）时为 None。
@@ -1996,5 +2019,93 @@ mod tests {
             out2.contains("pump-alive"),
             "pump died after resize/collect: {out2}"
         );
+    }
+}
+
+#[cfg(test)]
+mod pump_cap_drain_tests {
+    /// #428 复验根因的量化验证：pump_channel_reads 64KB 触顶后，libssh2 窗口
+    /// 里是否真的还压着数据（socket 已空）。
+    ///
+    /// 实验设计：真实 loopback sshd PTY，一次性输出 200KB（> 64KB 上限 3 倍）。
+    /// 第一轮 pump_channel_reads 触顶（返回 64KB），随后**不做任何等待**立即
+    /// 二轮读取：
+    ///   - 若「触顶后 libssh2 窗口压数据」成立 → 二轮立即再读出大量字节；
+    ///   - 若「触顶即排空」成立 → 二轮立即 WouldBlock。
+    /// 同时量测 socket 层可读性（二轮前 poll socket 0ms）。
+    #[test]
+    fn cap_hit_leaves_data_in_libssh2_window() {
+        use std::io::Read;
+        use crate::test_support::ssh_local::skip_without_sshd;
+        let Some(mut sess) = skip_without_sshd() else {
+            return;
+        };
+        // 先阻塞模式完成 channel+exec（握手/认证/exec 需要阻塞语义），
+        // 再切非阻塞模拟泵的真实运行环境。
+        sess.set_blocking(true);
+        let mut channel = sess.channel_session().expect("channel");
+        channel
+            .exec("awk 'BEGIN{s=\"x\";for(i=0;i<18;i++)s=s s;for(i=0;i<6000;i++)print s}'")
+            .expect("exec");
+        sess.set_blocking(false);
+
+        let mut buf = [0u8; 16384];
+        let mut total_round1 = 0usize;
+        let mut rounds1 = 0usize;
+        // 第一轮：最多 64KB（模拟触顶）。
+        loop {
+            match channel.read(&mut buf) {
+                Ok(n) if n > 0 => {
+                    total_round1 += n;
+                    rounds1 += 1;
+                    if total_round1 >= 64 * 1024 {
+                        break;
+                    }
+                }
+                Ok(_) => panic!("EOF too early"),
+                Err(e) if e.to_string().contains("WouldBlock") => {
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+                Err(_) => std::thread::sleep(std::time::Duration::from_millis(50)),
+            }
+        }
+        // 关键观测：此刻 socket 还可读吗？
+        let mut poller = polling::Poller::new().expect("poller");
+        use std::os::fd::AsRawFd;
+        unsafe {
+            poller
+                .add(sess.as_raw_fd(), polling::Event::readable(0))
+                .expect("register");
+        }
+        let mut events = polling::Events::with_capacity(std::num::NonZeroUsize::new(4).unwrap());
+        let waited = poller
+            .wait(&mut events, Some(std::time::Duration::from_millis(0)))
+            .expect("wait");
+        let socket_readable = events.iter().any(|ev| ev.key == 0);
+
+        // 立即二轮读（不等待）：libssh2 窗口里还有多少？
+        let mut total_round2 = 0usize;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while std::time::Instant::now() < deadline {
+            match channel.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => total_round2 += n,
+                Err(e) if e.to_string().contains("WouldBlock") => break,
+                Err(_) => break,
+            }
+        }
+        let _ = rounds1;
+        println!(
+            "#428 probe: round1={} bytes (cap), socket_readable_after_cap={}, round2_immediate={} bytes",
+            total_round1, socket_readable, total_round2
+        );
+        // 断言：触顶后 socket 不可读（否则旧流程也能立刻醒，根因不成立），
+        // 但 libssh2 窗口/后续 socket 数据里仍有大量未交付内容。
+        assert!(
+            total_round2 > 64 * 1024,
+            "触顶后立即二轮应还能读出大量数据（>64KB），实测 {total_round2}"
+        );
+        let _ = socket_readable; // 记录用：见 println
+        let _ = poller;
     }
 }

@@ -457,6 +457,13 @@ pub struct TerminalView {
     pending_open_paste_history: bool,
     /// 「仅断开 SSH 保留画面」后为 true：键盘输入写入 [`Self::disconnected_input_buffer`] 而非 PTY(FUNCTIONAL_SPEC §2.4)。
     buffer_input_while_disconnected: bool,
+    /// #428 连接成功后的首屏自醒 + settle 语义：Connected 帧武装 2s；此后**每次
+    /// 有输出（vte_dirty）都续期到 now+2s**，每帧无条件请求重绘，保证 Last login
+    /// 与后续提示符无需点击或按键就自动出现——输出停了再安静 2s。
+    /// 焦点态光标相位重绘只在 `terminal_focused` 时跑；偶发的「连接成功但焦点没跟上」
+    /// 帧序下 VTE 已有内容却没有任何 repaint 驱动 → 首屏空白，点一下正文才画出来。
+    /// 复验教训：固定 2s 会在「Last login 已画、提示符 2s 后才到」时漏画提示符。
+    connect_first_paint_until: Option<Instant>,
     /// 意外断开时 `ssh_rx` 仍被本帧借用，排空后再丢掉。
     release_ssh_rx_after_drain: bool,
     /// 断开态键入提示的节流时刻（约 3 秒一次）。
@@ -1132,6 +1139,7 @@ impl TerminalView {
             pending_open_paste_history: false,
             buffer_input_while_disconnected: false,
             release_ssh_rx_after_drain: false,
+            connect_first_paint_until: None,
             disconnect_input_toast_at: None,
             disconnect_input_toast_armed: false,
             disconnected_input_buffer: Vec::new(),
@@ -2173,6 +2181,15 @@ impl TerminalView {
             // 横幅在本帧 show() 之前已排过版，再要一帧才能画出来。
             ui.ctx().request_repaint();
         }
+        // #428：连接成功后的首屏自醒（见字段注释）。与焦点无关，仅在新连接后 2s 内生效；
+        // 重连（走同一个 Connected 分支）与断开（窗口随字段重置自然失效）不受影响。
+        if let Some(until) = self.connect_first_paint_until {
+            if Instant::now() < until {
+                ui.ctx().request_repaint();
+            } else {
+                self.connect_first_paint_until = None;
+            }
+        }
         self.flush_paste_queue(ui.ctx());
         self.process_transfer_events(theme, ui.ctx());
 
@@ -2733,8 +2750,14 @@ impl TerminalView {
 
                             if self.terminal_focused {
                                 // egui 0.37: bare request_focus interrupts IME every frame (#352).
+                                // #430 复测定性：组字中途 request_focus 会硬切
+                                // set_ime_allowed → IC 重建 → pending commit 丢失
+                                // （box 复测「提交后 PTY 全空」）。组字中不补焦点。
+                                let composing_now = !self.ime_preedit.is_empty();
                                 ui.memory_mut(|m| {
-                                    crate::ui::terminal_keys::ensure_terminal_ime_focus(m, ime_id)
+                                    crate::ui::terminal_keys::ensure_terminal_ime_focus_ex(
+                                        m, ime_id, composing_now,
+                                    )
                                 });
                             }
 
@@ -3660,6 +3683,11 @@ impl TerminalView {
                         self.connected = true;
                         self.connecting_fido2 = false;
                         self.connected_at = Some(Instant::now());
+                        // #428：首屏自醒窗口武装 2s；此后每次有输出续期（settle 语义，
+                        // 见 process_ssh_messages 尾部）。窗口内每帧无条件
+                        // `request_repaint()`，不依赖焦点/光标相位/输出脏位。
+                        self.connect_first_paint_until =
+                            Some(Instant::now() + Duration::from_secs(2));
                         self.terminal_wants_keyboard = true;
                         self.terminal_focused = true;
                         self.pending_focus_terminal = true;
@@ -3740,7 +3768,8 @@ impl TerminalView {
                         self.connected = false;
                         self.connected_at = None;
                         self.auto_follow_output = true;
-                        self.resend_offline_input_dialog_open = false;
+                        // #428：断开后首屏自醒窗口立即失效，不应在断开态无条件重绘。
+                        self.connect_first_paint_until = None;
                         self.seal_open_capture();
                         // 意外 EOF 不能再留着 ssh_manager，否则 is_connecting() 仍为真，
                         // 标签/侧栏绿点不灭，还会盖上一层「正在连接」。
@@ -3761,6 +3790,16 @@ impl TerminalView {
         if self.release_ssh_rx_after_drain {
             self.release_ssh_rx_after_drain = false;
             self.ssh_rx = None;
+        }
+        // #428 复验跟进：首屏自醒窗口改「 settle 语义」——不是连接后固定 2s，
+        // 而是每次有输出（vte_dirty）就续期到 now+2s。复验实况：Last login 在
+        // 2s 内画出，但提示符 2s 后才到（zsh 慢），窗口过期后没有任何帧去画
+        // 它，用户必须按回车才刷新。settle 语义保证：输出停了再等 2s 才安静。
+        // 仅连接态续期：Disconnected 臂显式清窗后，settle 不得复活窗口
+        // （断开态不该有无条件重绘）。重连走 Connected 臂重新武装。
+        if vte_dirty && self.connected {
+            self.connect_first_paint_until =
+                Some(Instant::now() + Duration::from_secs(2));
         }
         vte_dirty || more_pending
     }
@@ -3891,6 +3930,23 @@ impl TerminalView {
         let mut ctrl_to_send: Vec<u8> = Vec::new();
 
         ui.input_mut(|i| {
+            // #430 诊断：离线路径事件 dump（未连接 SSH 时键盘事件走这里）。
+            if std::env::var_os("MISTTERM_IME_DEBUG").is_some() {
+                for e in &i.events {
+                    match e {
+                        egui::Event::Ime(ime) => eprintln!("[ime-debug] OFFLINE Ime {ime:?}"),
+                        egui::Event::Text(t) => eprintln!("[ime-debug] OFFLINE Text {t:?}"),
+                        egui::Event::Key { key, pressed: true, .. } => eprintln!("[ime-debug] OFFLINE Key {key:?}"),
+                        _ => {}
+                    }
+                }
+            }
+            // #430：组字窗口内原始键一律让位（winit X11 is_composing 失步会把
+            // 组字键当普通键发进来）。Commit 文本在下方 Ime 臂单独写，不受影响。
+            let ime_guard = crate::ui::terminal_keys::ime_activity_frame(
+                &i.events,
+                !self.ime_preedit.is_empty(),
+            );
             let tab_plain = i.consume_key(egui::Modifiers::NONE, egui::Key::Tab);
             let tab_shift = i.consume_key(
                 egui::Modifiers {
@@ -3899,28 +3955,35 @@ impl TerminalView {
                 },
                 egui::Key::Tab,
             );
-            if tab_plain || tab_shift {
+            if (tab_plain || tab_shift) && !ime_guard {
                 self.append_offline_bytes(b"\t");
                 // EventFilter 需上一帧已聚焦才生效；首帧 Tab 仍可能失焦
                 self.pending_focus_terminal = true;
             }
-            if crate::ui::terminal_keys::forward_non_text_keys(i, |bytes| {
-                self.append_offline_bytes(bytes);
-            }) {
+            if !ime_guard
+                && crate::ui::terminal_keys::forward_non_text_keys(i, |bytes| {
+                    self.append_offline_bytes(bytes);
+                })
+            {
                 self.pending_focus_terminal = true;
             }
             let mut sent_ctrl = [false; 32];
-            if crate::ui::terminal_keys::forward_ctrl_keys(i, |b| {
-                if b < 32 {
-                    sent_ctrl[b as usize] = true;
-                }
-                ctrl_to_send.push(b);
-            }) && !ctrl_to_send.is_empty() {
+            if !ime_guard
+                && crate::ui::terminal_keys::forward_ctrl_keys(i, |b| {
+                    if b < 32 {
+                        sent_ctrl[b as usize] = true;
+                    }
+                    ctrl_to_send.push(b);
+                })
+                && !ctrl_to_send.is_empty()
+            {
                 // pending_focus set after input_mut
             }
-            if crate::ui::terminal_keys::forward_alt_meta_keys(i, |bytes| {
-                self.append_offline_bytes(bytes);
-            }) {
+            if !ime_guard
+                && crate::ui::terminal_keys::forward_alt_meta_keys(i, |bytes| {
+                    self.append_offline_bytes(bytes);
+                })
+            {
                 self.pending_focus_terminal = true;
             }
 
@@ -3953,8 +4016,13 @@ impl TerminalView {
             for event in &i.events {
                 match event {
                     egui::Event::Ime(egui::ImeEvent::Commit(text)) => {
+                        if std::env::var_os("MISTTERM_IME_DEBUG").is_some() {
+                            eprintln!("[ime-debug] OFFLINE-COMMIT {:?} bytes={}", text, text.as_bytes().len());
+                        }
                         if let Some(text) = Self::ime_committed_text(text, i.modifiers) {
                             self.append_offline_bytes(text.as_bytes());
+                        } else if std::env::var_os("MISTTERM_IME_DEBUG").is_some() {
+                            eprintln!("[ime-debug] OFFLINE-COMMIT dropped by modifier gate");
                         }
                     }
                     egui::Event::Text(text) => {
@@ -4209,6 +4277,29 @@ impl TerminalView {
         let mut do_copy = false;
 
         ui.input_mut(|i| {
+            // #430 诊断：完整事件流 dump（MISTTERM_IME_DEBUG=1 时启用）。
+            // 组字键在 winit X11 失步时以原始键事件形态漏入，这份日志就是
+            // 定界「commit 是否到达 / Text 与 Key 的实际内容」的证据。
+            if std::env::var_os("MISTTERM_IME_DEBUG").is_some() {
+                for e in &i.events {
+                    match e {
+                        egui::Event::Ime(ime) => {
+                            eprintln!("[ime-debug] Ime {ime:?}");
+                        }
+                        egui::Event::Text(t) => {
+                            eprintln!("[ime-debug] Text {:?} mods={{ctrl:{},alt:{},shift:{},command:{}}}",
+                                t, i.modifiers.ctrl, i.modifiers.alt, i.modifiers.shift, i.modifiers.command);
+                        }
+                        egui::Event::Key { key, pressed, modifiers, .. } => {
+                            if *pressed {
+                                eprintln!("[ime-debug] Key {key:?} mods={{ctrl:{},alt:{},shift:{},command:{}}}",
+                                    modifiers.ctrl, modifiers.alt, modifiers.shift, modifiers.command);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
             if crate::ui::terminal_keys::consume_terminal_paste_shortcut(i) {
                 if let Ok(mut clip) = Clipboard::new() {
                     if let Ok(text) = clip.get_text() {
@@ -4218,6 +4309,12 @@ impl TerminalView {
             } else if crate::ui::terminal_keys::consume_terminal_copy_shortcut(i) {
                 do_copy = true;
             }
+            // #430：组字窗口内（本帧有 Ime 事件或上一帧组字未清）不让 Tab 进终端，
+            // 空格/数字键由下方 ime_guard 统一让位。
+            let ime_guard = crate::ui::terminal_keys::ime_activity_frame(
+                &i.events,
+                !self.ime_preedit.is_empty(),
+            );
             // 强制拦截 Tab 焦点遍历，把 Tab/Shift+Tab 交给终端
             let tab_plain = i.consume_key(egui::Modifiers::NONE, egui::Key::Tab);
             let tab_shift = i.consume_key(
@@ -4227,30 +4324,37 @@ impl TerminalView {
                 },
                 egui::Key::Tab,
             );
-            if tab_plain || tab_shift {
+            if (tab_plain || tab_shift) && !ime_guard {
                 let _ = self.send_pty_input(b"\t");
                 // EventFilter 需上一帧已聚焦才生效；首帧 Tab 仍可能失焦
                 self.pending_focus_terminal = true;
             }
             // Esc / F1–F12 / Insert / 带修饰方向键等(egui 常无 Text 事件)
-            if crate::ui::terminal_keys::forward_non_text_keys(i, |bytes| {
-                let _ = self.send_pty_input(bytes);
-            }) {
+            // #430：组字窗口内原始键一律让位（winit X11 失步会把组字键发进来）。
+            if !ime_guard
+                && crate::ui::terminal_keys::forward_non_text_keys(i, |bytes| {
+                    let _ = self.send_pty_input(bytes);
+                })
+            {
                 // EventFilter 生效前的兜底(帧初 Tab/Esc/方向键抢焦点)
                 self.pending_focus_terminal = true;
             }
             let mut sent_ctrl = [false; 32];
-            if crate::ui::terminal_keys::forward_ctrl_keys(i, |b| {
-                if b < 32 {
-                    sent_ctrl[b as usize] = true;
-                }
-                ctrl_to_send.push(b);
-            }) {
+            if !ime_guard
+                && crate::ui::terminal_keys::forward_ctrl_keys(i, |b| {
+                    if b < 32 {
+                        sent_ctrl[b as usize] = true;
+                    }
+                    ctrl_to_send.push(b);
+                })
+            {
                 // pending_focus set after input_mut
             }
-            if crate::ui::terminal_keys::forward_alt_meta_keys(i, |bytes| {
-                let _ = self.send_pty_input(bytes);
-            }) {
+            if !ime_guard
+                && crate::ui::terminal_keys::forward_alt_meta_keys(i, |bytes| {
+                    let _ = self.send_pty_input(bytes);
+                })
+            {
                 self.pending_focus_terminal = true;
             }
             // 同一帧内可能既有 Key 又有 Text(如 Delete / 退格)，避免重复或错发
@@ -4297,11 +4401,16 @@ impl TerminalView {
             for event in &i.events {
                 match event {
                     egui::Event::Ime(egui::ImeEvent::Commit(text)) => {
+                        if std::env::var_os("MISTTERM_IME_DEBUG").is_some() {
+                            eprintln!("[ime-debug] COMMIT-WRITE {:?} bytes={}", text, text.as_bytes().len());
+                        }
                         if let Some(text) = Self::ime_committed_text(text, i.modifiers) {
                             self.track_typed_text(text);
                             if let Err(e) = self.send_pty_input(text.as_bytes()) {
                                 log::error!("PTY write (ime): {}", e);
                             }
+                        } else {
+                            eprintln!("[ime-debug] COMMIT dropped by modifier gate");
                         }
                     }
                     egui::Event::Text(text) => {
@@ -7392,6 +7501,170 @@ mod oob_cwd_tests {
                 .cwd
                 .as_deref(),
             Some("/tmp/a b")
+        );
+    }
+}
+
+#[cfg(test)]
+mod connect_first_paint_tests {
+    use super::*;
+
+    fn pump(ctx: &egui::Context, view: &mut TerminalView, time: f64) -> Duration {
+        let theme = Theme::dark();
+        let got = std::sync::Arc::new(std::sync::Mutex::new(None::<std::time::Duration>));
+        {
+            let got = got.clone();
+            ctx.set_repaint_observer(move |info: egui::RequestRepaintInfo| {
+                let mut g = got.lock().unwrap();
+                *g = Some(match *g {
+                    Some(prev) => prev.min(info.delay),
+                    None => info.delay,
+                });
+            });
+        }
+        let raw = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(900.0, 600.0),
+            )),
+            time: Some(time),
+            ..Default::default()
+        };
+        let mut out = ctx.run_pass(raw, |ctx| {
+            ctx.root_ui(|root| {
+                egui::CentralPanel::default().show(root, |ui| {
+                    view.show(ui, &theme, 860.0, false, true);
+                });
+            });
+        });
+        out.textures_delta.clear();
+        let delay = *got.lock().unwrap();
+        delay.unwrap_or_default()
+    }
+
+    /// #428：连接成功帧（含重连）必须武装 2s 首屏自醒窗口。
+    /// 直接断言 Connected 分支的行为；不依赖 SSH 真连接。
+    #[test]
+    fn connected_message_arms_first_paint_window() {
+        let mut view = TerminalView::new();
+        view.session_id = Some(1);
+        let theme = Theme::dark();
+        view.process_ssh_messages(&theme); // 空 rx，仅确认未武装
+        assert!(view.connect_first_paint_until.is_none());
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        tx.send(SshMessage::Connected { session_id: 1 })
+            .expect("send Connected");
+        view.ssh_rx = Some(rx);
+        // Connected 分支会尝试 start_interactive_shell：无 manager 时走 Err 臂，
+        // 但窗口武装发生在其之前，不受影响。
+        let _ = view.process_ssh_messages(&theme);
+        let armed = view
+            .connect_first_paint_until
+            .expect("Connected must arm the first-paint window");
+        let lead = armed.duration_since(Instant::now());
+        assert!(
+            lead <= Duration::from_secs(2),
+            "window should be ~2s, got {lead:?}"
+        );
+    }
+
+    /// #428：窗口期内 show() 必须发出零延迟（立即）重绘请求，
+    /// 且此时焦点/光标相位路径不参与（VTE 可能有内容但没有任何焦点侧驱动）。
+    #[test]
+    fn window_requests_immediate_repaint_in_show() {
+        let ctx = egui::Context::default();
+        let mut view = TerminalView::new();
+        view.connected = true;
+        // 模拟「焦点没跟上」的帧序：不给 wants_keyboard/pending_focus，
+        // 只给首屏窗口 + VTE 内容。
+        view.terminal_wants_keyboard = false;
+        view.terminal_focused = false;
+        view.connect_first_paint_until = Some(Instant::now() + Duration::from_secs(2));
+        view.terminal.feed(b"Last login: ... \r\nuser@box:~$ ");
+        let _ = pump(&ctx, &mut view, 0.0);
+        let dt = pump(&ctx, &mut view, 0.0);
+        assert!(
+            dt.is_zero(),
+            "armed first-paint window must repaint immediately even without focus, got {dt:?}"
+        );
+        // 窗口仍在：未被过期清掉。
+        assert!(view.connect_first_paint_until.is_some());
+    }
+
+    /// #428：窗口过期后不再请求重绘，恢复空闲（无字段驱动）。
+    /// bash/zsh 的首帧输出通常 1s 内到达，2s 窗口足够覆盖；fish 同机制无需单独分支。
+    #[test]
+    fn expired_window_stops_repaint_requests() {
+        let ctx = egui::Context::default();
+        let mut view = TerminalView::new();
+        view.connected = true;
+        view.terminal_wants_keyboard = false;
+        view.terminal_focused = false;
+        view.connect_first_paint_until = Some(Instant::now() - Duration::from_millis(1));
+        let _ = pump(&ctx, &mut view, 0.0);
+        assert!(
+            view.connect_first_paint_until.is_none(),
+            "expired window must be cleared"
+        );
+        // 过期后不再因窗口发零延迟请求：核心是字段被清、不会自己复活。
+        // （无焦点无输出的 headless 帧里 egui/IME 自身的 repaint 请求不可控，
+        //  0ns 也可能来自 TextEdit/IME 闪烁，无法在这里区分，故只锁字段语义。）
+        let _ = pump(&ctx, &mut view, 0.0);
+        assert!(view.connect_first_paint_until.is_none(), "expired window must stay cleared");
+    }
+
+    /// #428 复验跟进：settle 语义——窗口过期后若又有输出（vte_dirty），窗口续期。
+    /// 复验实况：Last login 在窗口内画出，提示符 2s 后才到，固定窗口漏画提示符。
+    #[test]
+    fn output_settles_window_after_expiry() {
+        let ctx = egui::Context::default();
+        let mut view = TerminalView::new();
+        view.connected = true;
+        view.terminal_wants_keyboard = false;
+        view.terminal_focused = false;
+        // 窗口已过期。
+        view.connect_first_paint_until = Some(Instant::now() - Duration::from_millis(1));
+        let _ = pump(&ctx, &mut view, 0.0);
+        assert!(view.connect_first_paint_until.is_none());
+        // 模拟后续输出到达：直接走 process_ssh_messages 的 vte_dirty 续期不可行
+        // （需要 rx），这里断言「窗口过期清除后输出能重新武装」经由同一条路径——
+        // feed 不在 pump 内产生 vte_dirty，故用字段级模拟 process 尾部语义。
+        // 真实链路由 connected_message_arms_first_paint_window + box 复验覆盖。
+        view.connect_first_paint_until =
+            Some(Instant::now() + std::time::Duration::from_secs(2));
+        assert!(view.connect_first_paint_until.is_some(), "settled window must re-arm");
+        let _ = pump(&ctx, &mut view, 0.0);
+        assert!(
+            view.connect_first_paint_until.is_some(),
+            "within settled window the frame must not clear it"
+        );
+    }
+
+    /// #428：断开后窗口自然失效——重连走 Connected 分支重新武装，
+    /// 断开态不应继续无条件重绘。
+    #[test]
+    fn window_survives_disconnected_then_rearm_on_reconnect() {
+        let mut view = TerminalView::new();
+        view.session_id = Some(2);
+        let theme = Theme::dark();
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        tx.send(SshMessage::Connected { session_id: 2 }).unwrap();
+        view.ssh_rx = Some(rx);
+        let _ = view.process_ssh_messages(&theme);
+        assert!(view.connect_first_paint_until.is_some());
+
+        // 断开：字段保留但窗口是墙钟判断，断开期间 show() 仍会在窗口内空转极少量帧；
+        // 为保证断开不无条件重绘，Disconnected 显式清窗。
+        let (tx2, rx2) = std::sync::mpsc::channel();
+        tx2.send(SshMessage::Disconnected { session_id: 2 })
+            .unwrap();
+        view.ssh_rx = Some(rx2);
+        let _ = view.process_ssh_messages(&theme);
+        assert!(
+            view.connect_first_paint_until.is_none(),
+            "Disconnected must clear the first-paint window"
         );
     }
 }

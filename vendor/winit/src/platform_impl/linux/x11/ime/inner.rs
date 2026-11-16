@@ -3,6 +3,7 @@ use std::mem;
 use std::sync::Arc;
 
 use super::{ffi, XConnection, XError};
+use x11rb::protocol::xproto;
 
 use super::context::ImeContext;
 use super::input_method::{InputMethod, PotentialInputMethods};
@@ -29,6 +30,10 @@ pub(crate) struct ImeInner {
     // Indicates whether or not the input method was destroyed on the server end
     // (i.e. if ibus/fcitx/etc. was terminated/restarted)
     pub is_destroyed: bool,
+    // MISTTERM (#430): mirror of event_processor's active_window, so that an
+    // in-place allow-toggle can re-apply XSetICFocus without waiting for a new
+    // XIFocusIn (see Ime::set_ime_allowed).
+    pub active_window: Option<xproto::Window>,
     pub is_fallback: bool,
 }
 
@@ -47,6 +52,7 @@ impl ImeInner {
             event_sender,
             is_destroyed: false,
             is_fallback: false,
+            active_window: None,
         }
     }
 
