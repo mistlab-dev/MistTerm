@@ -308,7 +308,17 @@ impl ImeContext {
         xconn.check_errors().map_err(ImeContextCreationError::XError)?;
 
         if std::env::var_os("MISTTERM_IME_DEBUG").is_some() {
-            eprintln!("[ime-vendor] IC created: allowed={}", allowed);
+            eprintln!(
+                "[ime-vendor] IC created: allowed={} style_raw={} (P={:#x} N={:#x})",
+                allowed,
+                match style {
+                    crate::platform_impl::platform::x11::ime::input_method::Style::Preedit(v)
+                    | crate::platform_impl::platform::x11::ime::input_method::Style::Nothing(v)
+                    | crate::platform_impl::platform::x11::ime::input_method::Style::None(v) => v as u64,
+                },
+                ffi::XIMPreeditCallbacks | ffi::XIMStatusNothing,
+                ffi::XIMPreeditNothing | ffi::XIMStatusNothing
+            );
         }
         let mut context = ImeContext {
             ic,
