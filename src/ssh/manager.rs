@@ -141,6 +141,14 @@ const PUMP_POLL_KEEPALIVE_MS: u64 = 10_000;
 
 /// `polling::Poller` 里 SSH socket fd 的 key。
 const PUMP_POLL_SOCKET_KEY: usize = 0;
+
+/// shell 泵注册到 `polling` 的 SSH socket 句柄类型：`ssh2` 与 `polling` 在
+/// Unix 用 `RawFd`、Windows 用 `RawSocket`。rearm 借用必须与之同型。
+#[cfg(unix)]
+type PumpSocket = std::os::fd::RawFd;
+#[cfg(windows)]
+type PumpSocket = std::os::windows::io::RawSocket;
+
 const RESIZE_QUEUE_CAP: usize = 16;
 /// 泵线程上一次 `exec_remote` 单次阻塞调用最长等待（毫秒）。
 const PUMP_EXEC_TIMEOUT_MS: u32 = 15_000;
@@ -659,24 +667,41 @@ impl SshManager {
         };
         let channel = super::client::open_shell_channel(&session, initial_cols, initial_rows)?;
 
-        // 泵线程 poll 事件驱动（#419 后继性能改造）：注册 SSH socket fd 为
-        // level-triggered readable。PTY 回显/输出一到达内核即唤醒泵线程，
-        // 不再依赖 recv_timeout(8ms) 轮询；pump_tx 入队经 poller.notify() 唤醒。
+        // 泵线程 poll 事件驱动（#419 后继性能改造）：注册 SSH socket fd 为 readable。
+        // 注意：`polling` v3 默认是 `PollMode::Oneshot`（非 level-triggered）——
+        // 事件送达一次后注册即失效，泵线程在每次 readable 事件处理完后必须
+        // `modify(Event::readable)` 重新武装（rearm），否则后续数据到达不再唤醒
+        // （表现：回显已入队但 PUMP_READ 不再出现，直到 PUMP_STUCK）。
         let pump_poller = Arc::new(
             polling::Poller::new().map_err(|e| format!("poller create failed: {e}"))?,
         );
-        {
-            use std::os::fd::AsRawFd;
-            // SAFETY：fd 由 Session 持有（生命周期覆盖泵线程），注册不与其它 poller 竞争。
-            unsafe {
-                pump_poller
-                    .add(session.as_raw_fd(), polling::Event::readable(PUMP_POLL_SOCKET_KEY))
-                    .map_err(|e| format!("poller register failed: {e}"))?;
+        // 捕获注册句柄（同时供 add 与后续 rearm 用）：ssh2::Channel 不实现
+        // AsRawFd，也无法从 Channel 取回 Session，故从 Session 捕获一次。
+        // 类型与 ssh2 / polling 平台分支一致（Unix RawFd / Windows RawSocket）；
+        // add 用 AsRawSource 接受裸句柄，rearm 用 AsSource 需借用（见 rearm 函数）。
+        // 句柄生命周期由 Session 保证覆盖泵线程（会话销毁前泵先退出）。
+        let shell_socket: PumpSocket = {
+            #[cfg(unix)]
+            {
+                use std::os::fd::AsRawFd;
+                session.as_raw_fd()
             }
+            #[cfg(windows)]
+            {
+                use std::os::windows::io::AsRawSocket;
+                session.as_raw_socket()
+            }
+        };
+        // SAFETY：句柄由 Session 持有（生命周期覆盖泵线程），注册不与其它 poller 竞争。
+        unsafe {
+            pump_poller
+                .add(shell_socket, polling::Event::readable(PUMP_POLL_SOCKET_KEY))
+                .map_err(|e| format!("poller register failed: {e}"))?;
         }
 
         shell_pump::spawn_shell_pump(
             channel,
+            shell_socket,
             pump_rx,
             interrupt_rx,
             resize_rx,
@@ -789,7 +814,7 @@ impl SshManager {
 
 /// Shell 泵：专用 OS 线程 + `sync_channel`，避免 Tokio `block_on`/`recv` 与上传线程的调度死锁。
 mod shell_pump {
-    use crate::ssh::manager::{PUMP_POLL_KEEPALIVE_MS, PUMP_POLL_SOCKET_KEY};
+    use crate::ssh::manager::{notify_ui, PumpSocket, PUMP_POLL_KEEPALIVE_MS, PUMP_POLL_SOCKET_KEY};
     use super::{ShellPumpCommand, SshManager, SshMessage, SshSessionId, UploadPtyBypass};
     use ssh2::Channel;
     use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
@@ -799,6 +824,7 @@ mod shell_pump {
 
     pub(super) fn spawn_shell_pump(
         channel: Channel,
+        shell_socket: PumpSocket,
         pump_rx: Receiver<ShellPumpCommand>,
         interrupt_rx: Receiver<Vec<u8>>,
         resize_rx: Receiver<(u32, u32)>,
@@ -819,6 +845,7 @@ mod shell_pump {
                 );
                 shell_pump_loop(
                     channel,
+                    shell_socket,
                     pump_rx,
                 interrupt_rx,
                     resize_rx,
@@ -833,8 +860,36 @@ mod shell_pump {
             .expect("spawn shell pump thread");
     }
 
+    /// Oneshot rearm：重新注册 socket readable。
+    ///
+    /// `polling` 3.11 的 `modify` 走 `AsSource`（Unix: `AsFd` → `BorrowedFd`；
+    /// Windows: `AsSocket` → `BorrowedSocket`），不接受裸 `RawFd`/`RawSocket`。
+    /// 这里按平台从捕获的裸句柄构造借用（`borrow_raw` 是唯一 unsafe 点，
+    /// 调用合同与 `add` 相同：句柄在借用到 modify 返回期间必须保持打开）。
+    /// `modify` 本身是 safe fn，失败返回 Err 由调用方走 Disconnected 清理。
+    fn shell_pump_rearm_readable(
+        pump_poller: &polling::Poller,
+        shell_socket: PumpSocket,
+    ) -> Result<(), std::io::Error> {
+        #[cfg(unix)]
+        {
+            use std::os::fd::BorrowedFd;
+            // SAFETY：句柄由 Session 持有，覆盖本次借用；与 add 同源同生命周期。
+            let borrowed = unsafe { BorrowedFd::borrow_raw(shell_socket) };
+            pump_poller.modify(borrowed, polling::Event::readable(PUMP_POLL_SOCKET_KEY))
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::io::BorrowedSocket;
+            // SAFETY：socket 由 Session 持有，覆盖本次借用；与 add 同源同生命周期。
+            let borrowed = unsafe { BorrowedSocket::borrow_raw(shell_socket) };
+            pump_poller.modify(borrowed, polling::Event::readable(PUMP_POLL_SOCKET_KEY))
+        }
+    }
+
     fn shell_pump_loop(
         channel: Arc<Mutex<Channel>>,
+        shell_socket: PumpSocket,
         pump_rx: Receiver<ShellPumpCommand>,
         interrupt_rx: Receiver<Vec<u8>>,
         resize_rx: Receiver<(u32, u32)>,
@@ -906,19 +961,47 @@ mod shell_pump {
 
             // socket 可读 → 先排空 PTY（回显/输出立即上送）。
             if poll_events.iter().any(|ev| ev.key == PUMP_POLL_SOCKET_KEY) {
-                if let Ok(mut ch) = channel.lock() {
-                    if SshManager::pump_channel_reads(
-                        &mut *ch,
-                        &mut read_buffer,
-                        &message_tx,
-                        session_id,
-                        &upload_bypass_slot,
-                        None,
-                    )
-                    .is_err()
-                    {
+                let mut ch = match channel.lock() {
+                    Ok(g) => g,
+                    Err(e) => {
+                        // Mutex::lock() 在锁竞争时会阻塞，只有 poison（先前持有者
+                        // panic）才返回 Err。与其它泵内 poison 路径一致：可见日志 +
+                        // 走既有 Disconnected 清理退出。Oneshot 事件已被本次 wait 消费，
+                        // 若留下活循环将再也收不到 socket 事件（假死），故不空转。
+                        log::error!("shell pump readable: channel mutex poisoned: {}", e);
+                        let _ = message_tx.send(SshMessage::Disconnected { session_id });
+                        notify_ui(session_id, "disconnected", 0);
                         return;
                     }
+                };
+                if SshManager::pump_channel_reads(
+                    &mut *ch,
+                    &mut read_buffer,
+                    &message_tx,
+                    session_id,
+                    &upload_bypass_slot,
+                    None,
+                )
+                .is_err()
+                {
+                    // 泵退出路径：EOF / 读错误均已上送 Disconnected。此时会话
+                    // 正在销毁、句柄即将关闭，绝不能再对它 modify/rearm。
+                    return;
+                }
+                // Oneshot rearm（#423 修复）：上一轮 socket readable 事件已被消费
+                // （排空到 EAGAIN 或读到数据均可），必须重新注册 readable，
+                // 否则 polling v3 Oneshot 模式下后续输出不再唤醒泵线程。
+                // 句柄生命周期由 Session 保证；失败必须可见并退出，避免活着的
+                // 会话静默假死（数据在内核但泵永不醒）。
+                if let Err(e) = shell_pump_rearm_readable(&pump_poller, shell_socket) {
+                    log::warn!(
+                        "PUMP_REARM_ERR session={} {} —— 停止泵线程，走会话清理",
+                        session_id,
+                        e
+                    );
+                    let _ = message_tx.send(SshMessage::Disconnected { session_id });
+                    notify_ui(session_id, "disconnected", 0);
+                    return;
                 }
             }
 
@@ -1949,6 +2032,89 @@ mod tests {
             unblocked,
             "start_interactive_shell held the global sessions lock while opening a channel"
         );
+    }
+
+    // ---------------- #423 后继：polling Oneshot rearm 回归（仅 Unix 编译） ----------------
+
+    /// #423 修复回归：`polling` v3 默认 Oneshot —— 第一次 readable 事件送达后
+    /// 注册即失效，必须 modify() rearm，否则同一 fd 后续数据不再唤醒。
+    /// 用 UnixStream socket pair 模拟 SSH socket；写两段数据，验证 rearm 后
+    /// 第二次 wait 能再醒并读出。用 #[cfg(unix)] 保证非 Unix 平台不编译本测试，
+    /// 而不是靠运行时 `if cfg!(){return;}` 假装通过。
+    #[cfg(unix)]
+    #[test]
+    fn oneshot_readable_needs_rearm_for_second_wakeup() {
+        use std::io::{Read, Write};
+        use std::num::NonZeroUsize;
+        use std::os::fd::{AsRawFd, BorrowedFd};
+        use std::os::unix::net::UnixStream;
+
+        let poller = polling::Poller::new().expect("poller");
+        let mut events = polling::Events::with_capacity(NonZeroUsize::new(1).unwrap());
+        let (mut reader, mut writer) = UnixStream::pair().expect("socket pair");
+        reader.set_nonblocking(true).expect("set_nonblocking");
+        let raw = reader.as_raw_fd();
+
+        // SAFETY：reader 在本函数作用域内存活，覆盖注册期；与 add 同源同生命周期。
+        unsafe {
+            poller
+                .add(raw, polling::Event::readable(PUMP_POLL_SOCKET_KEY))
+                .expect("add");
+        }
+
+        // 第一段数据：事件送达，读出。
+        writer.write_all(b"first").expect("write 1");
+        events.clear(); // wait 会追加而非覆盖；复用前必须清空
+        poller
+            .wait(&mut events, Some(Duration::from_secs(2)))
+            .expect("wait 1");
+        assert!(events.iter().any(|ev| ev.key == PUMP_POLL_SOCKET_KEY));
+        let mut buf = [0u8; 16];
+        let n = reader.read(&mut buf).expect("read 1");
+        assert_eq!(&buf[..n], b"first");
+
+        // Oneshot 事件已被消费；rearm（对应 shell_pump_rearm_readable 的借用写法）。
+        // SAFETY：reader 仍存活，借用有效至函数末。
+        let borrowed = unsafe { BorrowedFd::borrow_raw(raw) };
+        poller
+            .modify(borrowed, polling::Event::readable(PUMP_POLL_SOCKET_KEY))
+            .expect("modify/rearm");
+
+        // 第二段数据：rearm 后应再次唤醒。
+        writer.write_all(b"second").expect("write 2");
+        // capacity=1 时若不清空，wait 1 留下的 1 条会占满缓冲，spare_capacity=0，
+        // epoll_wait(maxevents=0) 返回 EINVAL（Os 22）——必须 clear 后再 wait。
+        events.clear();
+        poller
+            .wait(&mut events, Some(Duration::from_secs(2)))
+            .expect("wait 2");
+        assert!(
+            events.iter().any(|ev| ev.key == PUMP_POLL_SOCKET_KEY),
+            "rearm 后第二段数据应再次唤醒（#423 readable rearm 回归）"
+        );
+        let n = reader.read(&mut buf).expect("read 2");
+        assert_eq!(&buf[..n], b"second");
+
+        // delete 必须在 reader drop 前成对调用。
+        poller.delete(borrowed).expect("delete");
+    }
+
+    /// `shell_pump_rearm_readable` 失败不可静默：polling 3.11 的 modify 对未注册
+    /// fd 必须返回 Err（对应会话已关闭 / 句柄失效路径），由调用方走 Disconnected
+    /// 清理而非吞错假死。用 UnixStream 验证底层 modify 错误路径；#[cfg(unix)]
+    /// 保证非 Unix 平台不编译本测试。
+    #[cfg(unix)]
+    #[test]
+    fn rearm_readable_failure_is_visible_not_silent() {
+        use std::os::fd::{AsRawFd, BorrowedFd};
+        use std::os::unix::net::UnixStream;
+
+        let poller = polling::Poller::new().expect("poller");
+        let (reader, _writer) = UnixStream::pair().expect("socket pair");
+        // SAFETY：reader 存活覆盖借用；未 add 过，.modify 应返回 Err（注册不存在）。
+        let borrowed = unsafe { BorrowedFd::borrow_raw(reader.as_raw_fd()) };
+        let res = poller.modify(borrowed, polling::Event::readable(PUMP_POLL_SOCKET_KEY));
+        assert!(res.is_err(), "modify on unregistered fd must be an error");
     }
 
     /// #258 回归：打开监控会触发布局 → PTY resize，随后仍应能经 shell 泵 `ExecRemote` 采集。
