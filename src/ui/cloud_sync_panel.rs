@@ -312,12 +312,20 @@ impl CloudSyncPanel {
                 &mut self.settings.sync_host_metadata,
                 loc.tr("Sync host list after sign-in", "登录后同步主机列表"),
             );
+            // #418：egui 折行是自家启发式（CJK 逐字可断，U+2060 无效），改应用层
+            // 预折行：词组原子 + 标点边界，超宽前插 \n。
             ui.label(
                 chrome::rich_caption(
                     theme,
-                    loc.tr(
-                        "Name, host, port, user, group, auth hint, and key path only. Passwords and private key files stay on this machine.",
-                        "只同步名称、主机、端口、用户、分组、认证提示和密钥路径。密码和私钥文件留在本机。",
+                    &cjk_wrap_lines(
+                        ui,
+                        theme,
+                        loc.tr(
+                            "Name, host, port, user, group, auth hint, and key path only. Passwords and private key files stay on this machine.",
+                            "只同步名称、主机、端口、用户、分组、认证提示和密钥路径。密码和私钥文件留在本机。",
+                        ),
+                        CLOUD_SYNC_ZH_PHRASES,
+                        ui.available_width(),
                     ),
                 )
                 .color(theme.color_form_hint()),
@@ -532,6 +540,81 @@ impl CloudSyncPanel {
                 ],
             );
         });
+    }
+
+    /// #424：操作行三枚按钮抽成辅助函数（等分 / 两行两种布局复用）。
+    /// `w3 = f32::MAX` 表示该枚不在此行（两行布局的第二行独占）。
+    fn cloud_sync_action_buttons_row(
+        &mut self,
+        ui: &mut egui::Ui,
+        theme: &Theme,
+        lang: UiLanguage,
+        deps: &mut CloudSyncDeps<'_>,
+        user_id: &str,
+        team_logged_in: bool,
+        team_service: &mut Option<&mut TeamService>,
+        w1: f32,
+        w2: f32,
+        w3: f32,
+    ) {
+        let loc = i18n::Locale::from(lang);
+        if chrome::panel_action_button_with_icon_ex_min_w(
+            ui,
+            theme,
+            crate::ui::icons::IconId::Check,
+            loc.tr("Save selection & interval", "保存勾选与间隔"),
+            true,
+            w1,
+        )
+        .on_hover_text(loc.tr("Save selection & interval", "保存勾选与间隔"))
+        .clicked()
+        {
+            self.save_settings(lang);
+        }
+        if chrome::panel_action_primary_button_with_icon_ex_min_w(
+            ui,
+            theme,
+            crate::ui::icons::IconId::Upload,
+            loc.tr("Export sync pack…", "导出同步包…"),
+            true,
+            w2,
+        )
+        .on_hover_text(loc.tr("Export sync pack…", "导出同步包…"))
+        .clicked()
+        {
+            self.run_export(deps, lang, user_id);
+        }
+        if w3 != f32::MAX {
+            self.cloud_sync_action_import_button(
+                ui, theme, lang, deps, team_logged_in, team_service, w3,
+            );
+        }
+    }
+
+    fn cloud_sync_action_import_button(
+        &mut self,
+        ui: &mut egui::Ui,
+        theme: &Theme,
+        lang: UiLanguage,
+        deps: &mut CloudSyncDeps<'_>,
+        team_logged_in: bool,
+        team_service: &mut Option<&mut TeamService>,
+        min_w: f32,
+    ) {
+        let loc = i18n::Locale::from(lang);
+        if chrome::panel_action_button_with_icon_ex_min_w(
+            ui,
+            theme,
+            crate::ui::icons::IconId::Package,
+            loc.tr("Import from sync pack…", "从同步包导入…"),
+            team_logged_in,
+            min_w,
+        )
+        .on_hover_text(loc.tr("Import from sync pack…", "从同步包导入…"))
+        .clicked()
+        {
+            self.pick_import_folder(deps, lang, team_service);
+        }
     }
 
     fn paint_sync_status(ui: &mut egui::Ui, theme: &Theme, settings: &CloudSyncSettings, lang: UiLanguage) {
@@ -1364,57 +1447,105 @@ impl CloudSyncPanel {
                             Self::paint_sync_status(ui, theme, &self.settings, lang);
                             chrome::settings_row_divider(ui, theme);
                             // 三枚操作按钮通栏等分同一行。
+                            // #424 复验跟进：等分 thirds 只对「natural 宽 ≤ third」成立；
+                            // 「从同步包导入…」natural 宽超出等分时整行溢出，第三枚被
+                            // dock 右边界裁掉。改为先量三枚 natural 总宽：放得下就等分，
+                            // 放不下拆两行（前两枚一行，导入按钮独占一行完整可见）。
                             let gap = theme.spacing_sm();
-                            let third = ((ui.available_width() - gap * 2.0) / 3.0)
-                                .max(theme.size_control_btn_min_w());
-                            ui.horizontal(|ui| {
-                                ui.spacing_mut().item_spacing.x = gap;
-                                if chrome::panel_action_button_with_icon_ex_min_w(
-                                    ui,
-                                    theme,
-                                    crate::ui::icons::IconId::Check,
-                                    loc.tr("Save selection & interval", "保存勾选与间隔"),
-                                    true,
-                                    third,
-                                )
-                                .clicked()
-                                {
-                                    self.save_settings(lang);
-                                }
-                                if chrome::panel_action_primary_button_with_icon_ex_min_w(
-                                    ui,
-                                    theme,
-                                    crate::ui::icons::IconId::Upload,
-                                    loc.tr("Export sync pack…", "导出同步包…"),
-                                    true,
-                                    third,
-                                )
-                                .on_hover_text(loc.tr(
-                                    "Create mistterm-sync-timestamp folder and copy selected files",
-                                    "新建 mistterm-sync-时间戳 目录并复制勾选文件",
-                                ))
-                                .clicked()
-                                {
+                            let natural = |label: &str, icon: bool| -> f32 {
+                                let text_w = ui
+                                    .painter()
+                                    .layout_no_wrap(
+                                        label.to_owned(),
+                                        crate::platform::ui_font_id(theme.font_size_control_btn()),
+                                        theme.text_primary(),
+                                    )
+                                    .size()
+                                    .x;
+                                text_w
+                                    + if icon { theme.size_icon_glyph() + 4.0 } else { 0.0 }
+                                    + 2.0 * theme.spacing_control_btn_pad_x()
+                            };
+                            let n1 = natural(&loc.tr("Save selection & interval", "保存勾选与间隔"), true);
+                            let n2 = natural(&loc.tr("Export sync pack…", "导出同步包…"), true);
+                            let n3 = natural(&loc.tr("Import from sync pack…", "从同步包导入…"), true);
+                            let avail = ui.available_width();
+                            let fits_one_row =
+                                n1 + n2 + n3 + 2.0 * gap <= avail;
+                            if fits_one_row {
+                                ui.horizontal(|ui| {
+                                    ui.spacing_mut().item_spacing.x = gap;
+                                    let third = (avail - gap * 2.0) / 3.0;
                                     let user_id = team_service
                                         .as_ref()
                                         .and_then(|svc| svc.state.user.as_ref())
                                         .map(|u| u.id.clone())
                                         .unwrap_or_default();
-                                    self.run_export(deps, lang, &user_id);
-                                }
-                                if chrome::panel_action_button_with_icon_ex_min_w(
-                                    ui,
-                                    theme,
-                                    crate::ui::icons::IconId::Package,
-                                    loc.tr("Import from sync pack…", "从同步包导入…"),
-                                    true,
-                                    third,
-                                )
-                                .clicked()
-                                {
-                                    self.pick_import_folder(deps, lang, &mut team_service);
-                                }
-                            });
+                                    let logged_in = team_service
+                                        .as_ref()
+                                        .map(|svc| svc.is_logged_in())
+                                        .unwrap_or(false);
+                                    self.cloud_sync_action_buttons_row(
+                                        ui,
+                                        theme,
+                                        lang,
+                                        deps,
+                                        &user_id,
+                                        logged_in,
+                                        &mut team_service,
+                                        third,
+                                        third,
+                                        third,
+                                    );
+                                });
+                            } else {
+                                ui.horizontal(|ui| {
+                                    ui.spacing_mut().item_spacing.x = gap;
+                                    let half = (avail - gap) / 2.0;
+                                    let user_id = team_service
+                                        .as_ref()
+                                        .and_then(|svc| svc.state.user.as_ref())
+                                        .map(|u| u.id.clone())
+                                        .unwrap_or_default();
+                                    let logged_in = team_service
+                                        .as_ref()
+                                        .map(|svc| svc.is_logged_in())
+                                        .unwrap_or(false);
+                                    self.cloud_sync_action_buttons_row(
+                                        ui,
+                                        theme,
+                                        lang,
+                                        deps,
+                                        &user_id,
+                                        logged_in,
+                                        &mut team_service,
+                                        half,
+                                        half,
+                                        f32::MAX,
+                                    );
+                                });
+                                // 第二行：导入按钮独占，绝不裁切。
+                                ui.horizontal(|ui| {
+                                    let user_id = team_service
+                                        .as_ref()
+                                        .and_then(|svc| svc.state.user.as_ref())
+                                        .map(|u| u.id.clone())
+                                        .unwrap_or_default();
+                                    let logged_in = team_service
+                                        .as_ref()
+                                        .map(|svc| svc.is_logged_in())
+                                        .unwrap_or(false);
+                                    self.cloud_sync_action_import_button(
+                                        ui,
+                                        theme,
+                                        lang,
+                                        deps,
+                                        logged_in,
+                                        &mut team_service,
+                                        n3.max(80.0),
+                                    );
+                                });
+                            }
                         });
                     });
 
@@ -1514,9 +1645,205 @@ fn paint_bullet_list(
     items: &[(&'static str, &'static str)],
 ) {
     for (en, zh) in items {
-        ui.label(
-            chrome::rich_caption(theme, &format!("• {}", loc.tr(*en, *zh)))
-                .color(theme.color_form_hint()),
+        // #418：中文说明逐条过词组保护，杜绝「密 / 钥路径」类拆字。
+        let zh = cjk_wrap_lines(
+            ui,
+            theme,
+            loc.tr(*en, *zh),
+            CLOUD_SYNC_ZH_PHRASES,
+            ui.available_width(),
         );
+        ui.label(
+            chrome::rich_caption(theme, &zh).color(theme.color_form_hint()),
+        );
+    }
+}
+
+
+/// #418：云端同步面板中文文案里的词组表（点查复验：除「密钥路径」外还有
+/// 「登录令牌」「丢失时」等同类拆字）。cjk_word_safe 逐个插 U+2060。
+const CLOUD_SYNC_ZH_PHRASES: &[&str] = &[
+    "名称", "主机", "端口", "用户", "分组", "认证提示", "密钥路径", "密码",
+    "私钥文件", "本机", "登录令牌", "云端凭证", "加密密码", "解锁码",
+    "凭证库", "同步包", "主机列表", "丢失", "数据", "令牌",
+];
+
+/// #418 复验定性：egui 0.37 的折行是自家启发式（epaint text_layout
+/// RowBreakCandidates——CJK 逐字都是 good candidate），U+2060 WORD JOINER
+/// 是 invisible_char（无字形、不参与断行判定），对 egui 完全无效（已用
+/// galley 探针实证）。因此改为**应用层预折行**：按词组+标点切 token，
+/// 逐 token 量宽，超宽前在词组/标点边界插 \n，一行一个 Label 不会自折。
+///
+/// `phrases`：不可拆的词组（原子 token）。
+pub(crate) fn cjk_wrap_lines(
+    ui: &egui::Ui,
+    theme: &Theme,
+    text: &str,
+    phrases: &[&str],
+    max_width: f32,
+) -> String {
+    // 1) 切 token：词组优先（原子），其余逐字符（CJK）或按非 CJK 连续段。
+    let mut tokens: Vec<String> = Vec::new();
+    let mut rest = text.to_string();
+    // 先把词组替换成占位符防止被逐字切开。
+    let mut placeholders: Vec<(String, String)> = Vec::new();
+    for (i, phrase) in phrases.iter().enumerate() {
+        let ph = format!("\u{E000}{i}\u{E001}"); // 私有区占位，不会与正文冲突
+        placeholders.push((ph.clone(), phrase.to_string()));
+        rest = rest.replace(phrase, &ph);
+    }
+    // 逐字符切 token（标点附着在前一 token 上，词组占位符是原子）。
+    let mut cur = String::new();
+    let chars: Vec<char> = rest.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if c == '\u{E000}' {
+            // 占位符起点：读到 E001
+            let mut ph = String::new();
+            ph.push(c);
+            i += 1;
+            while i < chars.len() && chars[i] != '\u{E001}' {
+                ph.push(chars[i]);
+                i += 1;
+            }
+            if i < chars.len() {
+                ph.push('\u{E001}');
+                i += 1;
+            }
+            if !cur.is_empty() {
+                tokens.push(cur.clone());
+                cur.clear();
+            }
+            tokens.push(ph);
+        } else if is_cjk_char(c) || (c.is_ascii_punctuation() && !cur.is_empty() && !cur.chars().all(|x| x.is_ascii_alphanumeric())) {
+            // CJK 字符与 ASCII 标点：标点贴前面。句读（、。；：！？）作为边界
+            // 附着当前 token；非句读 ASCII 标点（如 URL 里的 / .）与前后合并。
+            if !cur.is_empty() {
+                tokens.push(cur.clone());
+            cur.clear();
+            }
+            cur.push(c);
+            tokens.push(cur.clone());
+            cur.clear();
+            i += 1;
+        } else {
+            // 拉丁/数字/空白：连续段为 token（空白也并入，折行时 trim 尾部）。
+            cur.push(c);
+            i += 1;
+        }
+    }
+    if !cur.is_empty() {
+        tokens.push(cur);
+    }
+
+    // 2) 量宽并贪心填行。
+    let token_w = |t: &str| -> f32 {
+        let real = placeholders
+            .iter()
+            .fold(t.to_string(), |acc, (ph, real)| acc.replace(ph, real));
+        ui.painter()
+            .layout_no_wrap(
+                real.clone(),
+                crate::platform::ui_font_id(theme.font_size_caption()),
+                theme.text_primary(),
+            )
+            .size()
+            .x
+    };
+    let mut lines: Vec<String> = Vec::new();
+    let mut line = String::new();
+    let mut line_w = 0.0f32;
+    for t in tokens {
+        let real = placeholders
+            .iter()
+            .fold(t.clone(), |acc, (ph, real)| acc.replace(ph, real));
+        let w = token_w(&real);
+        // sep 仅示意；token 自身宽度必须全额计入（首 token 也不例外）。
+        if line_w + w <= max_width || line.is_empty() {
+            line.push_str(&real);
+            line_w += w;
+        } else {
+            lines.push(std::mem::take(&mut line));
+            line.push_str(&real);
+            line_w = w;
+        }
+    }
+    if !line.is_empty() {
+        lines.push(line);
+    }
+    // 3) 还原词组占位符。
+    lines
+        .iter()
+        .map(|l| {
+            placeholders
+                .iter()
+                .fold(l.clone(), |acc, (ph, real)| acc.replace(ph, real))
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// CJK 表意文字判定（与 epaint unicode.rs 的 is_cjk_ideograph 同口径）。
+fn is_cjk_char(c: char) -> bool {
+    ('\u{4E00}'..='\u{9FFF}').contains(&c)
+        || ('\u{3400}'..='\u{4DBF}').contains(&c)
+        || ('\u{2B740}'..='\u{2B81F}').contains(&c)
+}
+
+
+#[cfg(test)]
+mod cjk_wrap_tests {
+    use super::{cjk_wrap_lines, CLOUD_SYNC_ZH_PHRASES};
+
+    /// #418 复验定性：egui 的 U+2060 WORD JOINER 无效（invisible_char 无字形、
+    /// CJK 逐字是 good break candidate）。应用层预折行必须保证：词组不跨行。
+    /// 本测试用真实 egui 字体量宽，把可用宽压到必然折行的程度，断言每行
+    /// 完整包含词组（词组两端不出现在行界两侧）。
+    #[test]
+    fn wrap_keeps_phrases_whole() {
+        let ctx = egui::Context::default();
+        let text = "只同步名称、主机、端口、用户、分组、认证提示和密钥路径。密码和私钥文件留在本机。";
+        let mut lines_out = String::new();
+        let mut full = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(240.0, 2000.0),
+                )),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    lines_out = cjk_wrap_lines(
+                        ui,
+                        &crate::ui::theme::Theme::dark(),
+                        text,
+                        CLOUD_SYNC_ZH_PHRASES,
+                        120.0,
+                    );
+                });
+            },
+        );
+        full.textures_delta.clear();
+        let lines = lines_out;
+        println!("DBG lines={lines:?}");
+        assert!(lines.contains('\n'), "窄宽下应折成多行");
+        // 关键断言：合并所有行后与原文一致（无丢字）。
+        let joined: String = lines.split('\n').collect::<Vec<_>>().concat();
+        assert_eq!(joined, text, "折行不得丢字/改字");
+        // 逐词组：任意行不得以词组的前缀结尾（除非整个词组在本行）。
+        for phrase in CLOUD_SYNC_ZH_PHRASES {
+            for k in 1..phrase.chars().count() {
+                let prefix: String = phrase.chars().take(k).collect();
+                let suffix: String = phrase.chars().skip(k).collect();
+                for line in lines.split('\n') {
+                    assert!(
+                        !(line.ends_with(&prefix) && lines.split('\n').any(|n| n.starts_with(&suffix))),
+                        "词组 {phrase} 被拆行：{prefix:?} 行尾 / {suffix:?} 行首\n{lines}"
+                    );
+                }
+            }
+        }
     }
 }
