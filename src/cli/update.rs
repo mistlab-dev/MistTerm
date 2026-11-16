@@ -12,7 +12,7 @@ use std::sync::atomic::AtomicBool;
 use crate::core::updater::apply::{self, ApplyOutcome, ApplyStage};
 use crate::core::updater::{
     check_for_update, CheckOptions, CheckOutcome, InstallPlan, UpdateChannel, UpdateError, UpdateInfo,
-    UpdateState,
+    StateIntegrity, UpdateState,
 };
 
 pub const EXIT_UPDATE_AVAILABLE: i32 = 10;
@@ -32,7 +32,7 @@ pub fn run(args: &UpdateArgs) -> i32 {
     }
     // #417：CLI 同样区分损坏状态；检查成功后备份坏文件并重建，且告知用户。
     let (mut state, integrity) = UpdateState::load_with_integrity();
-    let was_corrupt = matches!(integrity, super::super::core::updater::state::StateIntegrity::Corrupt);
+    let was_corrupt = matches!(integrity, StateIntegrity::Corrupt);
     let mut opts = CheckOptions::for_current_build(UpdateChannel::Stable);
     opts.allow_downgrade = args.allow_downgrade;
     if !args.json {
@@ -40,24 +40,43 @@ pub fn run(args: &UpdateArgs) -> i32 {
     }
     let outcome = match check_for_update(&opts, &mut state) {
         Ok(o) => {
-            if was_corrupt {
-                match state.rebuild_over_corrupt(&crate::core::updater::paths::state_file()) {
-                    Ok(()) if !args.json => {
-                        eprintln!("注意：更新记录文件已损坏，本次检查后已重建（坏文件备份为 update-state.json.bak-corrupt）。");
+            match integrity {
+                StateIntegrity::Corrupt => {
+                    match state.rebuild_over_corrupt(&crate::core::updater::paths::state_file()) {
+                        Ok(()) if !args.json => {
+                            eprintln!("注意：更新记录文件已损坏，本次检查后已重建（坏文件备份为 update-state.json.bak-corrupt）。");
+                        }
+                        Err(e) if !args.json => {
+                            eprintln!("警告：更新记录文件损坏且重建失败（{e}），请手动检查。");
+                        }
+                        _ => {}
                     }
-                    Err(e) if !args.json => {
-                        eprintln!("警告：更新记录文件损坏且重建失败（{e}），请手动检查。");
-                    }
-                    _ => {}
                 }
-            } else {
-                let _ = state.save();
+                StateIntegrity::Unreadable => {
+                    // #433 点查：不可读成功路径此前被 state.save() 静默覆盖（000→644）。
+                    // 与 GUI 对齐：说明「无法读写，已按本次检查结果重建」。
+                    let _ = state.save();
+                    if !args.json {
+                        eprintln!("注意：更新记录文件无法读写，已按本次检查结果重建，请留意文件权限。");
+                    }
+                }
+                _ => {
+                    let _ = state.save();
+                }
             }
             o
         }
         Err(e) => {
-            if was_corrupt && !args.json {
-                eprintln!("警告：更新记录文件损坏；本次检查未成功，未改动该文件。");
+            if !args.json {
+                match integrity {
+                    StateIntegrity::Corrupt => {
+                        eprintln!("警告：更新记录文件损坏；本次检查未成功，未改动该文件。");
+                    }
+                    StateIntegrity::Unreadable => {
+                        eprintln!("警告：更新记录文件无法读写；本次检查未成功，未改动该文件，请手动检查文件权限。");
+                    }
+                    _ => {}
+                }
             }
             return report_error(args, &e);
         }
