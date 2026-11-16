@@ -887,6 +887,56 @@ mod shell_pump {
         }
     }
 
+    /// 把 libssh2 通道里已经拿到的 PTY 输出立刻上送 UI，并重新武装 Oneshot。
+    ///
+    /// 带外查询 / `ExecRemote` 与交互 PTY 共用同一 TCP 套接字：exec 期间 libssh2
+    /// 可能已把登录提示符收进通道缓冲，内核套接字此时不再可读。若只在 poll
+    /// 报 readable 时才 `pump_channel_reads`，首屏会一直等到 keepalive（默认 30s）
+    /// 才出现。超时路径同样要排空，避免其它漏掉的边沿把输出留在缓冲里。
+    /// 失败时上送 Disconnected 并返回 false，由调用方退出泵线程。
+    fn drain_pty_and_rearm(
+        channel: &Arc<Mutex<Channel>>,
+        read_buffer: &mut [u8; 16384],
+        message_tx: &Sender<SshMessage>,
+        session_id: SshSessionId,
+        upload_bypass: &Arc<Mutex<Option<Arc<UploadPtyBypass>>>>,
+        pump_poller: &polling::Poller,
+        shell_socket: PumpSocket,
+    ) -> bool {
+        let mut ch = match channel.lock() {
+            Ok(g) => g,
+            Err(e) => {
+                log::error!("shell pump drain: channel mutex poisoned: {}", e);
+                let _ = message_tx.send(SshMessage::Disconnected { session_id });
+                notify_ui(session_id, "disconnected", 0);
+                return false;
+            }
+        };
+        if SshManager::pump_channel_reads(
+            &mut *ch,
+            read_buffer,
+            message_tx,
+            session_id,
+            upload_bypass,
+            None,
+        )
+        .is_err()
+        {
+            return false;
+        }
+        if let Err(e) = shell_pump_rearm_readable(pump_poller, shell_socket) {
+            log::warn!(
+                "PUMP_REARM_ERR session={} {} —— 停止泵线程，走会话清理",
+                session_id,
+                e
+            );
+            let _ = message_tx.send(SshMessage::Disconnected { session_id });
+            notify_ui(session_id, "disconnected", 0);
+            return false;
+        }
+        true
+    }
+
     fn shell_pump_loop(
         channel: Arc<Mutex<Channel>>,
         shell_socket: PumpSocket,
@@ -959,48 +1009,18 @@ mod shell_pump {
                 }
             }
 
-            // socket 可读 → 先排空 PTY（回显/输出立即上送）。
+            // socket 可读 → 先排空 PTY（回显/输出立即上送）并 rearm。
+            // Mutex poison / EOF / rearm 失败由 drain_pty_and_rearm 走 Disconnected。
             if poll_events.iter().any(|ev| ev.key == PUMP_POLL_SOCKET_KEY) {
-                let mut ch = match channel.lock() {
-                    Ok(g) => g,
-                    Err(e) => {
-                        // Mutex::lock() 在锁竞争时会阻塞，只有 poison（先前持有者
-                        // panic）才返回 Err。与其它泵内 poison 路径一致：可见日志 +
-                        // 走既有 Disconnected 清理退出。Oneshot 事件已被本次 wait 消费，
-                        // 若留下活循环将再也收不到 socket 事件（假死），故不空转。
-                        log::error!("shell pump readable: channel mutex poisoned: {}", e);
-                        let _ = message_tx.send(SshMessage::Disconnected { session_id });
-                        notify_ui(session_id, "disconnected", 0);
-                        return;
-                    }
-                };
-                if SshManager::pump_channel_reads(
-                    &mut *ch,
+                if !drain_pty_and_rearm(
+                    &channel,
                     &mut read_buffer,
                     &message_tx,
                     session_id,
                     &upload_bypass_slot,
-                    None,
-                )
-                .is_err()
-                {
-                    // 泵退出路径：EOF / 读错误均已上送 Disconnected。此时会话
-                    // 正在销毁、句柄即将关闭，绝不能再对它 modify/rearm。
-                    return;
-                }
-                // Oneshot rearm（#423 修复）：上一轮 socket readable 事件已被消费
-                // （排空到 EAGAIN 或读到数据均可），必须重新注册 readable，
-                // 否则 polling v3 Oneshot 模式下后续输出不再唤醒泵线程。
-                // 句柄生命周期由 Session 保证；失败必须可见并退出，避免活着的
-                // 会话静默假死（数据在内核但泵永不醒）。
-                if let Err(e) = shell_pump_rearm_readable(&pump_poller, shell_socket) {
-                    log::warn!(
-                        "PUMP_REARM_ERR session={} {} —— 停止泵线程，走会话清理",
-                        session_id,
-                        e
-                    );
-                    let _ = message_tx.send(SshMessage::Disconnected { session_id });
-                    notify_ui(session_id, "disconnected", 0);
+                    &pump_poller,
+                    shell_socket,
+                ) {
                     return;
                 }
             }
@@ -1060,6 +1080,8 @@ mod shell_pump {
                                             &mut read_buffer,
                                             &upload_bypass_slot,
                                             &interrupt_rx,
+                                            &pump_poller,
+                                            shell_socket,
                                         ) {
                                             return;
                                         }
@@ -1074,6 +1096,8 @@ mod shell_pump {
                                             &mut read_buffer,
                                             &upload_bypass_slot,
                                             &interrupt_rx,
+                                            &pump_poller,
+                                            shell_socket,
                                         );
                                         if !ok {
                                             return;
@@ -1125,16 +1149,41 @@ mod shell_pump {
                     &mut read_buffer,
                     &upload_bypass_slot,
                     &interrupt_rx,
+                    &pump_poller,
+                    shell_socket,
                 ) {
                     return;
                 }
             } else {
-                // poll 超时：tick keepalive 兜底。socket 事件已在上方处理。
+                // poll 超时：先排空通道里已有的 PTY 输出（内核套接字未必仍可读），
+                // 再 tick keepalive；心跳若又读入数据，再排一次。
+                if !drain_pty_and_rearm(
+                    &channel,
+                    &mut read_buffer,
+                    &message_tx,
+                    session_id,
+                    &upload_bypass_slot,
+                    &pump_poller,
+                    shell_socket,
+                ) {
+                    return;
+                }
                 let __s = std::time::Instant::now();
                 mgr.tick_session_keepalive(session_id);
                 let __ka = __s.elapsed();
                 if __ka.as_millis() as u64 >= 200 {
                     log::warn!("PUMP_IDLE_SLOW session={} keepalive_ms={}", session_id, __ka.as_millis());
+                }
+                if !drain_pty_and_rearm(
+                    &channel,
+                    &mut read_buffer,
+                    &message_tx,
+                    session_id,
+                    &upload_bypass_slot,
+                    &pump_poller,
+                    shell_socket,
+                ) {
+                    return;
                 }
                 // pump_rx 断开：handle drop 后 try_send 会失败，泵由 Disconnected/EOF 读路径退出。
             }
@@ -1161,6 +1210,8 @@ mod shell_pump {
         read_buffer: &mut [u8; 16384],
         upload_bypass: &Arc<Mutex<Option<Arc<UploadPtyBypass>>>>,
         interrupt_rx: &Receiver<Vec<u8>>,
+        pump_poller: &polling::Poller,
+        shell_socket: PumpSocket,
     ) -> bool {
         let mut next = Some(cmd);
         while let Some(cmd) = next.take() {
@@ -1197,6 +1248,10 @@ mod shell_pump {
                 other => (other, None),
             };
 
+            let needs_post_exec_drain = matches!(
+                cmd,
+                ShellPumpCommand::ExecRemote { .. } | ShellPumpCommand::SessionJob(_)
+            );
             if !process_one_command_sync(
                 mgr,
                 channel,
@@ -1206,6 +1261,21 @@ mod shell_pump {
                 read_buffer,
                 upload_bypass,
             ) {
+                return false;
+            }
+            // Exec / SessionJob 与 PTY 共用同一套接字，结束后必须立刻排空
+            // 通道缓冲并 rearm，不能等到下一次 socket readable 或 30s 心跳。
+            if needs_post_exec_drain
+                && !drain_pty_and_rearm(
+                    channel,
+                    read_buffer,
+                    message_tx,
+                    session_id,
+                    upload_bypass,
+                    pump_poller,
+                    shell_socket,
+                )
+            {
                 return false;
             }
 
