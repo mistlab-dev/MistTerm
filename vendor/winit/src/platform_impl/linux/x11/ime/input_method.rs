@@ -63,11 +63,19 @@ impl InputMethod {
             std::slice::from_raw_parts((*styles).supported_styles, (*styles).count_styles as _)
                 .iter()
                 .for_each(|style| match *style {
-                    XIM_PREEDIT_STYLE => {
-                        preedit_style = Some(Style::Preedit(*style));
+                    // MISTTERM (#431 round-10 定性): ibus 的 XIM 桥在
+                    // PreeditCallbacks 样式下**不通过 Draw 回调下发预编辑文本**
+                    //（Draw 全是 NULL text 的删除通知，客户端缓冲恒空），提交串也
+                    // 不走 lookup/合成按键回到客户端——预编辑由 ibus 自己的面板
+                    // 显示。改用 XIMPreeditNothing 样式后，ibus 在提交键上做
+                    // XIM 同步 commit，客户端经 Xutf8LookupString 收到完整串
+                    // （GTK 的 XIM 后端即此行为，本机已实证）。
+                    // 预编辑显示交给 ibus 面板（box 上本就如此）。
+                    XIM_NOTHING_STYLE => {
+                        preedit_style = Some(Style::Nothing(*style));
                     },
-                    XIM_NOTHING_STYLE if preedit_style.is_none() => {
-                        preedit_style = Some(Style::Nothing(*style))
+                    XIM_PREEDIT_STYLE if preedit_style.is_none() => {
+                        preedit_style = Some(Style::Preedit(*style));
                     },
                     XIM_NONE_STYLE => none_style = Some(Style::None(*style)),
                     _ => (),
