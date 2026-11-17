@@ -317,7 +317,11 @@ impl MistTermApp {
             .name("mist-update-check".into())
             .spawn(move || {
                 // #417：区分 FirstRun / Ok / Corrupt / Unreadable，不再静默当首次安装。
-                let (mut state, integrity) = UpdateState::load_with_integrity();
+                // #435：状态文件按渠道隔离（稳定旧路径兼容，预览独立文件）。
+                let state_path = updater::paths::state_file_for(channel);
+                // #433：四态完整性判定与写盘保护沿用。
+                let (mut state, integrity) =
+                    UpdateState::load_from_with_integrity(&state_path);
                 if matches!(integrity, updater::state::StateIntegrity::Corrupt) {
                     log::warn!("updater: state file corrupt; will rebuild after a successful check");
                 }
@@ -336,14 +340,14 @@ impl MistTermApp {
                 if cid_new {
                     // 首次生成的 cid 立即落盘：即便本次检查失败，实例 ID 也保持稳定。
                     // （仅 FirstRun/Ok 路径；损坏态不写盘。）
-                    let _ = state.save();
+                    let _ = state.save_to(&state_path);
                 }
                 let opts = CheckOptions::for_current_build(channel);
                 let result = updater::check_for_update(&opts, &mut state);
                 if result.is_ok() {
                     // Corrupt：备份坏文件后再写重建状态；备份/写盘失败保留现场并告警。
                     if matches!(integrity, updater::state::StateIntegrity::Corrupt) {
-                        match state.rebuild_over_corrupt(&updater::paths::state_file()) {
+                        match state.rebuild_over_corrupt(&state_path) {
                             Ok(()) => log::warn!(
                                 "updater: corrupt state rebuilt (backup at update-state.json.bak-corrupt)"
                             ),
@@ -352,7 +356,7 @@ impl MistTermApp {
                             }
                         }
                     } else {
-                        let _ = state.save();
+                        let _ = state.save_to(&state_path);
                     }
                 }
                 // 检查失败时不写盘：坏文件不被空状态覆盖（#417）。
@@ -656,11 +660,12 @@ impl MistTermApp {
 
     fn update_skip_version(&mut self) {
         if let Some(info) = &self.update_ui.info {
-            let mut state = UpdateState::load();
+            // #435：按渠道读写状态。
+            let path = updater::paths::state_file_for(self.app_settings.update.channel);
+            let mut state = UpdateState::load_from(&path);
             state.skipped_version = Some(info.manifest.version.clone());
             // #417 复审：损坏/不可读状态不覆盖坏文件。
-            let (_, integrity) =
-                UpdateState::load_from_with_integrity(&updater::paths::state_file());
+            let (_, integrity) = UpdateState::load_from_with_integrity(&path);
             if !matches!(
                 integrity,
                 updater::state::StateIntegrity::Corrupt

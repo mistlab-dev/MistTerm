@@ -30,9 +30,7 @@ pub fn run(args: &UpdateArgs) -> i32 {
     if args.rollback {
         return run_rollback(args);
     }
-    // #435：CLI 沿用用户持久化的更新渠道（设置界面切换后 CLI 一致），不硬编码 Stable。
-    // 状态文件按渠道隔离（预览/稳定各自的「最高已见」互不影响）。
-    // #417/#433：区分损坏状态；检查成功后备份坏文件并重建，且告知用户。
+    // #417：CLI 同样区分损坏状态；检查成功后备份坏文件并重建，且告知用户。
     let channel = crate::core::app_settings::AppSettings::load().update.channel;
     let state_path = crate::core::updater::paths::state_file_for(channel);
     let (mut state, integrity) = UpdateState::load_from_with_integrity(&state_path);
@@ -57,7 +55,8 @@ pub fn run(args: &UpdateArgs) -> i32 {
                     }
                 }
                 StateIntegrity::Unreadable => {
-                    // 不可读成功路径此前被静默覆盖（000→644）。与 GUI 对齐。
+                    // #433 点查：不可读成功路径此前被 state.save() 静默覆盖（000→644）。
+                    // 与 GUI 对齐：说明「无法读写，已按本次检查结果重建」。
                     let _ = state.save_to(&state_path);
                     if !args.json {
                         eprintln!("注意：更新记录文件无法读写，已按本次检查结果重建，请留意文件权限。");
