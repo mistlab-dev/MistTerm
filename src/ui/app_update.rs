@@ -314,19 +314,21 @@ impl MistTermApp {
         let spawned = std::thread::Builder::new()
             .name("mist-update-check".into())
             .spawn(move || {
-                let mut state = UpdateState::load();
+                // #435：按渠道加载状态（稳定旧路径兼容，预览独立文件，互不影响）。
+                let state_path = updater::paths::state_file_for(channel);
+                let mut state = UpdateState::load_from(&state_path);
                 // #149：匿名使用统计 ping，搭版本检查的车（同线程、失败静默）。
                 let cid_new = state.client_id.is_none();
                 let cid = updater::ping::ensure_client_id(&mut state);
                 updater::ping::send_startup_ping(&cid);
                 if cid_new {
                     // 首次生成的 cid 立即落盘：即便本次检查失败，实例 ID 也保持稳定。
-                    let _ = state.save();
+                    let _ = state.save_to(&state_path);
                 }
                 let opts = CheckOptions::for_current_build(channel);
                 let result = updater::check_for_update(&opts, &mut state);
                 if result.is_ok() {
-                    let _ = state.save();
+                    let _ = state.save_to(&state_path);
                 }
                 let _ = tx.send(Msg::Checked { manual, result });
                 ctx2.request_repaint();
@@ -614,9 +616,11 @@ impl MistTermApp {
 
     fn update_skip_version(&mut self) {
         if let Some(info) = &self.update_ui.info {
-            let mut state = UpdateState::load();
+            let ch = self.app_settings.update.channel;
+            let path = updater::paths::state_file_for(ch);
+            let mut state = UpdateState::load_from(&path);
             state.skipped_version = Some(info.manifest.version.clone());
-            let _ = state.save();
+            let _ = state.save_to(&path);
         }
         self.update_ui.show_dialog = false;
         self.update_ui.phase = Phase::Idle;

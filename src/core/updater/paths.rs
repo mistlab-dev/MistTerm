@@ -18,12 +18,22 @@ fn test_home() -> Option<PathBuf> {
 }
 
 pub fn state_file() -> PathBuf {
+    state_file_for(super::UpdateChannel::Stable)
+}
+
+/// #435：按渠道隔离状态文件——稳定渠道沿用旧路径（老用户兼容），预览渠道独立文件，
+/// 两渠道的最高已见版本互不影响。
+pub fn state_file_for(channel: super::UpdateChannel) -> PathBuf {
+    let name = match channel {
+        super::UpdateChannel::Stable => "update-state.json",
+        super::UpdateChannel::Preview => "update-state-preview.json",
+    };
     if let Some(h) = test_home() {
-        return h.join("update-state.json");
+        return h.join(name);
     }
     let mut p = dirs::config_dir().unwrap_or_else(|| PathBuf::from("."));
     p.push("mistterm");
-    p.push("update-state.json");
+    p.push(name);
     p
 }
 

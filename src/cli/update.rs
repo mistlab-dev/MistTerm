@@ -30,15 +30,19 @@ pub fn run(args: &UpdateArgs) -> i32 {
     if args.rollback {
         return run_rollback(args);
     }
-    let mut state = UpdateState::load();
-    let mut opts = CheckOptions::for_current_build(UpdateChannel::Stable);
+    // #435：CLI 沿用用户持久化的更新渠道（设置界面切换后 CLI 一致），不硬编码 Stable。
+    // 状态文件按渠道隔离（预览/稳定各自的「最高已见」互不影响）。
+    let channel = crate::core::app_settings::AppSettings::load().update.channel;
+    let state_path = crate::core::updater::paths::state_file_for(channel);
+    let mut state = UpdateState::load_from(&state_path);
+    let mut opts = CheckOptions::for_current_build(channel);
     opts.allow_downgrade = args.allow_downgrade;
     if !args.json {
         eprintln!("正在检查更新…");
     }
     let outcome = match check_for_update(&opts, &mut state) {
         Ok(o) => {
-            let _ = state.save();
+            let _ = state.save_to(&state_path);
             o
         }
         Err(e) => return report_error(args, &e),
