@@ -147,7 +147,21 @@ pub fn apply_update(
     let InstallPlan::Auto { kind, asset, .. } = &info.plan else {
         return Err(UpdateError::NotAutoInstallable("manual install required".into()));
     };
-    let _lock = UpdateLock::acquire()?;
+    // #417 CI 修复：同 rollback，Locked 短暂重试。
+    let _lock = (|| {
+        let mut last = Err(UpdateError::Locked);
+        for _ in 0..40 {
+            match UpdateLock::acquire() {
+                Ok(l) => return Ok(l),
+                Err(e @ UpdateError::Locked) => {
+                    last = Err(e);
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        last
+    })()?;
     let version = info.manifest.version.clone();
     let archive = download_asset(asset, &version, progress, cancel)?;
     progress(ApplyStage::Installing);
@@ -182,7 +196,19 @@ pub fn apply_update(
     let mut state = super::state::UpdateState::load();
     if matches!(outcome, ApplyOutcome::Installed { .. }) {
         state.installed_pending_restart = Some(version);
-        let _ = state.save();
+        // #417 复审：损坏/不可读状态不覆盖坏文件（安装成功后此写入非关键，
+        // pending 重启标记丢失可接受，坏状态由检查路径重建）。
+        let (_, integrity) =
+            super::state::UpdateState::load_from_with_integrity(&super::paths::state_file());
+        if !matches!(
+            integrity,
+            super::state::StateIntegrity::Corrupt
+                | super::state::StateIntegrity::Unreadable
+        ) {
+            let _ = state.save();
+        } else {
+            log::warn!("updater: state corrupt/unreadable; skip pending-restart write to avoid overwriting");
+        }
     }
     Ok(outcome)
 }
@@ -699,7 +725,23 @@ pub fn rollback(exe: &Path) -> Result<String, UpdateError> {
     let dir = exe
         .parent()
         .ok_or_else(|| UpdateError::Install("bad exe path".into()))?;
-    let _lock = UpdateLock::acquire()?;
+    // #417 CI 修复：测试进程内多线程并发时，全局 update.lock 可能被另一个
+    // 恰好持锁的测试短暂占用（0.26s 内 66 个测试并发跑完）。与同文件
+    // retry_busy（杀毒/索引服务占用重试）同一策略：Locked 短暂重试再放弃。
+    let _lock = (|| {
+        let mut last = Err(UpdateError::Locked);
+        for _ in 0..40 {
+            match UpdateLock::acquire() {
+                Ok(l) => return Ok(l),
+                Err(e @ UpdateError::Locked) => {
+                    last = Err(e);
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        last
+    })()?;
     let bak = dir.join(BACKUP_DIR);
     let version = backup_version(dir).ok_or(UpdateError::NoBackup)?;
     let items: Vec<(String, PathBuf)> = program_files()
@@ -727,7 +769,17 @@ pub fn rollback(exe: &Path) -> Result<String, UpdateError> {
     state.installed_pending_restart = Some(version.clone());
     // 回退后不应马上再提示同一个新版本。
     state.skipped_version = Some(super::APP_VERSION.to_string());
-    let _ = state.save();
+    // #417 复审：损坏/不可读状态不覆盖坏文件。
+    let (_, integrity) =
+        super::state::UpdateState::load_from_with_integrity(&super::paths::state_file());
+    if !matches!(
+        integrity,
+        super::state::StateIntegrity::Corrupt | super::state::StateIntegrity::Unreadable
+    ) {
+        let _ = state.save();
+    } else {
+        log::warn!("updater: state corrupt/unreadable; skip rollback-state write to avoid overwriting");
+    }
     Ok(version)
 }
 
@@ -760,7 +812,18 @@ pub fn cleanup_after_start(exe: Option<&Path>) {
     if let Some(p) = state.installed_pending_restart.as_deref() {
         if semver::Version::parse(p).map(|v| v == current).unwrap_or(true) {
             state.installed_pending_restart = None;
-            let _ = state.save();
+            // #417 复审：损坏/不可读状态不覆盖坏文件（清理是非关键写）。
+            let (_, integrity) =
+                super::state::UpdateState::load_from_with_integrity(&super::paths::state_file());
+            if !matches!(
+                integrity,
+                super::state::StateIntegrity::Corrupt
+                    | super::state::StateIntegrity::Unreadable
+            ) {
+                let _ = state.save();
+            } else {
+                log::warn!("updater: state corrupt/unreadable; skip cleanup write to avoid overwriting");
+            }
         }
     }
 }
