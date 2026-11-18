@@ -2748,7 +2748,9 @@ impl SftpPanel {
     }
 
     fn localize_local_list_error(ctx: &egui::Context, msg: &str) -> String {
-        if msg.contains("Permission denied") {
+        // #440 点查：实机错误为 `[SFTP3] permission denied`（小写 p、含前缀），
+        // 大小写敏感 contains 对不上——改用小写化匹配。
+        if msg.to_lowercase().contains("permission denied") {
             return crate::i18n::tr(
                 ctx,
                 "No permission to read this folder. Pick another path or tap ↑ Parent.",
@@ -2887,7 +2889,9 @@ impl SftpPanel {
             )
             .to_string();
         }
-        if msg.contains("Permission denied") {
+        // #440 点查：实机错误为 `[SFTP3] permission denied`（小写 p、含前缀），
+        // 大小写敏感 contains 对不上——改用小写化匹配。
+        if msg.to_lowercase().contains("permission denied") {
             return crate::i18n::tr(
                 ctx,
                 "No permission to read this folder. Pick another path or tap ↑ Parent.",
@@ -6246,6 +6250,21 @@ mod tests {
         );
         let shown2 = SftpPanel::local_path_display(Path::new("~\\Downloads"));
         assert!(!shown2.contains("~/") && !shown2.starts_with('~'), "got {shown2}");
+    }
+
+    #[test]
+    fn localize_list_error_matches_lowercase_sftp3_permission_denied() {
+        // #440 点查：实机错误为 `Failed to read directory ...: [SFTP3] permission denied`
+        //（小写 p、带前缀），大小写敏感 contains 对不上——必须小写化匹配。
+        let ctx = egui::Context::default();
+        crate::i18n::set_language(&ctx, crate::i18n::UiLanguage::Zh);
+        let msg = "Failed to read directory /home/mist410s/sftp-denied: [SFTP3] permission denied";
+        let got = SftpPanel::localize_list_error(&ctx, msg);
+        assert_eq!(got, "没有权限读取该目录，请换路径或点「上级」返回。");
+        // 大写 P 的旧形态不回归。
+        crate::i18n::set_language(&ctx, crate::i18n::UiLanguage::Zh);
+        let got2 = SftpPanel::localize_list_error(&ctx, "Permission denied");
+        assert_eq!(got2, "没有权限读取该目录，请换路径或点「上级」返回。");
     }
 
     #[test]
