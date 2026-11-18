@@ -1,4 +1,6 @@
-//! 检查更新：按顺序请求清单 → 验签 → 防降级 / 防冻结 → 决定能否自动安装。
+//! 检查更新：遍历全部清单源验签（多源取最高）→ 防降级（下限含当前运行版本）
+//! → 决定能否自动安装。多源比较是有边界的新鲜度策略，不构成完整防冻结
+//! （所有源同时重放同一份旧清单仍无解，见 docs/release/AUTO_UPDATE.md）。
 
 use std::path::PathBuf;
 
@@ -202,6 +204,10 @@ pub fn fetch_verified_manifest(
     let fetcher = Fetcher::for_manifest()?;
     let mut last_err: Option<UpdateError> = None;
     let mut saw_stale = false;
+    // #417 架构锁定 1：有边界的多源选取——遍历全部源验签，在有效（验签过且
+    // 非 stale）结果里取版本最高（同版本比 pub_date），不再第一个通过就返回。
+    // 修复回归：官网镜像重放已接受的 V 时，GitHub 已有 V+1 也能被发现。
+    let mut best: Option<(Manifest, String)> = None;
     for url in &opts.manifest_urls {
         let sig_url = format!("{url}.minisig");
         let attempt = (|| {
@@ -211,13 +217,28 @@ pub fn fetch_verified_manifest(
         })();
         match attempt {
             Ok(m) => {
-                if state.is_stale(&m.semver(), m.pub_date_utc()) {
+                if state.is_stale(
+                    &m.semver(),
+                    m.pub_date_utc(),
+                    Some(&opts.current),
+                    opts.allow_downgrade,
+                ) {
                     log::warn!("updater: stale manifest {} from {url}, trying next source", m.version);
                     saw_stale = true;
                     continue;
                 }
                 log::info!("updater: manifest {} verified from {url}", m.version);
-                return Ok((m, url.clone()));
+                let replace = match &best {
+                    None => true,
+                    Some((cur, _)) => {
+                        m.semver() > cur.semver()
+                            || (m.semver() == cur.semver()
+                                && m.pub_date_utc() > cur.pub_date_utc())
+                    }
+                };
+                if replace {
+                    best = Some((m, url.clone()));
+                }
             }
             Err(e) => {
                 log::info!("updater: manifest source {url} failed: {e}");
@@ -231,6 +252,13 @@ pub fn fetch_verified_manifest(
                 }
             }
         }
+    }
+    if saw_stale {
+        return Err(UpdateError::StaleManifest);
+    }
+    // #417：有有效结果取最高；全部 stale 返回 StaleManifest；否则原 last_err。
+    if let Some((m, url)) = best {
+        return Ok((m, url));
     }
     if saw_stale {
         return Err(UpdateError::StaleManifest);
@@ -473,5 +501,46 @@ mod tests {
         };
         let mut st = UpdateState::default();
         assert!(matches!(check_for_update(&opts, &mut st), Err(UpdateError::NoTrustedKeys)));
+    }
+}
+
+
+#[cfg(test)]
+mod multi_source_tests {
+    use super::*;
+    use crate::core::updater::state::UpdateState;
+
+    /// 多源选取的「取最高」逻辑不依赖网络：直接对 best-selection 排序规则做
+    /// 单元级验证（fetch_verified_manifest 的选取分支与该规则一致）。
+    /// 网络级双源用例见 scripts/update-e2e（MIST_UPDATE_MANIFEST_URL 逗号分隔）。
+    #[test]
+    fn stale_floor_uses_current_running_version() {
+        // 验收：无状态文件（首次），当前运行 1.2.0，源为 1.1.9 → stale；
+        // 源为 1.2.0/1.3.0 → 非 stale。
+        let st = UpdateState::default();
+        let cur = semver::Version::parse("1.2.0").unwrap();
+        let d = chrono::DateTime::parse_from_rfc3339("2026-10-06T00:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        assert!(st.is_stale(&semver::Version::parse("1.1.9").unwrap(), Some(d), Some(&cur), false));
+        assert!(!st.is_stale(&cur, Some(d), Some(&cur), false));
+        assert!(!st.is_stale(&semver::Version::parse("1.3.0").unwrap(), Some(d), Some(&cur), false));
+    }
+
+    #[test]
+    fn stale_floor_survives_state_loss() {
+        // 验收：先记 V_high，再模拟状态丢失（重置为 Default），低于当前运行版本的清单仍 stale。
+        let mut st = UpdateState::default();
+        st.record_seen(&semver::Version::parse("1.3.0").unwrap(), "2026-11-05T00:00:00Z");
+        let cur = semver::Version::parse("1.2.0").unwrap();
+        let d = chrono::DateTime::parse_from_rfc3339("2026-11-06T00:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        // 状态还在：1.2.0 被 1.3.0 下限挡住。
+        assert!(st.is_stale(&cur, Some(d), Some(&cur), false));
+        // 状态丢失（空状态）：当前运行版本 1.2.0 仍兜底。
+        let lost = UpdateState::default();
+        assert!(lost.is_stale(&semver::Version::parse("1.1.9").unwrap(), Some(d), Some(&cur), false));
+        assert!(!lost.is_stale(&cur, Some(d), Some(&cur), false));
     }
 }

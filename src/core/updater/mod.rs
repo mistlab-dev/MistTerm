@@ -24,7 +24,7 @@ pub mod verify;
 pub use check::{check_for_update, CheckOptions, CheckOutcome, InstallPlan, ManualReason, UpdateInfo};
 pub use error::UpdateError;
 pub use manifest::{Manifest, PlatformAsset};
-pub use state::UpdateState;
+pub use state::{StateIntegrity, UpdateState};
 
 use serde::{Deserialize, Serialize};
 
