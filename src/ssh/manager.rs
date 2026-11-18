@@ -375,6 +375,7 @@ impl SshSessionHandle {
             interrupt_tx,
             resize_tx,
             upload_bypass_slot: Arc::new(Mutex::new(None)),
+            pump_poller: Arc::new(polling::Poller::new().expect("test poller")),
         };
         (handle, pump_rx, interrupt_rx, resize_rx)
     }
