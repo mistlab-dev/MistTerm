@@ -1995,6 +1995,19 @@ impl SftpPanel {
     }
 
     /// 工具条动作：图标旁边直接写动作，不必悬停才知道用途。
+    /// #441：窄面板下按钮降级为图标-only 的判定——4 按钮 + 间距 + 路径编辑剩余宽
+    /// 不足以容纳全标签时启用 compact。
+    fn flux_row_compact(ui: &egui::Ui, theme: &Theme, labels: &[&str]) -> bool {
+        let hit = theme.size_panel_header_control_h();
+        let font = egui::FontId::proportional(theme.font_size_caption());
+        let mut need = 0.0;
+        for label in labels {
+            let galley =
+                ui.ctx().fonts_mut(|f| f.layout_no_wrap(label.to_string(), font.clone(), theme.text_primary()));
+            need += hit + 2.0 + galley.size().x + 4.0;
+        }
+        need + 12.0 > ui.max_rect().width()
+    }
     fn flux_action(
         ui: &mut egui::Ui,
         theme: &Theme,
@@ -2003,6 +2016,19 @@ impl SftpPanel {
         tip: &str,
         enabled: bool,
     ) -> bool {
+        Self::flux_action_compact(ui, theme, icon, label, tip, enabled, false)
+    }
+
+    /// #441：compact=true 时只画图标（hover 保留全称），防止窄面板下按钮被裁。
+    fn flux_action_compact(
+        ui: &mut egui::Ui,
+        theme: &Theme,
+        icon: crate::ui::icons::IconId,
+        label: &str,
+        tip: &str,
+        enabled: bool,
+        compact: bool,
+    ) -> bool {
         let hit = theme.size_panel_header_control_h();
         let color = if enabled {
             theme.text_primary()
@@ -2010,9 +2036,14 @@ impl SftpPanel {
             theme.text_tertiary()
         };
         let font = egui::FontId::proportional(theme.font_size_caption());
-        let galley = ui.ctx().fonts_mut(|f| f.layout_no_wrap(label.to_string(), font, color));
+        let galley =
+            ui.ctx().fonts_mut(|f| f.layout_no_wrap(label.to_string(), font.clone(), color));
         let gap = 2.0;
-        let w = hit + gap + galley.size().x + 4.0;
+        let w = if compact {
+            hit + 4.0
+        } else {
+            hit + gap + galley.size().x + 4.0
+        };
         let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, hit), egui::Sense::click());
         if resp.hovered() && enabled {
             ui.painter().rect_filled(
@@ -2029,14 +2060,16 @@ impl SftpPanel {
             color,
             (hit - 2.0).min(theme.size_icon_glyph()),
         );
-        ui.painter().galley(
-            egui::pos2(
-                icon_rect.right() + gap,
-                rect.center().y - galley.size().y * 0.5,
-            ),
-            galley,
-            color,
-        );
+        if !compact {
+            ui.painter().galley(
+                egui::pos2(
+                    icon_rect.right() + gap,
+                    rect.center().y - galley.size().y * 0.5,
+                ),
+                galley,
+                color,
+            );
+        }
         enabled && resp.on_hover_text(tip).clicked()
     }
 
@@ -5511,13 +5544,19 @@ impl SftpPanel {
         let up_ok = self.local_cwd.parent().is_some();
         let can_upload = self.has_local_upload_selection();
         Self::flux_tool_row(ui, theme, |ui| {
-            if Self::flux_action(
+            let local_compact = Self::flux_row_compact(
+                ui,
+                theme,
+                &["上级", "刷新", "浏览", "上传所选"],
+            );
+            if Self::flux_action_compact(
                 ui,
                 theme,
                 crate::ui::icons::IconId::ChevronUp,
                 crate::i18n::tr(ctx, "Up", "上级"),
                 crate::i18n::tr(ctx, "Up", "上级"),
                 up_ok,
+                local_compact,
             ) {
                 if let Some(parent) = self.local_cwd.parent() {
                     self.local_cwd = parent.to_path_buf();
@@ -5695,43 +5734,53 @@ impl SftpPanel {
         let busy = !self.busy;
         let can_download = self.has_remote_download_selection();
         Self::flux_tool_row(ui, theme, |ui| {
-            if Self::flux_action(
+            // #441：窄面板下按钮降级为图标-only，防裁切。
+            let remote_compact = Self::flux_row_compact(
+                ui,
+                theme,
+                &["上级", "刷新", "新建", "下载所选"],
+            );
+            if Self::flux_action_compact(
                 ui,
                 theme,
                 crate::ui::icons::IconId::ChevronUp,
                 crate::i18n::tr(ctx, "Up", "上级"),
                 crate::i18n::tr(ctx, "Up", "上级"),
                 busy,
+                remote_compact,
             ) {
                 self.spawn_list(handle, Self::remote_parent_dir(&self.cwd), ctx);
             }
-            if Self::flux_action(
+            if Self::flux_action_compact(
                 ui,
                 theme,
                 crate::ui::icons::IconId::Refresh,
                 crate::i18n::tr(ctx, "Refresh", "刷新"),
                 crate::i18n::tr(ctx, "Refresh", "刷新"),
                 busy,
+                remote_compact,
             ) {
                 self.spawn_list(handle, self.cwd.clone(), ctx);
             }
-            if Self::flux_action(
+            if Self::flux_action_compact(
                 ui,
                 theme,
                 crate::ui::icons::IconId::Plus,
                 crate::i18n::tr(ctx, "New", "新建"),
                 crate::i18n::tr(ctx, "New folder", "新建目录"),
                 busy,
+                remote_compact,
             ) {
                 self.show_mkdir_dialog = true;
             }
-            if Self::flux_action(
+            if Self::flux_action_compact(
                 ui,
                 theme,
                 crate::ui::icons::IconId::Download,
                 crate::i18n::tr(ctx, "Download", "下载"),
                 crate::i18n::tr(ctx, "Download selected remote item(s)", "下载所选"),
                 can_download,
+                remote_compact,
             ) {
                 self.download_selected_remote(handle, ctx);
             }
