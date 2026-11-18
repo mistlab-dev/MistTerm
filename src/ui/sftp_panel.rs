@@ -5783,6 +5783,26 @@ impl SftpPanel {
                     }
                 }
                 ui.set_max_width(table_cols.total);
+                // #437：先报错（人话 + 不只是「空闲」页脚），空目录再给明确空态——
+                // 两者不混同；本机一侧不受影响，不冻结整窗。
+                if let Some(err) = &self.list_err {
+                    ui.label(
+                        egui::RichText::new(Self::localize_list_error(ctx, err))
+                            .small()
+                            .color(theme.red_color()),
+                    );
+                    ui.add_space(theme.spacing_xs());
+                } else if self.entries.is_empty() && !self.busy {
+                    ui.label(
+                        egui::RichText::new(crate::i18n::tr(
+                            ctx,
+                            "This folder is empty.",
+                            "此目录为空。",
+                        ))
+                        .small()
+                        .color(theme.text_tertiary()),
+                    );
+                }
                 let remote_rows: Vec<crate::ssh::SftpEntry> =
                     self.filtered_remote_entries().into_iter().cloned().collect();
                 let ordered = remote_rows.iter().map(|e| e.path.clone()).collect::<Vec<_>>();
