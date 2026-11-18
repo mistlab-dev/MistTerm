@@ -30,31 +30,23 @@ pub fn run(args: &UpdateArgs) -> i32 {
     if args.rollback {
         return run_rollback(args);
     }
-<<<<<<< HEAD
     // #435：CLI 沿用用户持久化的更新渠道（设置界面切换后 CLI 一致），不硬编码 Stable。
     // 状态文件按渠道隔离（预览/稳定各自的「最高已见」互不影响）。
+    // #417/#433：区分损坏状态；检查成功后备份坏文件并重建，且告知用户。
     let channel = crate::core::app_settings::AppSettings::load().update.channel;
     let state_path = crate::core::updater::paths::state_file_for(channel);
-    let mut state = UpdateState::load_from(&state_path);
+    let (mut state, integrity) = UpdateState::load_from_with_integrity(&state_path);
     let mut opts = CheckOptions::for_current_build(channel);
-=======
-    // #417：CLI 同样区分损坏状态；检查成功后备份坏文件并重建，且告知用户。
-    let (mut state, integrity) = UpdateState::load_with_integrity();
-    let was_corrupt = matches!(integrity, StateIntegrity::Corrupt);
-    let mut opts = CheckOptions::for_current_build(UpdateChannel::Stable);
->>>>>>> origin/main
     opts.allow_downgrade = args.allow_downgrade;
     if !args.json {
         eprintln!("正在检查更新…");
     }
     let outcome = match check_for_update(&opts, &mut state) {
         Ok(o) => {
-<<<<<<< HEAD
-            let _ = state.save_to(&state_path);
-=======
+            // #433 点查补齐：四态分支的可见说明 + 写保护（含 Unreadable）。
             match integrity {
                 StateIntegrity::Corrupt => {
-                    match state.rebuild_over_corrupt(&crate::core::updater::paths::state_file()) {
+                    match state.rebuild_over_corrupt(&state_path) {
                         Ok(()) if !args.json => {
                             eprintln!("注意：更新记录文件已损坏，本次检查后已重建（坏文件备份为 update-state.json.bak-corrupt）。");
                         }
@@ -65,18 +57,16 @@ pub fn run(args: &UpdateArgs) -> i32 {
                     }
                 }
                 StateIntegrity::Unreadable => {
-                    // #433 点查：不可读成功路径此前被 state.save() 静默覆盖（000→644）。
-                    // 与 GUI 对齐：说明「无法读写，已按本次检查结果重建」。
-                    let _ = state.save();
+                    // 不可读成功路径此前被静默覆盖（000→644）。与 GUI 对齐。
+                    let _ = state.save_to(&state_path);
                     if !args.json {
                         eprintln!("注意：更新记录文件无法读写，已按本次检查结果重建，请留意文件权限。");
                     }
                 }
                 _ => {
-                    let _ = state.save();
+                    let _ = state.save_to(&state_path);
                 }
             }
->>>>>>> origin/main
             o
         }
         Err(e) => {
