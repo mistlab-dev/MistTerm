@@ -1202,11 +1202,26 @@ impl MistTermApp {
                     ));
                 });
         }
-        small(ui, crate::i18n::tr(
-            ctx,
-            "Installing always waits for your click, and MistTerm never restarts on its own. Channel: stable.",
-            "安装前都会先问你，MistTerm 也不会自己重启。更新渠道：稳定版。",
-        ));
+        // #435 第二刀：渠道入口已移到「设置 → 关于与更新」，此处不再写死稳定版，
+        // 跟随当前渠道，避免与切换入口并存时误导。
+        let channel_name = match self.app_settings.update.channel {
+            crate::core::updater::UpdateChannel::Stable => {
+                crate::i18n::tr(ctx, "Stable", "稳定版")
+            }
+            crate::core::updater::UpdateChannel::Preview => {
+                crate::i18n::tr(ctx, "Preview", "预览版")
+            }
+        };
+        let channel_line = format!(
+            "{} {}",
+            crate::i18n::tr(
+                ctx,
+                "Installing always waits for your click, and MistTerm never restarts on its own. Channel:",
+                "安装前都会先问你，MistTerm 也不会自己重启。更新渠道：",
+            ),
+            channel_name
+        );
+        small(ui, &channel_line);
         small(ui, crate::i18n::tr(
             ctx,
             "Checking sends one request to mistlab.dev and GitHub with only the MistTerm version and system type, no account or device information. Like any website, those servers can see your IP address.",

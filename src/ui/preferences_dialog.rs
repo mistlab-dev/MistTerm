@@ -10,7 +10,7 @@ enum FontPick {
 }
 
 /// 左栏分类顺序（「同步与数据」并入「团队与同步」，共 10 类）。
-const PREFERENCES_NAV: [(&str, &str); 10] = [
+const PREFERENCES_NAV: [(&str, &str); 11] = [
     ("General", "常规"),
     ("Appearance", "外观"),
     ("Terminal", "终端"),
@@ -21,6 +21,7 @@ const PREFERENCES_NAV: [(&str, &str); 10] = [
     ("Team & sync", "团队与同步"),
     ("Monitor alerts", "监控告警"),
     ("Extension modules", "扩展模块"),
+    ("About & updates", "关于与更新"),
 ];
 
 /// 选中分类下标（egui 持久化，跨帧保存）。
@@ -238,6 +239,7 @@ impl MistTermApp {
             }
             8 => self.preferences_section_monitor_alert(ui, ctx, theme, label_color, text_low),
             9 => self.preferences_section_modules(ui, ctx, theme, label_color, text_low),
+            10 => self.preferences_section_about_updates(ui, ctx, theme, label_color, text_low),
             _ => {}
         }
     }
@@ -1639,6 +1641,88 @@ impl MistTermApp {
                     ))
                     .size(theme.font_size_small())
                     .color(theme.color_form_hint()),
+                );
+            },
+        );
+    }
+
+    /// #435「关于与更新」：更新渠道单选（稳定版 / 预览版）+ 定位信息。
+    /// 拍板要求入口在「设置 → 关于/更新面板」，不放在更新提示弹窗里。
+    fn preferences_section_about_updates(
+        &mut self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+        theme: &crate::ui::theme::Theme,
+        label_color: egui::Color32,
+        text_low: egui::Color32,
+    ) {
+        Self::preferences_collapsing(
+            ui,
+            theme,
+            "about_updates",
+            crate::i18n::tr(ctx, "About & updates", "关于与更新"),
+            label_color,
+            false,
+            |ui| {
+                ui.label(
+                    RichText::new(crate::i18n::tr(ctx, "Update channel", "更新渠道"))
+                        .strong()
+                        .size(theme.font_size_small())
+                        .color(label_color),
+                );
+                let cur = self.app_settings.update.channel;
+                let mut changed: Option<crate::core::updater::UpdateChannel> = None;
+                ui.horizontal(|ui| {
+                    for (ch, en, zh, tip_en, tip_zh) in [
+                        (
+                            crate::core::updater::UpdateChannel::Stable,
+                            "Stable",
+                            "稳定版",
+                            "Only receive verified stable releases",
+                            "只接收经过回归的稳定版本",
+                        ),
+                        (
+                            crate::core::updater::UpdateChannel::Preview,
+                            "Preview",
+                            "预览版",
+                            "Try preview builds; no daily-release promise",
+                            "尝鲜预览构建；不承诺按日发版",
+                        ),
+                    ] {
+                        if ui
+                            .radio(cur == ch, crate::i18n::tr(ctx, en, zh))
+                            .on_hover_text(crate::i18n::tr(ctx, tip_en, tip_zh))
+                            .clicked()
+                            && cur != ch
+                        {
+                            changed = Some(ch);
+                        }
+                    }
+                });
+                ui.label(
+                    RichText::new(crate::i18n::tr(
+                        ctx,
+                        "Stable is the default. Preview builds are verified but may change; no automatic downgrade when switching back.",
+                        "默认使用稳定版。预览构建经过验证但可能变化；切回稳定版不会自动降级。",
+                    ))
+                    .size(theme.font_size_caption())
+                    .color(text_low),
+                );
+                if let Some(ch) = changed {
+                    self.app_settings.update.channel = ch;
+                    if let Err(e) = self.app_settings.save() {
+                        log::warn!("save update channel failed: {e}");
+                    }
+                }
+                Self::preferences_row_divider(ui, theme);
+                ui.label(
+                    RichText::new(format!(
+                        "{} {}",
+                        crate::i18n::tr(ctx, "Version:", "版本："),
+                        crate::core::updater::APP_VERSION,
+                    ))
+                    .size(theme.font_size_small())
+                    .color(text_low),
                 );
             },
         );
