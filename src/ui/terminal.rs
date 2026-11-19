@@ -2031,6 +2031,21 @@ impl TerminalView {
                 if self.remote_identity.is_none() {
                     self.remote_identity = result.identity;
                 }
+                // #445：复制标签会把源窗格 cwd 作为启动 cd 继承到新连接。若新连接
+                // 登录时带外查到的真实 cwd 已经等于继承目标（常见于源窗格正停在
+                // 登录 home、且服务器用 OSC 7 上报过该目录），这条 cd 是空操作：
+                // 它仍会让 shell 再打一次提示符，回显被抑制后第二个提示符叠到
+                // `Last login` 那一行的提示符后面，表现为同一行两个相同提示符。
+                // 只在两者同一目录时丢掉冗余 cd；目录不同照旧继承，不影响 #392/#401。
+                if let (Some(actual), Some(target)) =
+                    (result.cwd.as_deref(), self.pending_startup_cd.as_deref())
+                {
+                    if same_directory(actual, target) {
+                        log::debug!("startup cd dropped: already in inherited cwd (#445)");
+                        self.drop_startup_cd();
+                        return;
+                    }
+                }
                 // 目录按查询意图分流：
                 // - 登录时那一次（intent=InitialFill）：只在没有任何目录信息时兜底，
                 //   避免刚继承过来的目标被登录 home 盖回去；
@@ -6383,6 +6398,18 @@ fn join_dir(base: &str, rel: &str) -> String {
     out
 }
 
+/// #445：判断带外查到的真实 cwd 与启动 cd 的继承目标是否为同一目录。
+/// 只在两边都是绝对路径时做保守比较（OOB 只回绝对路径），统一分隔符、折叠尾部 '/'，
+/// 去掉末尾 ".." 之外的多余斜杠；不做大小写折叠（Linux 路径区分大小写）。
+fn same_directory(a: &str, b: &str) -> bool {
+    fn normalize(p: &str) -> &str {
+        let p = p.trim();
+        let p = p.trim_end_matches(['/', '\\']);
+        if p.is_empty() { "/" } else { p }
+    }
+    normalize(a) == normalize(b)
+}
+
 fn startup_cd_payload(path: &str) -> Vec<u8> {
     if looks_like_win_path(path) || path.contains('\\') {
         let esc = path.replace('\'', "''");
@@ -6959,7 +6986,19 @@ mod selection_extend_tests {
 
 #[cfg(test)]
 mod cwd_tests {
-    use super::{apply_cd_line, join_dir, startup_cd_payload};
+    use super::{apply_cd_line, join_dir, same_directory, startup_cd_payload};
+
+    // #445：复制标签继承的 cd 目标与登录时真实 cwd 同目录时必须识别为相同，
+    // 才能丢掉冗余启动 cd（避免同一行双提示符）；不同目录不得误判。
+    #[test]
+    fn same_directory_normalizes_trailing_separators() {
+        assert!(same_directory("/home/user", "/home/user"));
+        assert!(same_directory("/home/user/", "/home/user"));
+        assert!(same_directory("/", "//"));
+        assert!(!same_directory("/home/user", "/home/user2"));
+        assert!(!same_directory("/home/user", "~/"));
+        assert!(!same_directory("/home/user", ""));
+    }
 
     #[test]
     fn cd_joins_relative_and_parent() {
