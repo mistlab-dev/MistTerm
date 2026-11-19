@@ -56,3 +56,19 @@ pub fn current_exe() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
     Some(std::fs::canonicalize(&exe).unwrap_or(exe))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // #435 点查：两渠道状态文件必须真正隔离（不同文件名），不能以稳定路径落盘预览状态。
+    #[test]
+    fn channel_state_files_are_isolated() {
+        let stable = state_file_for(super::super::UpdateChannel::Stable);
+        let preview = state_file_for(super::super::UpdateChannel::Preview);
+        assert_ne!(stable, preview, "stable/preview state files must differ");
+        assert!(stable.file_name().and_then(|s| s.to_str()) == Some("update-state.json"));
+        assert!(preview.file_name().and_then(|s| s.to_str()) == Some("update-state-preview.json"));
+        assert_eq!(state_file(), stable, "state_file() must stay the stable path");
+    }
+}

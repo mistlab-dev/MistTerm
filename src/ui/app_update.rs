@@ -75,7 +75,7 @@ pub(crate) struct UpdateUi {
 }
 
 impl UpdateUi {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(channel: updater::UpdateChannel) -> Self {
         let startup_exe = updater::paths::current_exe();
         let exe_for_cleanup = startup_exe.clone();
         let _ = std::thread::Builder::new()
@@ -88,7 +88,9 @@ impl UpdateUi {
             cancel: Arc::new(AtomicBool::new(false)),
             show_dialog: false,
             next_auto_check: Instant::now() + first_check_delay(),
-            last_checked_unix: UpdateState::load().last_check_unix,
+            // #435：上次检查时间按当前渠道读，避免预览检查后仍显示稳定文件的时间。
+            last_checked_unix: UpdateState::load_from(&updater::paths::state_file_for(channel))
+                .last_check_unix,
             startup_exe,
             notify_pending: false,
             prefetched: false,
@@ -513,7 +515,10 @@ impl MistTermApp {
     ) {
         // 用户在检查过程中又点了「检查更新」：按手动检查展示结果。
         let manual = manual || (self.update_ui.show_dialog && matches!(self.update_ui.phase, Phase::Checking));
-        let state = UpdateState::load();
+        // #435：检查结束后按当前渠道读回状态，预览渠道不再读稳定文件。
+        let state = UpdateState::load_from(&updater::paths::state_file_for(
+            self.app_settings.update.channel,
+        ));
         self.update_ui.last_checked_unix = state.last_check_unix;
         if matches!(self.update_ui.phase, Phase::Working(_) | Phase::Installed(_)) {
             return;
@@ -671,7 +676,8 @@ impl MistTermApp {
                 updater::state::StateIntegrity::Corrupt
                     | updater::state::StateIntegrity::Unreadable
             ) {
-                let _ = state.save();
+                // #435：跳过此版本必须写回本渠道文件，不能落稳定渠道状态。
+                let _ = state.save_to(&path);
             } else {
                 log::warn!("updater: state corrupt/unreadable; skip skipped-version write");
             }
