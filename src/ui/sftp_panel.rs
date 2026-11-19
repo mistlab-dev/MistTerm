@@ -1994,14 +1994,40 @@ impl SftpPanel {
         enabled && resp.clicked()
     }
 
-    /// 工具条动作：图标旁边直接写动作，不必悬停才知道用途。
-    fn flux_action(
+    /// #441：单个带标签动作按钮的像素宽（按当前字体实量，不写死中文）。
+    fn flux_action_width(ui: &egui::Ui, theme: &Theme, label: &str) -> f32 {
+        let hit = theme.size_panel_header_control_h();
+        let font = egui::FontId::proportional(theme.font_size_caption());
+        let galley = ui.ctx().fonts_mut(|f| {
+            f.layout_no_wrap(label.to_string(), font, theme.text_primary())
+        });
+        hit + 2.0 + galley.size().x + 4.0
+    }
+
+    /// #441：图标-only 只作为「面板窄到连单个带标签按钮都放不下」的降级。
+    /// 默认宽度走换行（见 [`flux_tool_row`]），标签始终完整可见，不写死语言、不拿 tip 量宽。
+    fn flux_row_compact(ui: &egui::Ui, theme: &Theme, labels: &[&str]) -> bool {
+        let widest = labels
+            .iter()
+            .map(|l| Self::flux_action_width(ui, theme, l))
+            .fold(0.0_f32, f32::max);
+        Self::flux_compact_from_widths(ui.max_rect().width(), widest)
+    }
+
+    /// 纯判定：可用宽 `w` 容纳不下最宽的单个带标签按钮时才降级图标-only。
+    fn flux_compact_from_widths(w: f32, widest_labeled_btn: f32) -> bool {
+        w < widest_labeled_btn + 8.0
+    }
+
+    /// #441：compact=true 时只画图标（hover 保留全称），防止窄面板下按钮被裁。
+    fn flux_action_compact(
         ui: &mut egui::Ui,
         theme: &Theme,
         icon: crate::ui::icons::IconId,
         label: &str,
         tip: &str,
         enabled: bool,
+        compact: bool,
     ) -> bool {
         let hit = theme.size_panel_header_control_h();
         let color = if enabled {
@@ -2010,9 +2036,14 @@ impl SftpPanel {
             theme.text_tertiary()
         };
         let font = egui::FontId::proportional(theme.font_size_caption());
-        let galley = ui.ctx().fonts_mut(|f| f.layout_no_wrap(label.to_string(), font, color));
+        let galley =
+            ui.ctx().fonts_mut(|f| f.layout_no_wrap(label.to_string(), font.clone(), color));
         let gap = 2.0;
-        let w = hit + gap + galley.size().x + 4.0;
+        let w = if compact {
+            hit + 4.0
+        } else {
+            hit + gap + galley.size().x + 4.0
+        };
         let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, hit), egui::Sense::click());
         if resp.hovered() && enabled {
             ui.painter().rect_filled(
@@ -2029,14 +2060,16 @@ impl SftpPanel {
             color,
             (hit - 2.0).min(theme.size_icon_glyph()),
         );
-        ui.painter().galley(
-            egui::pos2(
-                icon_rect.right() + gap,
-                rect.center().y - galley.size().y * 0.5,
-            ),
-            galley,
-            color,
-        );
+        if !compact {
+            ui.painter().galley(
+                egui::pos2(
+                    icon_rect.right() + gap,
+                    rect.center().y - galley.size().y * 0.5,
+                ),
+                galley,
+                color,
+            );
+        }
         enabled && resp.on_hover_text(tip).clicked()
     }
 
@@ -5268,18 +5301,24 @@ impl SftpPanel {
     }
 
     fn flux_tool_row(ui: &mut egui::Ui, theme: &Theme, add: impl FnOnce(&mut egui::Ui)) {
-        let w = ui.max_rect().width().clamp(48.0, 2000.0);
-        let (rect, _) = ui.allocate_exact_size(egui::vec2(w, 36.0), egui::Sense::hover());
-        ui.painter()
-            .rect_filled(rect, 0.0, theme.color_sftp_bar_fill());
+        // #441：默认宽度下标签必须完整可见。用换行布局代替固定单行裁切：
+        // 按钮放不下时自动折到第二行，而不是把标签截成残字；只有面板窄到
+        // 连单个带标签按钮都放不下时才由调用方降级图标-only（hover 保留全称）。
+        let w = ui.available_width().min(ui.max_rect().width()).clamp(48.0, 2000.0);
+        let frame = egui::Frame::NONE
+            .fill(theme.color_sftp_bar_fill())
+            .inner_margin(egui::Margin::symmetric(0, 0));
+        let wrapped = frame.show(ui, |ui| {
+            ui.set_width(w);
+            ui.spacing_mut().item_spacing.x = 4.0;
+            ui.spacing_mut().item_spacing.y = 2.0;
+            ui.horizontal_wrapped(|ui| add(ui));
+        });
         ui.painter().hline(
-            rect.x_range(),
-            rect.bottom() - 0.5,
+            wrapped.response.rect.x_range(),
+            wrapped.response.rect.bottom() - 0.5,
             egui::Stroke::new(1.0, theme.border.to_color32()),
         );
-        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(egui::Layout::left_to_right(egui::Align::Center)));
-        child.spacing_mut().item_spacing.x = 4.0;
-        add(&mut child);
     }
 
     fn paint_flux_head_bar(
@@ -5511,13 +5550,24 @@ impl SftpPanel {
         let up_ok = self.local_cwd.parent().is_some();
         let can_upload = self.has_local_upload_selection();
         Self::flux_tool_row(ui, theme, |ui| {
-            if Self::flux_action(
+            // #441：按当前语言的可见标签实量（不写死中文、不拿 tip 量宽）。
+            let up_label = crate::i18n::tr(ctx, "Up", "上级");
+            let refresh_label = crate::i18n::tr(ctx, "Refresh", "刷新");
+            let browse_label = crate::i18n::tr(ctx, "Browse", "浏览");
+            let upload_label = crate::i18n::tr(ctx, "Upload", "上传");
+            let local_compact = Self::flux_row_compact(
+                ui,
+                theme,
+                &[up_label, refresh_label, browse_label, upload_label],
+            );
+            if Self::flux_action_compact(
                 ui,
                 theme,
                 crate::ui::icons::IconId::ChevronUp,
-                crate::i18n::tr(ctx, "Up", "上级"),
+                up_label,
                 crate::i18n::tr(ctx, "Up", "上级"),
                 up_ok,
+                local_compact,
             ) {
                 if let Some(parent) = self.local_cwd.parent() {
                     self.local_cwd = parent.to_path_buf();
@@ -5526,23 +5576,25 @@ impl SftpPanel {
                     self.refresh_local_list();
                 }
             }
-            if Self::flux_action(
+            if Self::flux_action_compact(
                 ui,
                 theme,
                 crate::ui::icons::IconId::Refresh,
-                crate::i18n::tr(ctx, "Refresh", "刷新"),
+                refresh_label,
                 crate::i18n::tr(ctx, "Refresh", "刷新"),
                 true,
+                local_compact,
             ) {
                 self.refresh_local_list();
             }
-            if Self::flux_action(
+            if Self::flux_action_compact(
                 ui,
                 theme,
                 crate::ui::icons::IconId::Folder,
-                crate::i18n::tr(ctx, "Browse", "浏览"),
+                browse_label,
                 crate::i18n::tr(ctx, "Browse…", "浏览…"),
                 true,
+                local_compact,
             ) {
                 if let Some(dir) = FileDialog::new().pick_folder() {
                     self.local_cwd = dir;
@@ -5551,13 +5603,14 @@ impl SftpPanel {
                     self.refresh_local_list();
                 }
             }
-            if Self::flux_action(
+            if Self::flux_action_compact(
                 ui,
                 theme,
                 crate::ui::icons::IconId::Upload,
-                crate::i18n::tr(ctx, "Upload", "上传"),
+                upload_label,
                 crate::i18n::tr(ctx, "Upload selected item(s)", "上传所选"),
                 can_upload,
+                local_compact,
             ) {
                 self.upload_selected_local(handle, ctx);
             }
@@ -5695,43 +5748,57 @@ impl SftpPanel {
         let busy = !self.busy;
         let can_download = self.has_remote_download_selection();
         Self::flux_tool_row(ui, theme, |ui| {
-            if Self::flux_action(
+            // #441：按当前语言的可见标签实量（不写死中文、不拿 tip 量宽）。
+            let up_label = crate::i18n::tr(ctx, "Up", "上级");
+            let refresh_label = crate::i18n::tr(ctx, "Refresh", "刷新");
+            let new_label = crate::i18n::tr(ctx, "New", "新建");
+            let download_label = crate::i18n::tr(ctx, "Download", "下载");
+            let remote_compact = Self::flux_row_compact(
+                ui,
+                theme,
+                &[up_label, refresh_label, new_label, download_label],
+            );
+            if Self::flux_action_compact(
                 ui,
                 theme,
                 crate::ui::icons::IconId::ChevronUp,
-                crate::i18n::tr(ctx, "Up", "上级"),
+                up_label,
                 crate::i18n::tr(ctx, "Up", "上级"),
                 busy,
+                remote_compact,
             ) {
                 self.spawn_list(handle, Self::remote_parent_dir(&self.cwd), ctx);
             }
-            if Self::flux_action(
+            if Self::flux_action_compact(
                 ui,
                 theme,
                 crate::ui::icons::IconId::Refresh,
-                crate::i18n::tr(ctx, "Refresh", "刷新"),
+                refresh_label,
                 crate::i18n::tr(ctx, "Refresh", "刷新"),
                 busy,
+                remote_compact,
             ) {
                 self.spawn_list(handle, self.cwd.clone(), ctx);
             }
-            if Self::flux_action(
+            if Self::flux_action_compact(
                 ui,
                 theme,
                 crate::ui::icons::IconId::Plus,
-                crate::i18n::tr(ctx, "New", "新建"),
+                new_label,
                 crate::i18n::tr(ctx, "New folder", "新建目录"),
                 busy,
+                remote_compact,
             ) {
                 self.show_mkdir_dialog = true;
             }
-            if Self::flux_action(
+            if Self::flux_action_compact(
                 ui,
                 theme,
                 crate::ui::icons::IconId::Download,
-                crate::i18n::tr(ctx, "Download", "下载"),
+                download_label,
                 crate::i18n::tr(ctx, "Download selected remote item(s)", "下载所选"),
                 can_download,
+                remote_compact,
             ) {
                 self.download_selected_remote(handle, ctx);
             }
@@ -6096,6 +6163,17 @@ impl SftpPanel {
 mod tests {
     use super::*;
     use chrono::Utc;
+
+    // #441：图标-only 降级只在「连单个带标签按钮都放不下」时触发；
+    // 默认宽度（>= 最宽按钮 + 边距）一律保留完整标签。
+    #[test]
+    fn flux_compact_only_when_single_labeled_button_cannot_fit() {
+        let widest = 80.0_f32;
+        assert!(!SftpPanel::flux_compact_from_widths(widest + 8.0, widest));
+        assert!(!SftpPanel::flux_compact_from_widths(widest * 4.0, widest));
+        assert!(SftpPanel::flux_compact_from_widths(widest - 1.0, widest));
+        assert!(SftpPanel::flux_compact_from_widths(0.0, widest));
+    }
 
     fn local_entry(name: &str) -> LocalEntry {
         LocalEntry {
