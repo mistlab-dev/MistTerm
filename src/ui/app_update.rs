@@ -75,7 +75,7 @@ pub(crate) struct UpdateUi {
 }
 
 impl UpdateUi {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(channel: updater::UpdateChannel) -> Self {
         let startup_exe = updater::paths::current_exe();
         let exe_for_cleanup = startup_exe.clone();
         let _ = std::thread::Builder::new()
@@ -88,7 +88,9 @@ impl UpdateUi {
             cancel: Arc::new(AtomicBool::new(false)),
             show_dialog: false,
             next_auto_check: Instant::now() + first_check_delay(),
-            last_checked_unix: UpdateState::load().last_check_unix,
+            // #435：上次检查时间按当前渠道读，避免预览检查后仍显示稳定文件的时间。
+            last_checked_unix: UpdateState::load_from(&updater::paths::state_file_for(channel))
+                .last_check_unix,
             startup_exe,
             notify_pending: false,
             prefetched: false,
@@ -317,7 +319,11 @@ impl MistTermApp {
             .name("mist-update-check".into())
             .spawn(move || {
                 // #417：区分 FirstRun / Ok / Corrupt / Unreadable，不再静默当首次安装。
-                let (mut state, integrity) = UpdateState::load_with_integrity();
+                // #435：状态文件按渠道隔离（稳定旧路径兼容，预览独立文件）。
+                let state_path = updater::paths::state_file_for(channel);
+                // #433：四态完整性判定与写盘保护沿用。
+                let (mut state, integrity) =
+                    UpdateState::load_from_with_integrity(&state_path);
                 if matches!(integrity, updater::state::StateIntegrity::Corrupt) {
                     log::warn!("updater: state file corrupt; will rebuild after a successful check");
                 }
@@ -336,14 +342,14 @@ impl MistTermApp {
                 if cid_new {
                     // 首次生成的 cid 立即落盘：即便本次检查失败，实例 ID 也保持稳定。
                     // （仅 FirstRun/Ok 路径；损坏态不写盘。）
-                    let _ = state.save();
+                    let _ = state.save_to(&state_path);
                 }
                 let opts = CheckOptions::for_current_build(channel);
                 let result = updater::check_for_update(&opts, &mut state);
                 if result.is_ok() {
                     // Corrupt：备份坏文件后再写重建状态；备份/写盘失败保留现场并告警。
                     if matches!(integrity, updater::state::StateIntegrity::Corrupt) {
-                        match state.rebuild_over_corrupt(&updater::paths::state_file()) {
+                        match state.rebuild_over_corrupt(&state_path) {
                             Ok(()) => log::warn!(
                                 "updater: corrupt state rebuilt (backup at update-state.json.bak-corrupt)"
                             ),
@@ -352,7 +358,7 @@ impl MistTermApp {
                             }
                         }
                     } else {
-                        let _ = state.save();
+                        let _ = state.save_to(&state_path);
                     }
                 }
                 // 检查失败时不写盘：坏文件不被空状态覆盖（#417）。
@@ -509,7 +515,10 @@ impl MistTermApp {
     ) {
         // 用户在检查过程中又点了「检查更新」：按手动检查展示结果。
         let manual = manual || (self.update_ui.show_dialog && matches!(self.update_ui.phase, Phase::Checking));
-        let state = UpdateState::load();
+        // #435：检查结束后按当前渠道读回状态，预览渠道不再读稳定文件。
+        let state = UpdateState::load_from(&updater::paths::state_file_for(
+            self.app_settings.update.channel,
+        ));
         self.update_ui.last_checked_unix = state.last_check_unix;
         if matches!(self.update_ui.phase, Phase::Working(_) | Phase::Installed(_)) {
             return;
@@ -656,17 +665,19 @@ impl MistTermApp {
 
     fn update_skip_version(&mut self) {
         if let Some(info) = &self.update_ui.info {
-            let mut state = UpdateState::load();
+            // #435：按渠道读写状态。
+            let path = updater::paths::state_file_for(self.app_settings.update.channel);
+            let mut state = UpdateState::load_from(&path);
             state.skipped_version = Some(info.manifest.version.clone());
             // #417 复审：损坏/不可读状态不覆盖坏文件。
-            let (_, integrity) =
-                UpdateState::load_from_with_integrity(&updater::paths::state_file());
+            let (_, integrity) = UpdateState::load_from_with_integrity(&path);
             if !matches!(
                 integrity,
                 updater::state::StateIntegrity::Corrupt
                     | updater::state::StateIntegrity::Unreadable
             ) {
-                let _ = state.save();
+                // #435：跳过此版本必须写回本渠道文件，不能落稳定渠道状态。
+                let _ = state.save_to(&path);
             } else {
                 log::warn!("updater: state corrupt/unreadable; skip skipped-version write");
             }
