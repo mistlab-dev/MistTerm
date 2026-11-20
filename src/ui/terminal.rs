@@ -1921,13 +1921,22 @@ impl TerminalView {
                 // 它仍会让 shell 再打一次提示符，回显被抑制后第二个提示符叠到
                 // `Last login` 那一行的提示符后面，表现为同一行两个相同提示符。
                 // 只在两者同一目录时丢掉冗余 cd；目录不同照旧继承，不影响 #392/#401。
-                if let (Some(actual), Some(target)) =
-                    (result.cwd.as_deref(), self.pending_startup_cd.as_deref())
-                {
-                    if same_directory(actual, target) {
+                // #445 复审：drop_startup_cd() 会连同 shell_cwd 一起清掉，且原实现
+                // 随后 return 跳过兜底写入——复制标签且新连接已在目标目录时，
+                // 新标签会暂时没有目录信息（后续复制/文件面板/目录显示回归）。
+                // 修复：只清掉待发的冗余 cd（不发空操作命令），用带外查到的真实
+                // 目录补回 shell_cwd，且不 return。目录不同时走原继承路径。
+                if let Some(actual) = result.cwd.clone() {
+                    if self
+                        .pending_startup_cd
+                        .as_deref()
+                        .is_some_and(|target| same_directory(&actual, target))
+                    {
                         log::debug!("startup cd dropped: already in inherited cwd (#445)");
-                        self.drop_startup_cd();
-                        return;
+                        self.pending_startup_cd = None;
+                        self.startup_cd_policy = None;
+                        self.startup_cd_deadline = None;
+                        self.shell_cwd = Some(actual);
                     }
                 }
                 // 目录只在「还没有任何目录信息」时兜底写入：
