@@ -7392,6 +7392,28 @@ mod oob_cwd_tests {
     }
 
     #[test]
+    fn redundant_same_directory_startup_cd_keeps_shell_cwd() {
+        // #445 复审：复制标签继承的启动 cd 与带外查到的真实 cwd 同目录时，
+        // 冗余 cd 要丢掉，但 shell_cwd 必须保留（由带外查到的实际目录补回），
+        // 否则新标签暂时没有目录信息。用尾部斜杠区分「实际目录」和「继承目标」，
+        // 这样既不能清掉 shell_cwd，也不能在跳过 cd 后提前 return 漏掉补写。
+        let mut view = TerminalView::new();
+        view.arm_startup_directory("/home/user");
+        assert_eq!(view.pending_startup_directory(), Some("/home/user"));
+        deliver(&mut view, "user=u\nhost=box\ncwd=/home/user/\n");
+        assert_eq!(
+            view.pending_startup_directory(),
+            None,
+            "同目录的冗余启动 cd 必须丢掉"
+        );
+        assert_eq!(
+            view.shell_cwd.as_deref(),
+            Some("/home/user/"),
+            "跳过冗余 cd 后仍须保留 cwd，且取自带外查到的实际目录"
+        );
+    }
+
+    #[test]
     fn empty_reply_keeps_receiver_for_next_frame() {
         let mut view = TerminalView::new();
         let (tx, rx) = std::sync::mpsc::channel();
