@@ -560,17 +560,36 @@ impl LrzszTransfer {
         for _ in 0..256 {
             self.flush_receiver_outgoing(&mut session.receiver)?;
             let mut progress = false;
+            let mut resynced = false;
             if !session.incoming.is_empty() {
-                let c = session
-                    .receiver
-                    .feed_incoming(&session.incoming)
-                    .map_err(|e| e.to_string())?;
-                if c > 0 {
-                    session.incoming.drain(..c);
-                    progress = true;
+                match session.receiver.feed_incoming(&session.incoming) {
+                    Ok(c) => {
+                        if c > 0 {
+                            session.incoming.drain(..c);
+                            progress = true;
+                        }
+                    }
+                    Err(e) => {
+                        // MistTerm (#450): a corrupted frame / malformed byte must
+                        // not abort the whole transfer. `feed_incoming` has queued
+                        // a ZNAK; flush it so the peer retransmits, drop the
+                        // consumed prefix (up to the resync point) and continue.
+                        log::warn!(
+                            "ZMODEM receive recovered from protocol error: {} (queue={} B)",
+                            e,
+                            session.incoming.len()
+                        );
+                        session.incoming.clear();
+                        resynced = true;
+                    }
                 }
             }
             self.flush_receiver_outgoing(&mut session.receiver)?;
+            if resynced {
+                // Give the peer a moment to react to the NAK; avoid a hot loop
+                // re-feeding the same corrupted backlog.
+                break;
+            }
             // 先处理 FileStart / SessionComplete，再 drain_file，避免首包已到时尚未建文件
             if self.poll_receiver_events(
                 &mut session.receiver,
@@ -595,6 +614,24 @@ impl LrzszTransfer {
     }
 
     fn abort_recv_locked(&self, slot: &mut Option<RecvSide>, msg: &str) {
+        // MistTerm (#450): on failure, actively end the session on the wire —
+        // CAN CAN CAN CAN CAN + ZABORT (CAN*5 per ZMODEM spec) — so the remote
+        // `sz` stops instead of continuing to spew binary into the terminal,
+        // and GUI Ctrl+C regains the prompt without needing a second session.
+        const CAN: u8 = 0x18;
+        let mut abort_bytes = Vec::with_capacity(16);
+        abort_bytes.extend_from_slice(&[CAN, CAN, CAN, CAN, CAN]);
+        // ZABORT header (hex-encoded with correct CRC) built via zmodem2's encoder.
+        let header = zmodem2::Header::new(
+            zmodem2::Encoding::ZHEX,
+            zmodem2::Frame::ZABORT,
+            &[0; 4],
+        );
+        let mut tmp: Vec<u8> = Vec::new();
+        if header.write(&mut tmp).is_ok() {
+            abort_bytes.extend_from_slice(&tmp);
+        }
+        self.write_to_channel(&abort_bytes);
         *slot = None;
         *self.receive_file.lock().unwrap() = None;
         *self.receive_pump_tx.lock().unwrap() = None;

@@ -208,3 +208,79 @@ fn test_sender_wait_file_pos_retry_queues_outgoing() {
     );
     sender.advance_outgoing(retry_offer.len());
 }
+
+/// #450 regression: a mid-transfer malformed encoding byte (e.g. 0x53 or 0xc5
+/// PTY noise, not hardcoded) must not abort the receiver; it resyncs and keeps
+/// parsing subsequent frames.
+#[test]
+fn test_receiver_recovers_from_malformed_encoding_midstream() {
+    use zmodem2::ReceiverEvent;
+
+    // Sender side: a valid ZFILE offer as the "peer".
+    let mut sender = Sender::new().unwrap();
+    sender.advance_outgoing(sender.drain_outgoing().len());
+    sender.start_file(b"t450.bin", 8).unwrap();
+    let zrinit = Header::new(Encoding::ZHEX, Frame::ZRINIT, &[0; 4]);
+    let mut zrinit_bytes = Vec::new();
+    zrinit.write(&mut zrinit_bytes).unwrap();
+    let consumed = sender.feed_incoming(&zrinit_bytes).unwrap();
+    assert!(consumed > 0);
+    let offer = sender.drain_outgoing().to_vec();
+    sender.advance_outgoing(offer.len());
+
+    let mut receiver = Receiver::new().unwrap();
+    receiver.advance_outgoing(receiver.drain_outgoing().len());
+    let mut input: &[u8] = &offer;
+    for _ in 0..(offer.len() * 4 + 16) {
+        if input.is_empty() {
+            break;
+        }
+        match receiver.feed_incoming(input) {
+            Ok(0) => break,
+            Ok(n) => input = &input[n..],
+            Err(_) => input = &input[1..], // resync on the wire
+        }
+        if receiver.poll_event().is_some() {
+            break;
+        }
+        if !receiver.drain_outgoing().is_empty() {
+            receiver.advance_outgoing(receiver.drain_outgoing().len());
+        }
+    }
+
+    // Inject PTY-style noise (arbitrary non-protocol bytes: 0x53 'S', 0xc5, CSI).
+    // Previously the first invalid encoding byte aborted the whole session.
+    let noise = [0x53u8, 0xc5, 0x1b, b'[', b'0', b'm'];
+    let _ = receiver.feed_incoming(&noise);
+    receiver.advance_outgoing(receiver.drain_outgoing().len());
+
+    // The receiver must still be functional: a fresh valid ZFILE offer is parsed.
+    let mut sender2 = Sender::new().unwrap();
+    sender2.advance_outgoing(sender2.drain_outgoing().len());
+    sender2.start_file(b"t450b.bin", 4).unwrap();
+    let consumed2 = sender2.feed_incoming(&zrinit_bytes).unwrap();
+    assert!(consumed2 > 0);
+    let offer2 = sender2.drain_outgoing().to_vec();
+    sender2.advance_outgoing(offer2.len());
+
+    let mut got_start = false;
+    let mut input2: &[u8] = &offer2;
+    for _ in 0..(offer2.len() * 4 + 16) {
+        if input2.is_empty() {
+            break;
+        }
+        match receiver.feed_incoming(input2) {
+            Ok(0) => break,
+            Ok(n) => input2 = &input2[n..],
+            Err(_) => input2 = &input2[1..],
+        }
+        if let Some(ReceiverEvent::FileStart) = receiver.poll_event() {
+            got_start = true;
+            break;
+        }
+        if !receiver.drain_outgoing().is_empty() {
+            receiver.advance_outgoing(receiver.drain_outgoing().len());
+        }
+    }
+    assert!(got_start, "receiver must keep working after malformed bytes");
+}
