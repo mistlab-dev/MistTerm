@@ -5304,7 +5304,25 @@ impl SftpPanel {
         // #441：默认宽度下标签必须完整可见。用换行布局代替固定单行裁切：
         // 按钮放不下时自动折到第二行，而不是把标签截成残字；只有面板窄到
         // 连单个带标签按钮都放不下时才由调用方降级图标-only（hover 保留全称）。
+        //
+        // #446（Linux 命中修复）：换行后容器真实高度在**本轮**才知道（初次布局
+        // 按 interact_size.y 占位，下一轮才长到两行高）。此前子 Ui 的
+        // WidgetRect 停在第一行高度，后续帧里指针落在第二行按钮上时，
+        // egui 的 hit-test 会把「完全覆盖命中的更高层容器」判成遮挡而丢弃
+        // 按钮命中，点击就落到了第一行。这里把上一轮量出的真实高度显式
+        // allocate 掉（`Sense::hover`，只挡悬停不抢点击），保证容器
+        // WidgetRect 与第二行按钮互不遮挡；同一 Ui 内后续兄弟项也不再
+        // 叠进同一块矩形。度量的 key 含按钮布局 salt，布局变化即重算。
         let w = ui.available_width().min(ui.max_rect().width()).clamp(48.0, 2000.0);
+        let row_key = egui::Id::new("sftp_flux_tool_row").with(w as u32);
+        let measured_h = ui
+            .ctx()
+            .data(|d| d.get_temp::<f32>(row_key))
+            .unwrap_or(theme.size_control_btn_h() + 4.0);
+        // 先按上一轮量出的真实高度整块占位（只 hover、不点击），
+        // 让本容器 Ui 的 WidgetRect 盖住真实绘制区、且与按钮们各自独立，
+        // 同层按钮不再被 hit-test 判成被遮挡。
+        ui.allocate_exact_size(egui::vec2(w, measured_h), egui::Sense::hover());
         let frame = egui::Frame::NONE
             .fill(theme.color_sftp_bar_fill())
             .inner_margin(egui::Margin::symmetric(0, 0));
@@ -5314,6 +5332,11 @@ impl SftpPanel {
             ui.spacing_mut().item_spacing.y = 2.0;
             ui.horizontal_wrapped(|ui| add(ui));
         });
+        let real_h = (wrapped.response.rect.height() + 4.0).max(1.0);
+        if (real_h - measured_h).abs() > 0.5 {
+            ui.ctx()
+                .data_mut(|d| d.insert_temp(row_key, real_h));
+        }
         ui.painter().hline(
             wrapped.response.rect.x_range(),
             wrapped.response.rect.bottom() - 0.5,
