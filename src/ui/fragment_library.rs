@@ -912,15 +912,10 @@ fn poll_shortcut_capture(ctx: &egui::Context) -> Option<FragmentShortcut> {
             } = ev
             {
                 let name = format!("{:?}", key);
-                // 忽略单独修饰键事件（若平台上报）
-                if name.eq_ignore_ascii_case("Control")
-                    || name.eq_ignore_ascii_case("Ctrl")
-                    || name.eq_ignore_ascii_case("Shift")
-                    || name.eq_ignore_ascii_case("Alt")
-                    || name.eq_ignore_ascii_case("Command")
-                    || name.eq_ignore_ascii_case("MacCmd")
-                    || name.eq_ignore_ascii_case("Meta")
-                {
+                // 忽略单独修饰键事件。egui 0.37 会拆成 ShiftLeft / ShiftRight /
+                // ControlLeft / ControlRight / AltLeft / AltRight / SuperLeft /
+                // SuperRight，必须一并忽略，否则 ⌘⇧H 会被录成 `⌘ShiftLeft`。
+                if crate::core::fragment_shortcuts::is_standalone_modifier_key(&name) {
                     continue;
                 }
                 if name.is_empty() {

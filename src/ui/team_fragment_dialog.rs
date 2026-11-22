@@ -624,14 +624,9 @@ fn poll_team_shortcut_capture(ctx: &egui::Context) -> Option<FragmentShortcut> {
             } = ev
             {
                 let name = format!("{:?}", key);
-                if name.eq_ignore_ascii_case("Control")
-                    || name.eq_ignore_ascii_case("Ctrl")
-                    || name.eq_ignore_ascii_case("Shift")
-                    || name.eq_ignore_ascii_case("Alt")
-                    || name.eq_ignore_ascii_case("Command")
-                    || name.eq_ignore_ascii_case("MacCmd")
-                    || name.eq_ignore_ascii_case("Meta")
-                {
+                // egui 0.37 会拆成 ShiftLeft / ShiftRight 等，必须一并忽略，
+                // 否则 ⌘⇧H 会被录成 `⌘ShiftLeft`。
+                if crate::core::fragment_shortcuts::is_standalone_modifier_key(&name) {
                     continue;
                 }
                 if name.is_empty() {
