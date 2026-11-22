@@ -2031,6 +2031,30 @@ impl TerminalView {
                 if self.remote_identity.is_none() {
                     self.remote_identity = result.identity;
                 }
+                // #445：复制标签会把源窗格 cwd 作为启动 cd 继承到新连接。若新连接
+                // 登录时带外查到的真实 cwd 已经等于继承目标（常见于源窗格正停在
+                // 登录 home、且服务器用 OSC 7 上报过该目录），这条 cd 是空操作：
+                // 它仍会让 shell 再打一次提示符，回显被抑制后第二个提示符叠到
+                // `Last login` 那一行的提示符后面，表现为同一行两个相同提示符。
+                // 只在两者同一目录时丢掉冗余 cd；目录不同照旧继承，不影响 #392/#401。
+                // #445 复审：drop_startup_cd() 会连同 shell_cwd 一起清掉，且原实现
+                // 随后 return 跳过兜底写入——复制标签且新连接已在目标目录时，
+                // 新标签会暂时没有目录信息（后续复制/文件面板/目录显示回归）。
+                // 修复：只清掉待发的冗余 cd（不发空操作命令），用带外查到的真实
+                // 目录补回 shell_cwd，且不 return。目录不同时走原继承路径。
+                if let Some(actual) = result.cwd.clone() {
+                    if self
+                        .pending_startup_cd
+                        .as_deref()
+                        .is_some_and(|target| same_directory(&actual, target))
+                    {
+                        log::debug!("startup cd dropped: already in inherited cwd (#445)");
+                        self.pending_startup_cd = None;
+                        self.startup_cd_policy = None;
+                        self.startup_cd_deadline = None;
+                        self.shell_cwd = Some(actual);
+                    }
+                }
                 // 目录按查询意图分流：
                 // - 登录时那一次（intent=InitialFill）：只在没有任何目录信息时兜底，
                 //   避免刚继承过来的目标被登录 home 盖回去；
@@ -6383,6 +6407,18 @@ fn join_dir(base: &str, rel: &str) -> String {
     out
 }
 
+/// #445：判断带外查到的真实 cwd 与启动 cd 的继承目标是否为同一目录。
+/// 只在两边都是绝对路径时做保守比较（OOB 只回绝对路径），统一分隔符、折叠尾部 '/'，
+/// 去掉末尾 ".." 之外的多余斜杠；不做大小写折叠（Linux 路径区分大小写）。
+fn same_directory(a: &str, b: &str) -> bool {
+    fn normalize(p: &str) -> &str {
+        let p = p.trim();
+        let p = p.trim_end_matches(['/', '\\']);
+        if p.is_empty() { "/" } else { p }
+    }
+    normalize(a) == normalize(b)
+}
+
 fn startup_cd_payload(path: &str) -> Vec<u8> {
     if looks_like_win_path(path) || path.contains('\\') {
         let esc = path.replace('\'', "''");
@@ -6959,7 +6995,19 @@ mod selection_extend_tests {
 
 #[cfg(test)]
 mod cwd_tests {
-    use super::{apply_cd_line, join_dir, startup_cd_payload};
+    use super::{apply_cd_line, join_dir, same_directory, startup_cd_payload};
+
+    // #445：复制标签继承的 cd 目标与登录时真实 cwd 同目录时必须识别为相同，
+    // 才能丢掉冗余启动 cd（避免同一行双提示符）；不同目录不得误判。
+    #[test]
+    fn same_directory_normalizes_trailing_separators() {
+        assert!(same_directory("/home/user", "/home/user"));
+        assert!(same_directory("/home/user/", "/home/user"));
+        assert!(same_directory("/", "//"));
+        assert!(!same_directory("/home/user", "/home/user2"));
+        assert!(!same_directory("/home/user", "~/"));
+        assert!(!same_directory("/home/user", ""));
+    }
 
     #[test]
     fn cd_joins_relative_and_parent() {
@@ -7704,6 +7752,28 @@ mod oob_cwd_tests {
             view.pending_startup_cd.as_deref(),
             Some("/inherited/project"),
             "刷新结果只进 oob_refresh_cwd / shell_cwd，不动待发继承目标"
+        );
+    }
+
+    #[test]
+    fn redundant_same_directory_startup_cd_keeps_shell_cwd() {
+        // #445 复审：复制标签继承的启动 cd 与带外查到的真实 cwd 同目录时，
+        // 冗余 cd 要丢掉，但 shell_cwd 必须保留（由带外查到的实际目录补回），
+        // 否则新标签暂时没有目录信息。用尾部斜杠区分「实际目录」和「继承目标」，
+        // 这样既不能清掉 shell_cwd，也不能在跳过 cd 后提前 return 漏掉补写。
+        let mut view = TerminalView::new();
+        view.arm_startup_directory("/home/user");
+        assert_eq!(view.pending_startup_directory(), Some("/home/user"));
+        deliver(&mut view, "user=u\nhost=box\ncwd=/home/user/\n");
+        assert_eq!(
+            view.pending_startup_directory(),
+            None,
+            "同目录的冗余启动 cd 必须丢掉"
+        );
+        assert_eq!(
+            view.shell_cwd.as_deref(),
+            Some("/home/user/"),
+            "跳过冗余 cd 后仍须保留 cwd，且取自带外查到的实际目录"
         );
     }
 
