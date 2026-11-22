@@ -1185,7 +1185,7 @@ impl MistTermApp {
             pending_foreground_reconnect: None,
             pending_new_tab_cwd: None,
             crash_notice: crate::core::crash_reporter::take_startup_notice(),
-            update_ui: update::UpdateUi::new(),
+            update_ui: update::UpdateUi::new(app_settings.update.channel),
             pref_vault_token_draft: String::new(),
             pref_local_dir_draft: None,
             right_dock_outer_left_x: None,

@@ -48,18 +48,35 @@ pub const STABLE_MANIFEST_URLS: &[&str] = &[
     "https://github.com/mistlab-dev/MistTerm/releases/latest/download/latest.json",
 ];
 
-/// 更新渠道。目前只开放 stable；清单格式和签名里的渠道字段为以后的 beta 预留。
+/// #435 预览渠道清单地址（与稳定渠道隔离：独立路径 + 独立文件名，任何源都不共用）。
+/// 预览包只走应用内更新，官网/下载页本期只提供稳定版。
+pub const PREVIEW_MANIFEST_URLS: &[&str] = &[
+    "https://mistlab.dev/downloads/mistterm/preview/latest.json",
+    "https://github.com/mistlab-dev/MistTerm/releases/download/preview-latest/latest.json",
+];
+
+/// 更新渠道（#435）。清单格式与签名里的渠道字段一一对应，验签时严格校验，跨渠道清单拒绝。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum UpdateChannel {
     #[default]
     Stable,
+    Preview,
 }
 
 impl UpdateChannel {
     pub fn as_str(self) -> &'static str {
         match self {
             UpdateChannel::Stable => "stable",
+            UpdateChannel::Preview => "preview",
+        }
+    }
+
+    /// 本地化显示名（GUI 用，随当前语言，不在 updater 核心耦合 i18n）。
+    pub fn display_key(self) -> &'static str {
+        match self {
+            UpdateChannel::Stable => "stable",
+            UpdateChannel::Preview => "preview",
         }
     }
 
@@ -70,6 +87,7 @@ impl UpdateChannel {
         }
         match self {
             UpdateChannel::Stable => STABLE_MANIFEST_URLS.iter().map(|s| s.to_string()).collect(),
+            UpdateChannel::Preview => PREVIEW_MANIFEST_URLS.iter().map(|s| s.to_string()).collect(),
         }
     }
 }
@@ -240,6 +258,21 @@ mod tests {
     }
 
     #[test]
+    fn both_channel_manifest_urls_are_isolated() {
+        let stable = UpdateChannel::Stable.manifest_urls();
+        let preview = UpdateChannel::Preview.manifest_urls();
+        assert!(!stable.is_empty() && !preview.is_empty());
+        // URL 不能交叉：稳定清单地址不得出现在预览列表，反之亦然。
+        assert!(stable.iter().all(|u| !preview.contains(u)));
+        assert!(preview.iter().all(|u| !stable.contains(u)));
+        assert!(stable.iter().all(|u| u.starts_with("https://")));
+        assert!(preview.iter().all(|u| u.starts_with("https://")));
+        // 渠道标识与签名字段一致。
+        assert_eq!(UpdateChannel::Stable.as_str(), "stable");
+        assert_eq!(UpdateChannel::Preview.as_str(), "preview");
+        assert_eq!(UpdateChannel::default(), UpdateChannel::Stable);
+    }
+
     fn stable_manifest_urls_are_https_and_mistlab_first() {
         assert!(STABLE_MANIFEST_URLS[0].starts_with("https://mistlab.dev/"));
         assert!(STABLE_MANIFEST_URLS[1].starts_with("https://github.com/"));
