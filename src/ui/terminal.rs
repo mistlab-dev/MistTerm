@@ -2391,6 +2391,12 @@ impl TerminalView {
             // ZMODEM 上传时 PTY 回包经 UI 旁路进 lrzsz；须高频重绘以免 `mpsc` 积压导致「等 ZACK」式卡顿。
             if self.lrzsz.is_upload_pty_capture() {
                 ui.ctx().request_repaint();
+            }
+            // #442：ZMODEM 接收（sz）时同样须持续重绘——进度事件进 channel 后
+            // 只在帧内被处理；UI 睡着时事件堆积无人唤醒，直到下一次按键。
+            // （上传侧早有此分支，接收侧漏了。）
+            if self.lrzsz.is_active() {
+                ui.ctx().request_repaint_after(Duration::from_millis(16));
             } else if terminal_dirty || self.repaint_probe_received_us.is_some() {
                 // 仅有输出、队列未排空、或本帧输出还没画出来时拉高帧率(top/vim/yes、ZMODEM 以外的脏屏)。
                 // 探针在画完这一帧后清掉（见下方），空闲不再停在 33ms。
