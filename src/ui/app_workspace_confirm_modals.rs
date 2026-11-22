@@ -523,6 +523,13 @@ impl MistTermApp {
                 if confirmed && pending_idx < self.tabs.len() {
                     self.remove_tab_at(pending_idx);
                 }
+                // #463：Esc 仍等价于「取消」；主按钮已吞掉的 Enter/Space 不会落到这里。
+                if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+                    ctx.input_mut(|i| {
+                        i.consume_key(egui::Modifiers::NONE, egui::Key::Escape);
+                    });
+                    should_close = true;
+                }
                 if !open || should_close {
                     self.close_tab_confirm_idx = None;
                 }
