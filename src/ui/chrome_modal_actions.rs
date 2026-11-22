@@ -73,7 +73,7 @@ fn modal_primary_key_activated(ctx: &egui::Context, can_activate: bool) -> bool 
     }
     // 仅弹窗底栏内的主按钮响应键盘；面板中的同款按钮不被全局 Enter/Space 误触。
     if ctx.data(|d| d.get_temp::<u64>(egui::Id::new(MODAL_FOOTER_ACTIVE)))
-        != Some(ctx.frame_nr())
+        != Some(ctx.cumulative_frame_nr())
     {
         return false;
     }
@@ -93,7 +93,7 @@ fn modal_primary_key_activated(ctx: &egui::Context, can_activate: bool) -> bool 
     // 每帧只让第一个主按钮拿到激活（consume 已保证后续调用读不到按键，
     // 闩再兜一层，防止同帧其它代码重放按键）。
     let latch = egui::Id::new("mist_modal_primary_key_activation");
-    let frame = ctx.frame_nr();
+    let frame = ctx.cumulative_frame_nr();
     if ctx.data(|d| d.get_temp::<u64>(latch)) == Some(frame) {
         return false;
     }
@@ -108,7 +108,10 @@ fn with_modal_primary_key_activation(
     can_activate: bool,
 ) -> Response {
     if modal_primary_key_activated(ctx, can_activate) {
-        resp.clicked = true;
+        // egui 0.37：`clicked` 是方法而非字段，键盘激活需通过 Response.flags
+        // 的 FAKE_PRIMARY_CLICKED 位并入 `.clicked()`（与 egui 内部对焦点
+        // Enter/Space 的处理一致）。
+        resp.flags.set(egui::response::Flags::FAKE_PRIMARY_CLICKED, true);
     }
     resp
 }
@@ -380,7 +383,7 @@ pub fn modal_footer_actions<F>(ui: &mut Ui, theme: &Theme, add_buttons: F)
 where
     F: FnOnce(&mut Ui, &Theme),
 {
-    let frame = ui.ctx().frame_nr();
+    let frame = ui.ctx().cumulative_frame_nr();
     ui.ctx()
         .data_mut(|d| d.insert_temp(egui::Id::new(MODAL_FOOTER_ACTIVE), frame));
     ui.horizontal(|ui| {
