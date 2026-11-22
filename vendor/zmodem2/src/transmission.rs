@@ -316,9 +316,13 @@ impl HeaderReader {
                     };
                     let encoding = match Encoding::try_from(byte) {
                         Ok(encoding) => encoding,
-                        Err(e) => {
+                        Err(_) => {
+                            // MistTerm (#450): a stray non-encoding byte (e.g. terminal
+                            // noise or an ASCII prompt fragment interleaved with the
+                            // stream) must not abort the whole transfer. Resync: drop
+                            // the byte and keep seeking the next `ZPAD`.
                             self.reset();
-                            return Err(e);
+                            continue;
                         }
                     };
                     self.expected_len = Header::read_size(encoding);
@@ -1213,6 +1217,10 @@ impl Receiver {
                 Ok(None) => break,
                 Err(e) => {
                     let _ = self.queue_nak();
+                    // MistTerm (#450): resync instead of aborting the session —
+                    // report the error to the caller but keep the receiver
+                    // usable; the peer will retransmit after the NAK.
+                    self.header_reader.reset();
                     return Err(e);
                 }
             };
@@ -1511,7 +1519,6 @@ impl Receiver {
                 if self.crc.process(port, self.data_encoding)?.is_none() {
                     return Ok(None);
                 }
-
                 if self.state == RecvState::FileReadingMetadata {
                     self.parse_zfile_buf()?;
                     self.buf.clear();
@@ -1630,7 +1637,13 @@ fn decode_header(encoding: Encoding, data: &[u8]) -> Result<Header, Error> {
         }
     }
 
-    let frame = Frame::try_from(payload[0])?;
+    let frame = match Frame::try_from(payload[0]) {
+        Ok(frame) => frame,
+        // MistTerm (#450): unknown frame type inside an otherwise CRC-valid
+        // header — resync instead of failing the whole session; the peer will
+        // retry or we simply skip this frame.
+        Err(_) => return Err(Error::MalformedFrame(payload[0])),
+    };
     let mut flags = [0u8; 4];
     flags.copy_from_slice(&payload[1..=4]);
     Ok(Header::new(encoding, frame, &flags))
