@@ -3940,7 +3940,12 @@ impl SftpPanel {
         }
         crate::ui::chrome::right_dock_header_divider(ui, theme);
         ui.spacing_mut().item_spacing.y = prev_gap_y;
-        ui.add_space(theme.spacing_dock_section_gap());
+        // #462：modern 文件面板标题带下面直接跟「上传/下载/对比目录」动作行，
+        // 这里再加 dock 通用的一整段 section gap 就会在「文件」与动作之间
+        // 出现一条明显空带。仅在需要绘制 SSH 门禁 / 不可用提示时才补间距。
+        if !theme.uses_modern_palette() {
+            ui.add_space(theme.spacing_dock_section_gap());
+        }
 
         let (ssh_ready, ssh_cta) = crate::ui::chrome::show_right_dock_ssh_gate(
             ui,
@@ -3954,15 +3959,24 @@ impl SftpPanel {
             self.pending_ssh_cta = Some(ssh_cta);
         }
         if !ssh_ready {
+            if theme.uses_modern_palette() {
+                ui.add_space(theme.spacing_dock_section_gap());
+            }
             self.on_session_unavailable(crate::i18n::language(ctx));
             return;
         }
         let Some(t) = terminal else {
+            if theme.uses_modern_palette() {
+                ui.add_space(theme.spacing_dock_section_gap());
+            }
             self.on_session_unavailable(crate::i18n::language(ctx));
             return;
         };
 
         let Some(handle) = t.sftp_session_for_ops() else {
+            if theme.uses_modern_palette() {
+                ui.add_space(theme.spacing_dock_section_gap());
+            }
             self.on_session_unavailable(crate::i18n::language(ctx));
             ui.label(egui::RichText::new(crate::i18n::tr(ctx, "Session unavailable", "会话不可用")).color(theme.red_color()));
             return;
@@ -5255,14 +5269,17 @@ impl SftpPanel {
         };
         let panes_h = (avail_h - reserve - FLUX_XFER_STRIP_RESERVE).max(140.0);
         let gap = 1.0;
-        let pane_w = ((content_w - gap) * 0.5).max(96.0);
+        // #462：两栏 + 中缝必须正好铺满 content_w。旧写法两栏各取
+        // (content_w-gap)/2，窄中会留下半像素舍入缝，宽面板右侧还会多出
+        // 一条细竖缝（右栏终点 < 面板右缘）。右栏吃掉全部剩余宽度。
+        let (left_w, right_w) = Self::flux_pane_widths(content_w, gap);
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 0.0;
             ui.allocate_ui_with_layout(
-                egui::vec2(pane_w, panes_h),
+                egui::vec2(left_w, panes_h),
                 egui::Layout::top_down(egui::Align::LEFT),
                 |ui| {
-                    ui.set_width(pane_w);
+                    ui.set_width(left_w);
                     ui.push_id("sftp_flux_local", |ui| {
                         self.paint_flux_local_pane(ui, ctx, theme, handle, panes_h);
                     });
@@ -5272,10 +5289,10 @@ impl SftpPanel {
             ui.painter()
                 .rect_filled(div, 0.0, theme.border_divider_color());
             ui.allocate_ui_with_layout(
-                egui::vec2(pane_w, panes_h),
+                egui::vec2(right_w, panes_h),
                 egui::Layout::top_down(egui::Align::LEFT),
                 |ui| {
-                    ui.set_width(pane_w);
+                    ui.set_width(right_w);
                     ui.push_id("sftp_flux_remote", |ui| {
                         self.paint_flux_remote_pane(ui, ctx, theme, handle, panes_h);
                     });
@@ -5283,6 +5300,13 @@ impl SftpPanel {
             );
         });
         self.paint_flux_prompts(ui, ctx, theme, handle);
+    }
+
+    /// #462：本机/远端两栏 + 中缝须铺满面板正文宽，右缘不留细竖缝。
+    fn flux_pane_widths(content_w: f32, gap: f32) -> (f32, f32) {
+        let left = ((content_w - gap) * 0.5).max(96.0);
+        let right = (content_w - left - gap).max(96.0);
+        (left, right)
     }
 
     fn clip_flux_pane(ui: &mut egui::Ui) -> f32 {
@@ -5313,35 +5337,47 @@ impl SftpPanel {
         // allocate 掉（`Sense::hover`，只挡悬停不抢点击），保证容器
         // WidgetRect 与第二行按钮互不遮挡；同一 Ui 内后续兄弟项也不再
         // 叠进同一块矩形。度量的 key 含按钮布局 salt，布局变化即重算。
+        //
+        // #462：上面那块占位必须与按钮**同处一行**，不能先空占一段再把
+        // 工具条画在下面——否则路径行与工具栏之间会多出一整条空白带。
+        // 这里按上一轮量出的高度只 allocate 一次，随后把真正绘制塞进同一块
+        // rect 的子 Ui，既保留 #446 的命中语义，又不额外吃垂直空间。
         let w = ui.available_width().min(ui.max_rect().width()).clamp(48.0, 2000.0);
         let row_key = egui::Id::new("sftp_flux_tool_row").with(w as u32);
         let measured_h = ui
             .ctx()
             .data(|d| d.get_temp::<f32>(row_key))
             .unwrap_or(theme.size_control_btn_h() + 4.0);
-        // 先按上一轮量出的真实高度整块占位（只 hover、不点击），
-        // 让本容器 Ui 的 WidgetRect 盖住真实绘制区、且与按钮们各自独立，
-        // 同层按钮不再被 hit-test 判成被遮挡。
-        ui.allocate_exact_size(egui::vec2(w, measured_h), egui::Sense::hover());
-        let frame = egui::Frame::NONE
-            .fill(theme.color_sftp_bar_fill())
-            .inner_margin(egui::Margin::symmetric(0, 0));
-        let wrapped = frame.show(ui, |ui| {
-            ui.set_width(w);
-            ui.spacing_mut().item_spacing.x = 4.0;
-            ui.spacing_mut().item_spacing.y = 2.0;
-            ui.horizontal_wrapped(|ui| add(ui));
-        });
-        let real_h = (wrapped.response.rect.height() + 4.0).max(1.0);
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(w, measured_h), egui::Sense::hover());
+        ui.painter()
+            .rect_filled(rect, 0.0, theme.color_sftp_bar_fill());
+        ui.painter().hline(
+            rect.x_range(),
+            rect.bottom() - 0.5,
+            egui::Stroke::new(1.0, theme.border.to_color32()),
+        );
+        // 在**同一块** rect 内做真正的换行绘制：后续帧指针落在第二行按钮上
+        // 时，容器 WidgetRect 已覆盖整条工具条，不会被判成被更高层容器遮挡。
+        // 子 Ui 的高给足，避免首帧量两行时被上一帧的单行 rect 截住；
+        // 真正参与布局/命中占位的仍只有上面那块 measured_h 矩形。
+        let measure_rect = egui::Rect::from_min_size(
+            rect.min,
+            egui::vec2(rect.width(), rect.height().max(200.0)),
+        );
+        let mut child = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(measure_rect)
+                .layout(egui::Layout::top_down(egui::Align::LEFT)),
+        );
+        child.set_clip_rect(measure_rect);
+        child.spacing_mut().item_spacing.x = 4.0;
+        child.spacing_mut().item_spacing.y = 2.0;
+        let wrapped = child.horizontal_wrapped(|ui| add(ui));
+        let real_h = (wrapped.response.rect.height() + 2.0).max(1.0);
         if (real_h - measured_h).abs() > 0.5 {
             ui.ctx()
                 .data_mut(|d| d.insert_temp(row_key, real_h));
         }
-        ui.painter().hline(
-            wrapped.response.rect.x_range(),
-            wrapped.response.rect.bottom() - 0.5,
-            egui::Stroke::new(1.0, theme.border.to_color32()),
-        );
     }
 
     fn paint_flux_head_bar(
@@ -6186,6 +6222,18 @@ impl SftpPanel {
 mod tests {
     use super::*;
     use chrono::Utc;
+
+    // #462：两栏 + 中缝铺满正文宽，右缘无细竖缝；奇数宽度也不丢像素。
+    #[test]
+    fn flux_pane_widths_fill_content_without_right_sliver() {
+        for w in [321.0_f32, 640.0, 777.0, 1200.0] {
+            let (l, r) = SftpPanel::flux_pane_widths(w, 1.0);
+            assert!((l + 1.0 + r - w).abs() < 0.01, "w={w} l={l} r={r}");
+        }
+        // 极窄面板仍保住最小可见宽（此时会溢出，交给外层 clip，不出现零宽栏）。
+        let (l, r) = SftpPanel::flux_pane_widths(120.0, 1.0);
+        assert!(l >= 96.0 && r >= 96.0);
+    }
 
     // #441：图标-only 降级只在「连单个带标签按钮都放不下」时触发；
     // 默认宽度（>= 最宽按钮 + 边距）一律保留完整标签。
