@@ -1512,6 +1512,14 @@ impl MistTermApp {
                             );
                             ui.add_space(theme.spacing_panel_gap());
                             let var_field_w = layout_util::finite_content_width(ui);
+                            ui.label(crate::ui::chrome::rich_caption(
+                                theme,
+                                crate::i18n::tr(
+                                    ctx,
+                                    "Each field replaces the matching <placeholder>; the command below updates when you recompute it.",
+                                    "每一栏会替换命令里对应的 <占位符>；点「根据变量重算命令」后下方命令随之更新。",
+                                ),
+                            ));
                             for (key, value) in &mut self.fragment_state.pending_fragment_vars {
                                 crate::ui::chrome::form_field_label(
                                     ui,
@@ -1826,32 +1834,43 @@ impl MistTermApp {
                             .show(ui, |ui| {
                                 if let Some(fragment_id) = &self.fragment_state.variable_dialog.fragment_id {
                                     if let Some(fragment) = self.fragment_state.fragment_manager.get(fragment_id) {
+                                        // #466：先讲清楚「填这里 → 下面命令会变成这样」，
+                                        // 让用户明白输入框对应的是命令里的 <占位符> 片段。
+                                        ui.label(crate::ui::chrome::rich_caption(
+                                            theme,
+                                            crate::i18n::tr(
+                                                ui.ctx(),
+                                                "Type a value here and the command below will change: it replaces the matching <placeholder> in the snippet.",
+                                                "在这里填值，下面的命令会随之改变：它会替换片段里对应的 <占位符>。",
+                                            ),
+                                        ));
+                                        ui.add_space(theme.spacing_sm());
+                                        let mut changed_any = false;
                                         for var in &fragment.variables {
-                                            ui.label(
-                                                egui::RichText::new(&var.description)
-                                                    .size(theme.font_size_fragment_dialog_body())
-                                                    .color(theme.text_primary()),
+                                            let used = crate::core::placeholder_usage(
+                                                &fragment.command,
+                                                &var.name,
                                             );
-                                            ui.label(
-                                                egui::RichText::new(format!(
-                                                    "{} <{}>",
-                                                    crate::i18n::tr(
-                                                        ui.ctx(),
-                                                        "Placeholder",
-                                                        "占位符"
-                                                    ),
-                                                    var.name
-                                                ))
-                                                .size(theme.font_size_fragment_dialog_caption())
-                                                .color(theme.text_tertiary()),
+                                            // 主视觉标签 = 真正会被替换的占位符 <name>；
+                                            // 描述只在后面作为次要说明，避免「host」之类混淆会话字段。
+                                            crate::ui::chrome::form_field_label(
+                                                ui,
+                                                theme,
+                                                &format!("<{}>", var.name),
                                             );
+                                            if !var.description.trim().is_empty() {
+                                                ui.label(crate::ui::chrome::rich_caption(
+                                                    theme,
+                                                    &var.description,
+                                                ));
+                                            }
                                             let value = self
                                                 .fragment_state.variable_dialog
                                                 .values
                                                 .entry(var.name.clone())
                                                 .or_default();
                                             let var_w = layout_util::finite_content_width(ui);
-                                            crate::ui::chrome::form_singleline_field(
+                                            let resp = crate::ui::chrome::form_singleline_field(
                                                 ui,
                                                 theme,
                                                 egui::Id::unique(("var_dialog", var.name.as_str())),
@@ -1860,7 +1879,87 @@ impl MistTermApp {
                                                 var_w,
                                                 false,
                                             );
+                                            let value_changed = resp.changed();
+                                            match used {
+                                                crate::core::PlaceholderUsage::Used => {
+                                                    ui.label(crate::ui::chrome::rich_caption(
+                                                        theme,
+                                                        &format!(
+                                                            "{} <{}>",
+                                                            crate::i18n::tr(
+                                                                ui.ctx(),
+                                                                "Replaces",
+                                                                "将替换"
+                                                            ),
+                                                            var.name
+                                                        ),
+                                                    ));
+                                                }
+                                                crate::core::PlaceholderUsage::Missing => {
+                                                    // #466：该变量没有出现在命令模板里，
+                                                    // 填了也不会改变下面的命令——必须明确说明并给出下一步。
+                                                    ui.label(
+                                                        egui::RichText::new(format!(
+                                                            "{}{}",
+                                                            crate::i18n::tr(
+                                                                ui.ctx(),
+                                                                "Not in the command yet: put ",
+                                                                "当前命令里还没有这个占位符：请在模板里加上 "
+                                                            ),
+                                                            format!("<{}>{}", var.name,
+                                                                crate::i18n::tr(
+                                                                    ui.ctx(),
+                                                                    " into the snippet template, or this field will not change the command.",
+                                                                    "，否则这一栏不会改变当前命令。"
+                                                                ))
+                                                        ))
+                                                        .size(theme.font_size_fragment_dialog_caption())
+                                                        .color(theme.color_status_warning_text()),
+                                                    );
+                                                }
+                                            }
+                                            if value_changed {
+                                                changed_any = true;
+                                            }
                                             ui.add_space(theme.spacing_md());
+                                        }
+                                        if changed_any {
+                                            // 边打边算：输入即刷新下方命令预览，避免「按钮点了没反应」。
+                                            self.fragment_state.variable_dialog.last_finalize_error = None;
+                                            let preview = self.build_fragment_command_preview(
+                                                fragment,
+                                                &self.fragment_state.variable_dialog.values,
+                                            );
+                                            self.fragment_state.variable_dialog.command_edit = preview;
+                                        }
+                                        let unmatched = crate::core::unmatched_variable_names(
+                                            &fragment.command,
+                                            fragment.variables.iter().map(|v| v.name.as_str()),
+                                        );
+                                        if !unmatched.is_empty() {
+                                            ui.separator();
+                                            ui.label(crate::ui::chrome::rich_caption(
+                                                theme,
+                                                crate::i18n::tr(
+                                                    ui.ctx(),
+                                                    "These fields are not used by this snippet's command, so they will not change it:",
+                                                    "这些变量没有出现在本片段的命令里，填了也不会改变它：",
+                                                ),
+                                            ));
+                                            for name in &unmatched {
+                                                ui.label(crate::ui::chrome::rich_caption(
+                                                    theme,
+                                                    &format!("  <{}>", name),
+                                                ));
+                                            }
+                                            ui.label(crate::ui::chrome::rich_caption(
+                                                theme,
+                                                crate::i18n::tr(
+                                                    ui.ctx(),
+                                                    "Add the placeholder to the snippet, or edit the command below directly.",
+                                                    "把上面的 <变量名> 加进片段模板，或直接编辑下面的命令。",
+                                                ),
+                                            ));
                                         }
                                         ui.separator();
                                         if crate::ui::chrome::panel_action_icon_button(
