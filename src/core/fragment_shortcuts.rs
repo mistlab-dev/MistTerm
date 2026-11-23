@@ -337,8 +337,10 @@ fn reserved_app_shortcuts(platform: KeyPlatform) -> Vec<FragmentShortcut> {
             for n in 1..=9 {
                 out.push(cmd(&format!("Num{n}")));
             }
-            // ⌘⇧：片段选择器、AI、分屏等；⌘⇧3/4/5 是系统截图
-            for k in ["J", "A", "L", "D", "U", "N", "E", "H", "P", "Z", "Tab", "Num3", "Num4", "Num5"] {
+            // ⌘⇧：片段选择器、AI、分屏等；⌘⇧3/4/5 是系统截图。
+            // 不含 H：应用没有 ⌘⇧H 处理器（⌘H 系统级 Hide App 已在上面
+            // 单键列表里保留），⌘⇧H 应可绑定并在终端触发。
+            for k in ["J", "A", "L", "D", "U", "N", "E", "P", "Z", "Tab", "Num3", "Num4", "Num5"] {
                 out.push(cmd_shift(k));
             }
             out.push(FragmentShortcut::new("ArrowLeft", false, false, true, true));
@@ -347,9 +349,10 @@ fn reserved_app_shortcuts(platform: KeyPlatform) -> Vec<FragmentShortcut> {
         }
         KeyPlatform::Other => {
             let ctrl_shift = |k: &str| FragmentShortcut::new(k, true, true, false, false);
-            // Ctrl+Shift：标签、片段选择器、AI、分屏、终端复制粘贴、SFTP 等
+            // Ctrl+Shift：标签、片段选择器、AI、分屏、终端复制粘贴、SFTP 等。
+            // 不含 H：应用没有 Ctrl+Shift+H 处理器，应可绑定并在终端触发。
             for k in [
-                "T", "W", "J", "A", "L", "D", "U", "S", "C", "V", "N", "E", "H", "P", "Tab",
+                "T", "W", "J", "A", "L", "D", "U", "S", "C", "V", "N", "E", "P", "Tab",
                 "ArrowLeft", "ArrowRight", "F9", "F10", "Backspace", "Escape",
             ] {
                 out.push(ctrl_shift(k));
@@ -362,6 +365,26 @@ fn reserved_app_shortcuts(platform: KeyPlatform) -> Vec<FragmentShortcut> {
 fn is_letter_key(key: &str) -> bool {
     let k = key.to_ascii_uppercase();
     k.len() == 1 && k.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
+}
+
+/// egui 0.37 会把修饰键拆成左右两份上报（`ShiftLeft` / `ShiftRight` /
+/// `ControlLeft` / `ControlRight` / `AltLeft` / `AltRight` /
+/// `SuperLeft` / `SuperRight`），这些名字绝不能当作快捷键的主键，
+/// 否则 ⌘⇧H 会被录成 `⌘ShiftLeft` 且永远无法与真实按键（key="H"）匹配。
+pub fn is_standalone_modifier_key(name: &str) -> bool {
+    let n = name.trim();
+    if n.is_empty() {
+        return true;
+    }
+    let base = n.strip_suffix("Left").or_else(|| n.strip_suffix("Right")).unwrap_or(n);
+    base.eq_ignore_ascii_case("Shift")
+        || base.eq_ignore_ascii_case("Control")
+        || base.eq_ignore_ascii_case("Ctrl")
+        || base.eq_ignore_ascii_case("Alt")
+        || base.eq_ignore_ascii_case("Command")
+        || base.eq_ignore_ascii_case("MacCmd")
+        || base.eq_ignore_ascii_case("Meta")
+        || base.eq_ignore_ascii_case("Super")
 }
 
 /// 校验快捷键是否可保存（按当前平台）。
@@ -604,5 +627,101 @@ mod tests {
                 .find_matching_fragment_id("Z", true, true, false, true)
                 .is_none()
         );
+    }
+
+    /// #467：egui 0.37 上报的左右修饰键（ShiftLeft / ControlRight /
+    /// SuperLeft 等）绝不能当作主键，也不能结束录制。
+    #[test]
+    fn left_right_modifier_names_are_not_primary_keys() {
+        for name in [
+            "ShiftLeft",
+            "ShiftRight",
+            "ControlLeft",
+            "ControlRight",
+            "AltLeft",
+            "AltRight",
+            "SuperLeft",
+            "SuperRight",
+            "Shift",
+            "Control",
+            "Alt",
+            "Command",
+            "MacCmd",
+            "Meta",
+        ] {
+            assert!(
+                is_standalone_modifier_key(name),
+                "{name} should be treated as a standalone modifier"
+            );
+        }
+        assert!(!is_standalone_modifier_key("H"));
+        assert!(!is_standalone_modifier_key("Y"));
+        // 空名：当修饰键忽略（不会成为主键）
+        assert!(is_standalone_modifier_key(""));
+    }
+
+    /// #467：录制出完整 ⌘⇧H（macOS）/ Ctrl+Shift+H（Win/Linux）后，
+    /// 校验应通过（不再被保留列表挡下），且能匹配真实按键事件。
+    #[test]
+    fn cmd_shift_h_is_recordable_and_matches_real_event() {
+        // macOS：⌘⇧H 不再在保留列表里，可以保存。
+        // display_label 按编译目标平台渲染（display_label_has_modifiers 同款口径），
+        // 断言只要求出现 H 且不是 `ShiftLeft` 之类的修饰键残留。
+        let mac = FragmentShortcut::new("H", false, true, false, true);
+        assert!(check(&mac, MAC).is_ok(), "⌘⇧H should be recordable on macOS");
+        let mac_label = mac.display_label();
+        assert!(mac_label.ends_with('H'), "label should end with H: {mac_label}");
+        assert!(!mac_label.contains("ShiftLeft"), "label must not contain raw modifier name: {mac_label}");
+
+        // Win/Linux：Ctrl+Shift+H 不再在保留列表里，可以保存
+        let other = win("H", true, true, false);
+        assert!(
+            check(&other, WIN).is_ok(),
+            "Ctrl+Shift+H should be recordable on Win/Linux"
+        );
+        // display_label 按编译目标平台渲染；非 mac 上 ⌘⇒Ctrl
+        let expected_h = if cfg!(target_os = "macos") { "⌘⇧H" } else { "Ctrl+Shift+H" };
+        assert_eq!(other.display_label(), expected_h);
+
+        // 保存后匹配真实按键事件（key="H" + command + shift）。
+        // set() 会按当前平台 normalize；本机非 mac 时直接塞 mac 原始值，
+        // 用 conflict_fragment_id_for(MAC) 验证 mac 侧同组合匹配。
+        let mut store = FragmentShortcutStore::default();
+        store.bindings.insert("frag_h".into(), mac.normalized_for(MAC));
+        assert_eq!(
+            store.conflict_fragment_id_for(&mac, None, MAC),
+            Some("frag_h".into())
+        );
+        // matches() 用当前平台；这里直接用 same_combo 语义验证 mac 侧
+        assert!(mac.same_combo(&FragmentShortcut::new("H", false, true, false, true), MAC));
+
+        // Win/Linux：`matches` 用 KeyPlatform::current()（本机非 mac → Other），
+        // 真实事件 ctrl+command 同开也要能命中。set() 内部 normalized() 会合并。
+        let mut store_other = FragmentShortcutStore::default();
+        store_other.set("frag_h".into(), other);
+        assert_eq!(
+            store_other.find_matching_fragment_id("H", true, true, false, true),
+            Some("frag_h".into())
+        );
+    }
+
+    /// #467：应用确实在用的组合仍必须报 ReservedApp（可操作提示，而不是静默失效）。
+    #[test]
+    fn real_reserved_combos_still_rejected() {
+        // macOS：⌘⇧J（片段选择器）仍保留
+        assert!(matches!(
+            check(&FragmentShortcut::new("J", false, true, false, true), MAC),
+            Err(ShortcutConflict::ReservedApp(_))
+        ));
+        // ⌘H（系统 Hide App + 应用快捷键）仍保留
+        assert!(matches!(
+            check(&FragmentShortcut::new("H", false, false, false, true), MAC),
+            Err(ShortcutConflict::ReservedApp(_))
+        ));
+        // Win/Linux：Ctrl+Shift+J（片段选择器）仍保留
+        assert!(matches!(
+            check(&win("J", true, true, false), WIN),
+            Err(ShortcutConflict::ReservedApp(_))
+        ));
     }
 }
