@@ -108,9 +108,19 @@ pub enum ReceiveFeed {
     Stripped { rest: Vec<u8> },
 }
 
+/// ZFIN（类型 `0x08`）的 ZHEX 头正文：`B08` + 标志/CRC 十六进制。
+/// 点查失败形态是没有 `**` 的 `00B0800000000022d`（前导 `00` + `B08…`）。
+fn looks_like_zfin_zhex_hex(hex: &[u8]) -> bool {
+    hex.windows(3).any(|w| w.eq_ignore_ascii_case(b"B08"))
+}
+
+#[cfg(test)]
 fn rx_residue_prefix_len(data: &[u8], budget: usize) -> usize {
+    rx_residue_prefix_len_ex(data, budget, false)
+}
+
+fn rx_residue_prefix_len_ex(data: &[u8], budget: usize, mut in_protocol: bool) -> usize {
     let mut i = 0usize;
-    let mut in_protocol = false;
     while i < data.len() && i < budget {
         let b = data[i];
         if rx_drop_byte(b) {
@@ -128,11 +138,14 @@ fn rx_residue_prefix_len(data: &[u8], budget: usize) -> usize {
             while i < data.len() && is_hex_digit(data[i]) {
                 i += 1;
             }
+            let hex = &data[start..i];
+            let zfin_hex = looks_like_zfin_zhex_hex(hex);
             let next = data.get(i).copied();
             if matches!(next, Some(b'\r') | Some(b'\n') | Some(zmodem::XON)) {
-                // 整行 hex 后紧跟帧结束符：只在前面已经有协议字节时才认为是残尾，
-                // 否则可能只是普通输出（例如纯数字行）。
-                if in_protocol {
+                // 整行 hex 后紧跟帧结束符：已处于协议残尾，或这一行本身就是
+                // `00B08…` / `B08…` ZFIN ZHEX（不必先有 `**`），都继续吞掉。
+                // 普通数字行（如 `1234\r\n`）不含 `B08`，仍交给显示路径。
+                if in_protocol || zfin_hex {
                     continue;
                 }
                 return start;
@@ -143,9 +156,9 @@ fn rx_residue_prefix_len(data: &[u8], budget: usize) -> usize {
             if prompt_fragment_pos(rest).is_some() && (in_protocol || start == 0) {
                 continue;
             }
-            // 协议前缀后的 hex，或整段都是截断 hex（单独到达的 `**B08…` / `00`），
-            // 同样视为残尾，避免落入 VTE 与会话日志。
-            if in_protocol || (start == 0 && i == data.len()) {
+            // 协议前缀后的 hex、ZFIN ZHEX 正文（`00B08…` / `B08…`，无 `**`），
+            // 或整段都是截断 hex（单独到达的 `**B08…` / `00`），同样视为残尾。
+            if in_protocol || zfin_hex || (start == 0 && i == data.len()) {
                 in_protocol = true;
                 continue;
             }
@@ -700,12 +713,14 @@ impl LrzszTransfer {
     /// 返回 `Some(rest)`：`rest` 应作为普通 PTY 输出继续显示；残尾全部吃掉时 `rest` 为空。
     fn absorb_rx_tail(&self, session: &mut ZmodemRxSession, data: &[u8]) -> Option<Vec<u8>> {
         let ended_at = session.ended_at?;
-        if ended_at.elapsed() > RX_TAIL_WINDOW {
-            // 窗口结束：不再吞字节，交给正常显示路径。
+        let budget = RX_TAIL_RESIDUE_CAP.saturating_sub(session.residue.len());
+        // 已吞过残尾时，后续分片开头的 hex 视为同一帧的续段（例如先到 `00` 再到 `B08…`）。
+        let eaten = rx_residue_prefix_len_ex(data, budget, !session.residue.is_empty());
+        if ended_at.elapsed() > RX_TAIL_WINDOW && eaten == 0 {
+            // 软窗口已过，且本段开头不是残尾：交给正常显示路径。
+            // 若本段仍是 `00B08…` / `**B08…` 一类残尾，即使延迟到达也继续吞掉。
             return Some(data.to_vec());
         }
-        let budget = RX_TAIL_RESIDUE_CAP.saturating_sub(session.residue.len());
-        let eaten = rx_residue_prefix_len(data, budget);
         if eaten > 0 {
             session.residue.extend_from_slice(&data[..eaten]);
             log::debug!(
@@ -843,16 +858,21 @@ impl LrzszTransfer {
         };
 
         if let RecvSide::Active(session) = side {
-            if let Some(ended_at) = session.ended_at {
-                if ended_at.elapsed() > RX_TAIL_WINDOW {
-                    // 残尾窗口已过：不再吞字节。
-                    *g = None;
-                    return ReceiveFeed::Passthrough { data: data.to_vec() };
-                }
+            if session.ended_at.is_some() {
                 let rest = self.absorb_rx_tail(session, data);
                 if session.ended_at.is_none() {
                     // 提示符已恢复，会话到此结束；残尾字节已丢弃。
                     *g = None;
+                } else if let Some(ref r) = rest {
+                    // 软窗口已过且本段没有可吞残尾：结束会话，整段按普通输出显示。
+                    if r.as_slice() == data
+                        && session
+                            .ended_at
+                            .is_some_and(|t| t.elapsed() > RX_TAIL_WINDOW)
+                    {
+                        *g = None;
+                        return ReceiveFeed::Passthrough { data: data.to_vec() };
+                    }
                 }
                 return match rest {
                     Some(rest) if rest.is_empty() => ReceiveFeed::Consumed,
@@ -1196,7 +1216,7 @@ mod tests {
         assert_eq!(rest, prompt, "display/log path must be the restored prompt only");
         assert!(!rest.starts_with(b"00"), "literal 00 must not prefix the prompt");
         assert!(
-            !rest.windows(3).any(|w| w == b"**B"),
+            !rest.windows(3).any(|w| w == b"**B" || w.eq_ignore_ascii_case(b"B08")),
             "ZHEX tail must not remain for VTE/session log"
         );
     }
@@ -1268,5 +1288,102 @@ mod tests {
         }
         assert!(!lrzsz.has_rx_tail_pending());
         assert!(!lrzsz.is_active());
+    }
+
+    /// 点查 #472 实际漏到 VTE 的残尾行（无 `**`，前导 `00` + `B08…`）。
+    const GUI_LEFTOVER_00B08: &'static [u8] = b"00B0800000000022d";
+
+    fn transfer_after_session_complete_ended_ago(ago: Duration) -> LrzszTransfer {
+        let lrzsz = transfer_after_session_complete();
+        if let Some(RecvSide::Active(session)) = lrzsz.recv_side.lock().unwrap().as_mut() {
+            session.ended_at = Some(Instant::now().checked_sub(ago).expect("ended_at in the past"));
+        }
+        lrzsz
+    }
+
+    #[test]
+    fn test_rx_residue_prefix_absorbs_gui_leftover_00b08_without_stars() {
+        assert_eq!(
+            rx_residue_prefix_len(GUI_LEFTOVER_00B08, RX_TAIL_RESIDUE_CAP),
+            GUI_LEFTOVER_00B08.len()
+        );
+        // 旧逻辑在「开头 hex 后紧跟 CR/LF、且尚未见到 `**`」时返回 0，整行漏进 VTE。
+        for tail in [
+            b"00B0800000000022d\r\n".as_slice(),
+            b"00B0800000000022d\n".as_slice(),
+            b"00B0800000000022d\r\n\x11".as_slice(),
+            b"\r\n00B0800000000022d\r\n".as_slice(),
+            b"B0800000000022d\r\n".as_slice(),
+        ] {
+            assert_eq!(
+                rx_residue_prefix_len(tail, RX_TAIL_RESIDUE_CAP),
+                tail.len(),
+                "must swallow {tail:?} and not leave it for VTE"
+            );
+        }
+        // 不要误吞普通数字行。
+        assert_eq!(rx_residue_prefix_len(b"1234\r\n", RX_TAIL_RESIDUE_CAP), 0);
+    }
+
+    #[test]
+    fn test_feed_receive_after_session_complete_does_not_emit_gui_leftover_00b08() {
+        let lrzsz = transfer_after_session_complete();
+        assert_eq!(lrzsz.feed_receive(GUI_LEFTOVER_00B08), ReceiveFeed::Consumed);
+        assert_eq!(
+            lrzsz.feed_receive(b"00B0800000000022d\r\n"),
+            ReceiveFeed::Consumed
+        );
+        assert!(lrzsz.has_rx_tail_pending());
+        assert!(!lrzsz.is_active());
+
+        match lrzsz.feed_receive(b"mist410@grok-bot-vm-307649871:~$ ") {
+            ReceiveFeed::Stripped { rest } | ReceiveFeed::Passthrough { data: rest } => {
+                assert_display_rest_is_clean_prompt(&rest, b"mist410@grok-bot-vm-307649871:~$ ");
+            }
+            other => panic!("expected clean prompt, got {other:?}"),
+        }
+        assert!(!lrzsz.has_rx_tail_pending());
+        assert!(!lrzsz.is_active());
+    }
+
+    #[test]
+    fn test_feed_receive_absorbs_delayed_post_complete_00b08_chunk() {
+        // 点查里成功后先空等（仅块状光标），残尾在软窗口（1.5s）之后才作为独立分片到达。
+        let lrzsz = transfer_after_session_complete_ended_ago(
+            RX_TAIL_WINDOW + Duration::from_millis(500),
+        );
+        assert!(lrzsz.has_rx_tail_pending());
+        assert_eq!(
+            lrzsz.feed_receive(b"00B0800000000022d\r\n"),
+            ReceiveFeed::Consumed,
+            "delayed 00B08… chunk after SessionComplete must not passthrough"
+        );
+        assert!(lrzsz.has_rx_tail_pending());
+
+        match lrzsz.feed_receive(b"mist410@grok-bot-vm-307649871:~$ ") {
+            ReceiveFeed::Stripped { rest } | ReceiveFeed::Passthrough { data: rest } => {
+                assert_display_rest_is_clean_prompt(&rest, b"mist410@grok-bot-vm-307649871:~$ ");
+            }
+            other => panic!("expected clean prompt, got {other:?}"),
+        }
+        assert!(!lrzsz.has_rx_tail_pending());
+        assert!(!lrzsz.is_active());
+    }
+
+    #[test]
+    fn test_feed_receive_absorbs_split_00_then_b08_without_stars() {
+        let lrzsz = transfer_after_session_complete();
+        assert_eq!(lrzsz.feed_receive(b"00"), ReceiveFeed::Consumed);
+        assert_eq!(
+            lrzsz.feed_receive(b"B0800000000022d\r\n"),
+            ReceiveFeed::Consumed
+        );
+        match lrzsz.feed_receive(b"mist410@host:~$ ") {
+            ReceiveFeed::Stripped { rest } | ReceiveFeed::Passthrough { data: rest } => {
+                assert_display_rest_is_clean_prompt(&rest, b"mist410@host:~$ ");
+            }
+            other => panic!("expected clean prompt, got {other:?}"),
+        }
+        assert!(!lrzsz.has_rx_tail_pending());
     }
 }
