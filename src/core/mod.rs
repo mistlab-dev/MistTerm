@@ -142,7 +142,10 @@ pub use fragment_shortcuts::{
     validate_shortcut, FragmentShortcut, FragmentShortcutStore, ShortcutConflict,
 };
 pub use fragment_expr::{expand_rhai_blocks, merge_rhai_context};
-pub use fragment_command::{build_fragment_command_preview, finalize_fragment_command_text};
+pub use fragment_command::{
+    build_fragment_command_preview, finalize_fragment_command_text, placeholder_usage,
+    unmatched_variable_names, PlaceholderUsage,
+};
 pub use send_sequence::{
     alloc_replay_mark, line_payload, replay_schedule, sequence_lines, SendSequence,
     SendSequenceStore, SequenceError, MAX_DELAY_MS,
