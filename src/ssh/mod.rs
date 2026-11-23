@@ -81,7 +81,7 @@ pub use sftp::{
     RemoteNode, SftpClient, SftpEntry, TransferProgress, TransferResult, WriteMode,
 };
 pub use manager::{ShellPumpCommand, probe_now_us, set_repaint_context, take_oldest_pending_us, SshManager, SshMessage, SshSessionHandle, SshSessionId};
-pub use lrzsz::{LrzszTransfer, TransferEvent};
+pub use lrzsz::{LrzszTransfer, ReceiveFeed, TransferEvent};
 pub use file_transfer::{FileTransfer, ProgressTracker};
 pub use scp_upload::ScpUpload;
 

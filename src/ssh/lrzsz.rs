@@ -8,22 +8,153 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::{Duration, Instant};
 use ssh2::Channel;
 use super::manager::{ShellPumpCommand, ShellPumpTx, SshSessionHandle};
 
 const RX_INCOMING_CAP: usize = 512 * 1024;
+
+/// 会话结束后继续吞掉的协议残尾上限（`**B08…` / 收尾 XON 等）。超过即视为远端又开始说话。
+const RX_TAIL_RESIDUE_CAP: usize = 4 * 1024;
 
 /// 单次 `sz`→本机会话：`zmodem2::Receiver` + 未解析完的 PTY 字节
 struct ZmodemRxSession {
     receiver: zmodem2::Receiver,
     incoming: Vec<u8>,
     last_save_path: Option<PathBuf>,
+    /// MistTerm (#458): `SessionComplete` 后继续经 `feed_receive_data` 吃掉的尾字节。
+    ///
+    /// `zmodem2::Receiver` 在 `ZFIN` 上置 `SessionEnd` 并报 `SessionComplete`，
+    /// 但远端 `sz` 的 ZFIN 应答 / 收尾 `XON` 常和**后续 PTY 分片**一起到达。
+    /// 若此时立刻清空 `recv_side`，这批残余就落进 VTE 与日志（典型症状：提示符前多出
+    /// 字面 `00`、日志里留下未消费的 `**B08…`）。
+    residue: Vec<u8>,
+    /// 接收结束时刻（`SessionComplete`）；用于给残尾一个有限的吞噬窗口。
+    ended_at: Option<Instant>,
 }
 
 /// 被动接收：先攒字节直到出现 ZRQINIT，再建 `zmodem2::Receiver`（其 `new` 会排队 ZRINIT）
 enum RecvSide {
     Passive { pending: Vec<u8> },
     Active(ZmodemRxSession),
+}
+
+impl ZmodemRxSession {
+    fn new(receiver: zmodem2::Receiver, incoming: Vec<u8>) -> Self {
+        Self {
+            receiver,
+            incoming,
+            last_save_path: None,
+            residue: Vec::new(),
+            ended_at: None,
+        }
+    }
+}
+
+fn is_hex_digit(b: u8) -> bool {
+    b.is_ascii_hexdigit()
+}
+
+/// ZMODEM 控制里「无害的空转字节」：帧填充、ZDLE、收尾 XON、行尾填充。
+fn rx_pad_byte(b: u8) -> bool {
+    matches!(
+        b,
+        zmodem::ZPAD | 0x80 | zmodem::ZDLE | 0x11 | b'\r' | b'\n' | b'\t' | b' ' | b'|'
+    )
+}
+
+/// 只可能出现在协议流里的 C0 控制符（不含 `\r` `\n` `\t`，也不含 XON）。
+fn rx_drop_byte(b: u8) -> bool {
+    matches!(b, 0x00..=0x08 | 0x0b | 0x0c | 0x0e..=0x17 | 0x19..=0x1f)
+}
+
+/// 提示符片段：与 `terminal.rs` 的 `contains_shell_prompt_fragment` 同口径。
+fn prompt_fragment_pos(text: &[u8]) -> Option<usize> {
+    text.windows(2)
+        .position(|w| matches!(w, [b'$', b' '] | [b'#', b' '] | [b'>', b' ']))
+}
+
+/// 从 `data[..]` 里取提示符行（含）之后的部分的起点；没有提示符则返回 `None`。
+fn prompt_line_start(text: &[u8]) -> Option<usize> {
+    prompt_fragment_pos(text)?;
+    let mut start = 0usize;
+    for (i, b) in text.iter().enumerate() {
+        if *b == b'\n' {
+            start = i + 1;
+        }
+    }
+    Some(start)
+}
+
+/// 消费 `data` 开头属于 ZMODEM 收尾残尾的字节数（#458）。
+///
+/// `SessionComplete` 之后，远端 `sz` 的收尾 `**B08…` ZHEX 头 / XON / `\r\n`
+/// 常与下一段 PTY 分片一起到达。这些字节既不是文件载荷，也不是终端该显示的内容，
+/// 必须在本机侧吃掉，否则会落到 VTE 与会话日志里（提示符前的字面 `00`）。
+///
+/// 只看**开头**：一旦遇到可见文本（如 `user@host:~$`），立刻停下，
+/// 返回已吃掉的长度，剩下的原样交给显示路径。
+/// 残尾吞噬窗口：`SessionComplete` 后这段时间内到达的协议字节都视为 ZMODEM 收尾。
+const RX_TAIL_WINDOW: Duration = Duration::from_millis(1500);
+
+/// `feed_receive_data` 的消费结论。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReceiveFeed {
+    /// 整段由 ZMODEM 接收状态机 / 残尾吞噬消费，**不得**进 VTE 与会话日志。
+    Consumed,
+    /// 与本接收无关，按普通 PTY 输出处理。
+    Passthrough { data: Vec<u8> },
+    /// 头部协议残尾已剥离，剩余字节按普通 PTY 输出处理。
+    Stripped { rest: Vec<u8> },
+}
+
+fn rx_residue_prefix_len(data: &[u8], budget: usize) -> usize {
+    let mut i = 0usize;
+    let mut in_protocol = false;
+    while i < data.len() && i < budget {
+        let b = data[i];
+        if rx_drop_byte(b) {
+            i += 1;
+            in_protocol = true;
+            continue;
+        }
+        if rx_pad_byte(b) {
+            i += 1;
+            in_protocol = true;
+            continue;
+        }
+        if is_hex_digit(b) {
+            let start = i;
+            while i < data.len() && is_hex_digit(data[i]) {
+                i += 1;
+            }
+            let next = data.get(i).copied();
+            if matches!(next, Some(b'\r') | Some(b'\n') | Some(zmodem::XON)) {
+                // 整行 hex 后紧跟帧结束符：只在前面已经有协议字节时才认为是残尾，
+                // 否则可能只是普通输出（例如纯数字行）。
+                if in_protocol {
+                    continue;
+                }
+                return start;
+            }
+            let rest = &data[i..];
+            // 被分片截断的收尾 hex：紧接着就是提示符（`**B08…` 的 `0800000000022d`，
+            // 或提示符前粘着的 `00`），整段丢掉。
+            if prompt_fragment_pos(rest).is_some() && (in_protocol || start == 0) {
+                continue;
+            }
+            // 协议前缀后的 hex，或整段都是截断 hex（单独到达的 `**B08…` / `00`），
+            // 同样视为残尾，避免落入 VTE 与会话日志。
+            if in_protocol || (start == 0 && i == data.len()) {
+                in_protocol = true;
+                continue;
+            }
+            return start;
+        }
+        // 可见文本：交给显示路径。
+        return i;
+    }
+    i
 }
 
 fn disambiguate_download_path(download_dir: &Path, raw_name: &[u8]) -> Result<PathBuf, String> {
@@ -52,6 +183,8 @@ fn disambiguate_download_path(download_dir: &Path, raw_name: &[u8]) -> Result<Pa
 mod zmodem {
     pub const ZPAD: u8 = b'*';
     pub const ZDLE: u8 = 0x18;
+    /// 收尾 XON（DC1），ZHEX 帧末尾常见
+    pub const XON: u8 = 0x11;
     /// HEX 帧编码符 `B`（接收端 rz 在 PTY 上几乎总是发 HEX 头）
     pub const ZHEX: u8 = 0x42;
     /// BIN16 帧编码符 `A`
@@ -417,11 +550,7 @@ impl LrzszTransfer {
         *self.receive_pump_tx.lock().unwrap() = None;
 
         let receiver = zmodem2::Receiver::new().map_err(|e| format!("ZMODEM Receiver::new: {}", e))?;
-        let mut session = ZmodemRxSession {
-            receiver,
-            incoming: Vec::new(),
-            last_save_path: None,
-        };
+        let mut session = ZmodemRxSession::new(receiver, Vec::new());
         self.flush_receiver_outgoing(&mut session.receiver)?;
         *self.recv_side.lock().unwrap() = Some(RecvSide::Active(session));
         log::info!("ZMODEM receive started (active, ZRINIT sent)");
@@ -510,23 +639,25 @@ impl LrzszTransfer {
     /// 处理 `poll_event`；返回 `true` 表示本会话已 `SessionComplete`。
     fn poll_receiver_events(
         &self,
-        receiver: &mut zmodem2::Receiver,
-        last_save_path: &mut Option<PathBuf>,
+        session: &mut ZmodemRxSession,
     ) -> Result<bool, String> {
-        while let Some(ev) = receiver.poll_event() {
+        loop {
+            let ev = match session.receiver.poll_event() {
+                Some(ev) => ev,
+                None => return Ok(false),
+            };
             match ev {
                 zmodem2::ReceiverEvent::FileStart => {
                     *self.receive_file.lock().unwrap() = None;
-                    let raw_name = receiver.file_name();
-                    let size_u32 = receiver.file_size();
-                    let size = size_u32 as u64;
-                    let name = String::from_utf8_lossy(raw_name).into_owned();
+                    let raw_name = session.receiver.file_name().to_vec();
+                    let size = session.receiver.file_size() as u64;
+                    let name = String::from_utf8_lossy(&raw_name).into_owned();
                     *self.current_filename.lock().unwrap() = name.clone();
                     self.total_bytes.store(size, Ordering::Relaxed);
                     self.received_bytes.store(0, Ordering::Relaxed);
-                    let path = disambiguate_download_path(&self.download_dir, raw_name)?;
+                    let path = disambiguate_download_path(&self.download_dir, &raw_name)?;
                     let file = File::create(&path).map_err(|e| e.to_string())?;
-                    *last_save_path = Some(path.clone());
+                    session.last_save_path = Some(path.clone());
                     *self.receive_file.lock().unwrap() = Some(file);
                     let _ = self.tx.send(TransferEvent::FileStart {
                         filename: name,
@@ -536,7 +667,7 @@ impl LrzszTransfer {
                 }
                 zmodem2::ReceiverEvent::FileComplete => {
                     *self.receive_file.lock().unwrap() = None;
-                    if let Some(p) = last_save_path.take() {
+                    if let Some(p) = session.last_save_path.take() {
                         let fname = self.current_filename.lock().unwrap().clone();
                         let _ = self.tx.send(TransferEvent::FileComplete {
                             filename: fname,
@@ -545,15 +676,55 @@ impl LrzszTransfer {
                     }
                 }
                 zmodem2::ReceiverEvent::SessionComplete => {
+                    // MistTerm (#458)：**不**在这里清掉 `recv_side`。
+                    // `ZFIN` 已让 receiver 进入 `SessionEnd`，但远端 `sz` 的收尾
+                    // `**B08…` ZHEX 头 / XON 往往与下一段 PTY 分片一起到达；
+                    // 若立刻清空接收侧，这些字节就会落进 VTE 与会话日志，
+                    // 表现为提示符前的字面 `00` 与日志里未消费的 `**B…` 尾巴。
+                    // 会话保留到残尾窗口结束，由 `absorb_rx_tail` 吃掉收尾字节。
                     *self.receive_file.lock().unwrap() = None;
                     *self.receive_pump_tx.lock().unwrap() = None;
                     self.is_active.store(false, Ordering::Relaxed);
+                    if session.ended_at.is_none() {
+                        session.ended_at = Some(Instant::now());
+                    }
                     let _ = self.tx.send(TransferEvent::TransferComplete);
                     return Ok(true);
                 }
             }
         }
-        Ok(false)
+    }
+
+    /// `SessionComplete` 之后继续从入站里剥掉 ZMODEM 收尾残尾（#458）。
+    ///
+    /// 返回 `Some(rest)`：`rest` 应作为普通 PTY 输出继续显示；残尾全部吃掉时 `rest` 为空。
+    fn absorb_rx_tail(&self, session: &mut ZmodemRxSession, data: &[u8]) -> Option<Vec<u8>> {
+        let ended_at = session.ended_at?;
+        if ended_at.elapsed() > RX_TAIL_WINDOW {
+            // 窗口结束：不再吞字节，交给正常显示路径。
+            return Some(data.to_vec());
+        }
+        let budget = RX_TAIL_RESIDUE_CAP.saturating_sub(session.residue.len());
+        let eaten = rx_residue_prefix_len(data, budget);
+        if eaten > 0 {
+            session.residue.extend_from_slice(&data[..eaten]);
+            log::debug!(
+                "ZMODEM receive: 吞掉收尾残尾 {} B（累计 {} B）",
+                eaten,
+                session.residue.len()
+            );
+        }
+        let rest = &data[eaten..];
+        if !session.residue.is_empty() && prompt_fragment_pos(rest).is_some() {
+            // 提示符已到：残尾到此为止，结束会话，让提示符正常显示。
+            session.ended_at = None;
+            return Some(rest.to_vec());
+        }
+        if rest.is_empty() {
+            return Some(Vec::new());
+        }
+        // 中途到达的可见输出：残尾窗口继续，但这段字节照常显示。
+        Some(rest.to_vec())
     }
 
     fn drive_rx_session(&self, session: &mut ZmodemRxSession) -> Result<bool, String> {
@@ -591,19 +762,13 @@ impl LrzszTransfer {
                 break;
             }
             // 先处理 FileStart / SessionComplete，再 drain_file，避免首包已到时尚未建文件
-            if self.poll_receiver_events(
-                &mut session.receiver,
-                &mut session.last_save_path,
-            )? {
+            if self.poll_receiver_events(session)? {
                 return Ok(true);
             }
             if self.drain_receiver_file(&mut session.receiver)? {
                 progress = true;
             }
-            if self.poll_receiver_events(
-                &mut session.receiver,
-                &mut session.last_save_path,
-            )? {
+            if self.poll_receiver_events(session)? {
                 return Ok(true);
             }
             if !progress {
@@ -646,70 +811,104 @@ impl LrzszTransfer {
 
     /// 处理接收到的 ZMODEM 数据（由 SSH 泵等调用）；返回 `true` 表示本段数据由接收状态机消费，勿再进 VTE。
     pub fn feed_receive_data(&self, data: &[u8]) -> bool {
-        if data.is_empty() || !self.is_active.load(Ordering::Relaxed) {
-            return false;
+        !matches!(self.feed_receive(data), ReceiveFeed::Passthrough { .. })
+    }
+
+    /// `SessionComplete` 之后是否仍保留会话以吞掉 ZMODEM 收尾残尾（#458）。
+    pub fn has_rx_tail_pending(&self) -> bool {
+        match self.recv_side.lock() {
+            Ok(g) => matches!(
+                g.as_ref(),
+                Some(RecvSide::Active(s)) if s.ended_at.is_some()
+            ),
+            Err(_) => false,
         }
-        log::debug!(
-            "feed_receive_data len={} active={}",
-            data.len(),
-            self.is_active.load(Ordering::Relaxed)
-        );
+    }
+
+    /// 处理接收到的 ZMODEM 数据，并给出「本段该不该显示」的结论。
+    ///
+    /// MistTerm (#458)：`SessionComplete` 之后仍保留会话一小段时间，
+    /// 用来吞掉收尾的 `**B08…` ZHEX 头 / `00` / XON，避免它们落进 VTE 与会话日志。
+    pub fn feed_receive(&self, data: &[u8]) -> ReceiveFeed {
+        if data.is_empty() {
+            return ReceiveFeed::Passthrough { data: Vec::new() };
+        }
 
         let mut g = match self.recv_side.lock() {
             Ok(x) => x,
-            Err(_) => return false,
+            Err(_) => return ReceiveFeed::Passthrough { data: data.to_vec() },
         };
         let Some(side) = g.as_mut() else {
-            return false;
+            return ReceiveFeed::Passthrough { data: data.to_vec() };
         };
+
+        if let RecvSide::Active(session) = side {
+            if let Some(ended_at) = session.ended_at {
+                if ended_at.elapsed() > RX_TAIL_WINDOW {
+                    // 残尾窗口已过：不再吞字节。
+                    *g = None;
+                    return ReceiveFeed::Passthrough { data: data.to_vec() };
+                }
+                let rest = self.absorb_rx_tail(session, data);
+                if session.ended_at.is_none() {
+                    // 提示符已恢复，会话到此结束；残尾字节已丢弃。
+                    *g = None;
+                }
+                return match rest {
+                    Some(rest) if rest.is_empty() => ReceiveFeed::Consumed,
+                    Some(rest) => ReceiveFeed::Stripped { rest },
+                    None => ReceiveFeed::Consumed,
+                };
+            }
+        }
+
+        if !self.is_active.load(Ordering::Relaxed) {
+            return ReceiveFeed::Passthrough { data: data.to_vec() };
+        }
 
         match side {
             RecvSide::Passive { pending } => {
                 pending.extend_from_slice(data);
                 if pending.len() > RX_INCOMING_CAP {
                     self.abort_recv_locked(&mut *g, "等待 ZRQINIT 时入站缓冲超限");
-                    return true;
+                    return ReceiveFeed::Consumed;
                 }
                 if !parse_zrqinit_packet(pending) {
-                    return true;
+                    return ReceiveFeed::Consumed;
                 }
                 let receiver = match zmodem2::Receiver::new() {
                     Ok(r) => r,
                     Err(e) => {
                         self.abort_recv_locked(&mut *g, &format!("Receiver::new: {}", e));
-                        return true;
+                        return ReceiveFeed::Consumed;
                     }
                 };
                 let incoming = std::mem::take(pending);
-                *side = RecvSide::Active(ZmodemRxSession {
-                    receiver,
-                    incoming,
-                    last_save_path: None,
-                });
+                *side = RecvSide::Active(ZmodemRxSession::new(receiver, incoming));
             }
             RecvSide::Active(session) => {
                 session.incoming.extend_from_slice(data);
                 if session.incoming.len() > RX_INCOMING_CAP {
                     self.abort_recv_locked(&mut *g, "ZMODEM 入站缓冲超限");
-                    return true;
+                    return ReceiveFeed::Consumed;
                 }
             }
         }
 
         let RecvSide::Active(session) = g.as_mut().unwrap() else {
-            return true;
+            return ReceiveFeed::Consumed;
         };
 
         match self.drive_rx_session(session) {
             Ok(true) => {
-                *g = None;
+                // 会话已 `SessionComplete`：保留 `recv_side` 吸收残尾（见 `absorb_rx_tail`）。
             }
             Ok(false) => {}
             Err(e) => {
                 self.abort_recv_locked(&mut *g, &e);
             }
         }
-        true
+        ReceiveFeed::Consumed
     }
 
     /// 发送文件（sz）。**不得**再持有 `ssh2::Channel`：所有 ZMODEM 字节经 `pump_tx` 进入 shell 泵队列，与键盘输入 FIFO 串行写出。
@@ -978,5 +1177,96 @@ mod tests {
         assert!(detect_rz_pty_invitation(b"**\x18B00000000000000\r\n\x11"));
         assert!(detect_rz_pty_invitation(b"**B0100000063f694"));
         assert!(!detect_rz_pty_invitation(b"echo hello"));
+    }
+
+    /// 议题里日志残留的 ZFIN 风格 ZHEX 尾巴（无 CRC 后的 CR/LF 也可能单独到达）。
+    const ZFIN_ZHEX_TAIL: &'static [u8] = b"**B0800000000022d";
+
+    fn transfer_after_session_complete() -> LrzszTransfer {
+        let lrzsz = LrzszTransfer::new("/tmp");
+        let receiver = zmodem2::Receiver::new().expect("zmodem2 receiver");
+        let mut session = ZmodemRxSession::new(receiver, Vec::new());
+        session.ended_at = Some(Instant::now());
+        *lrzsz.recv_side.lock().unwrap() = Some(RecvSide::Active(session));
+        lrzsz.is_active.store(false, Ordering::Relaxed);
+        lrzsz
+    }
+
+    fn assert_display_rest_is_clean_prompt(rest: &[u8], prompt: &[u8]) {
+        assert_eq!(rest, prompt, "display/log path must be the restored prompt only");
+        assert!(!rest.starts_with(b"00"), "literal 00 must not prefix the prompt");
+        assert!(
+            !rest.windows(3).any(|w| w == b"**B"),
+            "ZHEX tail must not remain for VTE/session log"
+        );
+    }
+
+    #[test]
+    fn test_rx_residue_prefix_absorbs_leftover_zhex_zfin_tail() {
+        assert_eq!(
+            rx_residue_prefix_len(ZFIN_ZHEX_TAIL, RX_TAIL_RESIDUE_CAP),
+            ZFIN_ZHEX_TAIL.len()
+        );
+        let with_term = b"**B0800000000022d\r\n\x11";
+        assert_eq!(
+            rx_residue_prefix_len(with_term, RX_TAIL_RESIDUE_CAP),
+            with_term.len()
+        );
+    }
+
+    #[test]
+    fn test_rx_residue_prefix_absorbs_trailing_00_and_keeps_prompt() {
+        assert_eq!(rx_residue_prefix_len(b"00", RX_TAIL_RESIDUE_CAP), 2);
+
+        let glued = b"00mist410@host:~$ ";
+        let eaten = rx_residue_prefix_len(glued, RX_TAIL_RESIDUE_CAP);
+        assert_display_rest_is_clean_prompt(&glued[eaten..], b"mist410@host:~$ ");
+
+        let with_zhex = b"**B0800000000022d\r\n\x1100mist410@host:~$ ";
+        let eaten = rx_residue_prefix_len(with_zhex, RX_TAIL_RESIDUE_CAP);
+        assert_display_rest_is_clean_prompt(&with_zhex[eaten..], b"mist410@host:~$ ");
+    }
+
+    #[test]
+    fn test_feed_receive_after_session_complete_does_not_emit_zhex_or_00() {
+        let lrzsz = transfer_after_session_complete();
+        assert!(lrzsz.has_rx_tail_pending());
+        assert!(!lrzsz.is_active());
+
+        // 单独到达的 ZHEX 尾巴必须整段吞噬，不得进显示/日志路径。
+        assert_eq!(lrzsz.feed_receive(ZFIN_ZHEX_TAIL), ReceiveFeed::Consumed);
+        assert!(lrzsz.feed_receive_data(ZFIN_ZHEX_TAIL));
+        assert!(lrzsz.has_rx_tail_pending());
+        assert!(!lrzsz.is_active());
+
+        match lrzsz.feed_receive(b"00mist410@host:~$ ") {
+            ReceiveFeed::Stripped { rest } => {
+                assert_display_rest_is_clean_prompt(&rest, b"mist410@host:~$ ");
+            }
+            other => panic!("expected Stripped prompt, got {other:?}"),
+        }
+        // 提示符已恢复：残尾窗口结束，成功接收保持完成状态。
+        assert!(!lrzsz.has_rx_tail_pending());
+        assert!(!lrzsz.is_active());
+        assert!(
+            lrzsz
+                .try_recv_event()
+                .is_none_or(|ev| !matches!(ev, TransferEvent::FileError { .. })),
+            "absorbing leftover ZMODEM bytes must not fail the completed receive"
+        );
+    }
+
+    #[test]
+    fn test_feed_receive_after_session_complete_strips_combined_tail_and_prompt() {
+        let lrzsz = transfer_after_session_complete();
+        let data = b"**B0800000000022d\r\n\x1100mist410@host:~$ ";
+        match lrzsz.feed_receive(data) {
+            ReceiveFeed::Stripped { rest } => {
+                assert_display_rest_is_clean_prompt(&rest, b"mist410@host:~$ ");
+            }
+            other => panic!("expected Stripped prompt, got {other:?}"),
+        }
+        assert!(!lrzsz.has_rx_tail_pending());
+        assert!(!lrzsz.is_active());
     }
 }

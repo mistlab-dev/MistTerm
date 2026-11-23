@@ -3620,6 +3620,7 @@ impl TerminalView {
             for msg in batch {
                 match msg {
                     SshMessage::Output { data, .. } => {
+                        let mut rx_stripped_display: Option<Vec<u8>> = None;
                         if self.is_local_shell() {
                             if !data.is_empty() {
                                 self.pending_log_output.push(data.clone());
@@ -3648,9 +3649,14 @@ impl TerminalView {
                             || (expect_rz_upload && rz_invitation);
 
                         if !self.lrzsz.is_upload_pty_capture() {
-                            if self.lrzsz.is_active() {
-                                if self.lrzsz.feed_receive_data(&data) {
-                                    continue;
+                            if self.lrzsz.is_active() || self.lrzsz.has_rx_tail_pending() {
+                                match self.lrzsz.feed_receive(&data) {
+                                    crate::ssh::ReceiveFeed::Consumed => continue,
+                                    crate::ssh::ReceiveFeed::Stripped { rest } => {
+                                        // #458：协议残尾已剥离，剩下的提示符照常显示。
+                                        rx_stripped_display = Some(rest);
+                                    }
+                                    crate::ssh::ReceiveFeed::Passthrough { .. } => {}
                                 }
                             } else if zrqinit_in_data
                                 && !is_rz_upload_handshake
@@ -3782,7 +3788,11 @@ impl TerminalView {
                             continue;
                         }
 
-                        let (mut display_data, audit_events) = self.server_audit_probe.feed(&data);
+                        let (mut display_data, audit_events) = match rx_stripped_display {
+                            // #458：接收收尾残尾已剥离，只把提示符交给显示路径。
+                            Some(rest) => (rest, Vec::new()),
+                            None => self.server_audit_probe.feed(&data),
+                        };
                         if !audit_events.is_empty() {
                             self.pending_server_audit.extend(audit_events);
                             // 审计行常被整行剥离：无 VTE 脏位则不 request_repaint，Toast 会一直卡着。
