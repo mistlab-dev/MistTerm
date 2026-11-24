@@ -2461,7 +2461,7 @@ impl MistTermApp {
                     ui,
                     theme,
                     crate::ui::icons::IconId::ChevronLeft,
-                    left_tip.as_str(),
+                    left_tip,
                 );
                 if left.clicked() && plan.can_scroll_left {
                     self.tab_strip_scroll_x = crate::ui::chrome::apply_tab_strip_scroll(
@@ -2786,7 +2786,7 @@ impl MistTermApp {
                     ui,
                     theme,
                     crate::ui::icons::IconId::ChevronRight,
-                    right_tip.as_str(),
+                    right_tip,
                 );
                 if right.clicked() && plan.can_scroll_right {
                     self.tab_strip_scroll_x = crate::ui::chrome::apply_tab_strip_scroll(
