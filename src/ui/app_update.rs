@@ -24,6 +24,8 @@ const RETRY_AFTER_FAILURE: Duration = Duration::from_secs(6 * 3600);
 enum Msg {
     Checked {
         manual: bool,
+        /// Channel the check was started on (#453: ignore if the user switched away).
+        channel: updater::UpdateChannel,
         result: Result<CheckOutcome, UpdateError>,
         /// #417 复审：状态损坏/重建的用户可见说明（None = 正常）。
         state_notice: Option<&'static str>,
@@ -89,8 +91,7 @@ impl UpdateUi {
             show_dialog: false,
             next_auto_check: Instant::now() + first_check_delay(),
             // #435：上次检查时间按当前渠道读，避免预览检查后仍显示稳定文件的时间。
-            last_checked_unix: UpdateState::load_from(&updater::paths::state_file_for(channel))
-                .last_check_unix,
+            last_checked_unix: updater::last_check_unix_for_channel(channel),
             startup_exe,
             notify_pending: false,
             prefetched: false,
@@ -103,6 +104,11 @@ impl UpdateUi {
 
     pub(crate) fn dialog_open(&self) -> bool {
         self.show_dialog
+    }
+
+    /// #453: reread last-check from this channel's isolated state file.
+    fn reload_last_checked_for(&mut self, channel: updater::UpdateChannel) {
+        self.last_checked_unix = updater::last_check_unix_for_channel(channel);
     }
 
     fn busy(&self) -> bool {
@@ -373,7 +379,7 @@ impl MistTermApp {
                     },
                     _ => None,
                 };
-                let _ = tx.send(Msg::Checked { manual, result, state_notice: notice });
+                let _ = tx.send(Msg::Checked { manual, channel, result, state_notice: notice });
                 ctx2.request_repaint();
             });
         if spawned.is_err() {
@@ -479,11 +485,13 @@ impl MistTermApp {
                 }
             };
             match msg {
-                Msg::Checked { manual, result, state_notice } => {
+                Msg::Checked { manual, channel, result, state_notice } => {
                     self.update_ui.rx = None;
-                    self.update_on_checked(ctx, manual, result);
-                    if let (true, Some(note)) = (manual, state_notice) {
-                        self.notify_auto(note.to_string());
+                    let apply = self.update_on_checked(ctx, manual, channel, result);
+                    if apply {
+                        if let (true, Some(note)) = (manual, state_notice) {
+                            self.notify_auto(note.to_string());
+                        }
                     }
                 }
                 Msg::Progress(stage) => {
@@ -507,21 +515,50 @@ impl MistTermApp {
         }
     }
 
+    /// #453: after the user switches channel, immediately show that channel's
+    /// last-check (or「还没有检查过更新」). Does not rewrite state files.
+    pub(crate) fn update_on_channel_changed(&mut self) {
+        let channel = self.app_settings.update.channel;
+        self.update_ui.reload_last_checked_for(channel);
+        if matches!(self.update_ui.phase, Phase::Working(_) | Phase::Installed(_)) {
+            return;
+        }
+        // Transient check/result UI belonged to the previous channel.
+        self.update_ui.info = None;
+        self.update_ui.notify_pending = false;
+        self.update_ui.phase = if self.update_ui.busy() {
+            Phase::Checking
+        } else {
+            Phase::Idle
+        };
+    }
+
     fn update_on_checked(
         &mut self,
         ctx: &egui::Context,
         manual: bool,
+        started_channel: updater::UpdateChannel,
         result: Result<CheckOutcome, UpdateError>,
-    ) {
+    ) -> bool {
         // 用户在检查过程中又点了「检查更新」：按手动检查展示结果。
         let manual = manual || (self.update_ui.show_dialog && matches!(self.update_ui.phase, Phase::Checking));
+        let current = self.app_settings.update.channel;
+        // Always reread the *current* channel file so a late other-channel
+        // check cannot paint its timestamp onto the new last-check label.
+        self.update_ui
+            .reload_last_checked_for(current);
+        if !updater::check_result_belongs_to_current(started_channel, current) {
+            if !matches!(self.update_ui.phase, Phase::Working(_) | Phase::Installed(_))
+                && matches!(self.update_ui.phase, Phase::Checking)
+            {
+                self.update_ui.phase = Phase::Idle;
+            }
+            return false;
+        }
         // #435：检查结束后按当前渠道读回状态，预览渠道不再读稳定文件。
-        let state = UpdateState::load_from(&updater::paths::state_file_for(
-            self.app_settings.update.channel,
-        ));
-        self.update_ui.last_checked_unix = state.last_check_unix;
+        let state = UpdateState::load_from(&updater::paths::state_file_for(current));
         if matches!(self.update_ui.phase, Phase::Working(_) | Phase::Installed(_)) {
-            return;
+            return true;
         }
         match result {
             Ok(CheckOutcome::UpToDate { current, .. }) => {
@@ -548,7 +585,7 @@ impl MistTermApp {
                 if already_installed {
                     // 例如在终端里用 `mist update` 装过了：只差重启。
                     self.update_ui.phase = Phase::Installed(version);
-                    return;
+                    return true;
                 }
                 self.update_ui.phase = Phase::Available;
                 if !manual {
@@ -578,6 +615,7 @@ impl MistTermApp {
                 }
             }
         }
+        true
     }
 
     fn update_on_applied(&mut self, ctx: &egui::Context, result: Result<ApplyOutcome, UpdateError>) {
