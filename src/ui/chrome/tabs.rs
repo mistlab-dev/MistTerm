@@ -127,6 +127,9 @@ pub(crate) fn paint_vscode_tab_bottom_indicator(
 }
 
 
+/// 会话标签芯片最小宽度，与 [`session_tab_chip`] 布局一致。
+pub(crate) const SESSION_TAB_CHIP_MIN_WIDTH: f32 = 72.0;
+
 /// 终端区会话 Tab：整块底色(圆点 + 标题 + 关闭)，对齐 proto `.tab`。
 pub struct SessionTabChipResult {
     pub response: Response,
@@ -177,6 +180,28 @@ pub(crate) fn progress_ring_center_x(inner_min_x: f32) -> f32 {
 }
 
 
+/// 与 [`session_tab_chip`] 相同的期望宽度，供标签栏溢出布局在绘制前先量宽。
+pub fn session_tab_chip_desired_width(
+    ctx: &egui::Context,
+    theme: &Theme,
+    label: &str,
+    has_progress: bool,
+) -> f32 {
+    let close_slot = theme.size_tab_bar_icon_btn();
+    let pad_x = theme.spacing_tab_x();
+    let gap_dot = theme.spacing_tab_dot_text();
+    let gap_close = theme.spacing_tab_icon_gap();
+    let label_layout = super::layout_readable_host(
+        ctx,
+        label,
+        &egui::FontId::proportional(theme.font_size_tab_label()),
+        Color32::WHITE,
+    );
+    let slot_w = status_slot_width(has_progress);
+    let content_w = slot_w + gap_dot + label_layout.size.x + gap_close + close_slot;
+    (content_w + pad_x * 2.0).max(SESSION_TAB_CHIP_MIN_WIDTH)
+}
+
 /// `needs_attention`：#93 未聚焦标签有 BEL / SessionEnded 时画 accent 圆点。
 pub fn session_tab_chip(
     ui: &mut Ui,
@@ -213,7 +238,7 @@ pub fn session_tab_chip(
     // 宽度随内容：状态槽位（圆点，有进度时再加一个独立的进度环）+ 标题 + 间距 + ×。
     let slot_w = status_slot_width(progress.is_some());
     let content_w = slot_w + gap_dot + label_layout.size.x + gap_close + close_slot;
-    let tab_w = (content_w + pad_x * 2.0).max(72.0);
+    let tab_w = (content_w + pad_x * 2.0).max(SESSION_TAB_CHIP_MIN_WIDTH);
     let size = egui::vec2(tab_w, theme.size_tab_min_h());
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
     let inner = rect.shrink2(egui::vec2(pad_x, pad_y));

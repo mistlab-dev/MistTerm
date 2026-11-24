@@ -2401,6 +2401,85 @@ impl MistTermApp {
             let mut broadcast_idx = None;
             let mut unsplit_idx = None;
             let mut close_pane_tab = None;
+
+            // #454：标签过多时芯片不再挤出栏外；溢出则出现左右滚动入口，并把活动标签滚进视口。
+            let item_spacing = ui.spacing().item_spacing.x;
+            let plus_w = theme.size_tab_bar_icon_btn();
+            let scroll_btn_w = theme.size_tab_bar_icon_btn();
+            let row_h = theme.size_tab_bar_row_h();
+            let available = ui.available_width();
+            let chip_widths: Vec<f32> = self
+                .tabs
+                .iter()
+                .map(|tab| {
+                    crate::ui::chrome::session_tab_chip_desired_width(
+                        ui.ctx(),
+                        theme,
+                        &tab.display_title(),
+                        tab.panes.iter().any(|p| p.progress.is_some()),
+                    )
+                })
+                .collect();
+            let mut requested_scroll = self.tab_strip_scroll_x;
+            let mut plan = crate::ui::chrome::plan_tab_strip_overflow(
+                &chip_widths,
+                item_spacing,
+                available,
+                plus_w,
+                scroll_btn_w,
+                requested_scroll,
+            );
+            if self.active_tab != self.tab_strip_synced_active {
+                if let Some(idx) = self.active_tab {
+                    if let Some((left, right)) =
+                        crate::ui::chrome::tab_content_range(&chip_widths, item_spacing, idx)
+                    {
+                        requested_scroll = crate::ui::chrome::scroll_tab_into_view(
+                            plan.scroll_x,
+                            left,
+                            right,
+                            plan.viewport_width,
+                            plan.max_scroll,
+                        );
+                        plan = crate::ui::chrome::plan_tab_strip_overflow(
+                            &chip_widths,
+                            item_spacing,
+                            available,
+                            plus_w,
+                            scroll_btn_w,
+                            requested_scroll,
+                        );
+                    }
+                }
+                self.tab_strip_synced_active = self.active_tab;
+            }
+            self.tab_strip_scroll_x = plan.scroll_x;
+
+            if plan.overflow {
+                let left_tip = crate::i18n::tr(ctx, "Scroll tabs left", "向左滚动标签");
+                let left = crate::ui::chrome::tab_bar_icon_button(
+                    ui,
+                    theme,
+                    crate::ui::icons::IconId::ChevronLeft,
+                    left_tip,
+                );
+                if left.clicked() && plan.can_scroll_left {
+                    self.tab_strip_scroll_x = crate::ui::chrome::apply_tab_strip_scroll(
+                        self.tab_strip_scroll_x,
+                        -crate::ui::chrome::tab_strip_scroll_step(plan.viewport_width),
+                        plan.max_scroll,
+                    );
+                }
+            }
+
+            let paint_scroll = if plan.overflow {
+                self.tab_strip_scroll_x
+            } else {
+                0.0
+            };
+            let mut painted_scroll = paint_scroll;
+            {
+                let mut render_session_tab_chips = |ui: &mut egui::Ui| {
             for (idx, tab) in self.tabs.iter().enumerate() {
                 let active = self.active_tab == Some(idx);
                 let tab_label = tab.display_title();
@@ -2662,6 +2741,60 @@ impl MistTermApp {
                         close_right = Some(idx);
                     }
                 });
+            }
+                };
+
+                if plan.overflow {
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(plan.viewport_width.max(0.0), row_h),
+                        egui::Layout::left_to_right(egui::Align::Center),
+                        |ui| {
+                            ui.set_min_height(row_h);
+                            ui.set_max_height(row_h);
+                            let output = egui::ScrollArea::horizontal()
+                                .id_salt("session_tab_strip_scroll")
+                                .auto_shrink([false, false])
+                                .max_height(row_h)
+                                .horizontal_scroll_offset(paint_scroll)
+                                .scroll_bar_visibility(
+                                    egui::containers::scroll_area::ScrollBarVisibility::AlwaysHidden,
+                                )
+                                .show(ui, |ui| {
+                                    ui.set_min_height(row_h);
+                                    ui.horizontal(|ui| {
+                                        ui.set_min_height(row_h);
+                                        render_session_tab_chips(ui);
+                                    });
+                                });
+                            painted_scroll = output
+                                .state
+                                .clamped_offset()
+                                .x
+                                .clamp(0.0, plan.max_scroll);
+                        },
+                    );
+                } else {
+                    render_session_tab_chips(ui);
+                    painted_scroll = 0.0;
+                }
+            }
+            self.tab_strip_scroll_x = painted_scroll;
+
+            if plan.overflow {
+                let right_tip = crate::i18n::tr(ctx, "Scroll tabs right", "向右滚动标签");
+                let right = crate::ui::chrome::tab_bar_icon_button(
+                    ui,
+                    theme,
+                    crate::ui::icons::IconId::ChevronRight,
+                    right_tip,
+                );
+                if right.clicked() && plan.can_scroll_right {
+                    self.tab_strip_scroll_x = crate::ui::chrome::apply_tab_strip_scroll(
+                        self.tab_strip_scroll_x,
+                        crate::ui::chrome::tab_strip_scroll_step(plan.viewport_width),
+                        plan.max_scroll,
+                    );
+                }
             }
             self.show_tab_bar_new_tab_picker(ui, theme, ctx);
             if let Some(idx) = to_activate {

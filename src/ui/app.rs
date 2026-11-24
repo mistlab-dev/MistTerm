@@ -304,6 +304,10 @@ pub struct MistTermApp {
     /// 终端标签页
     tabs: Vec<TerminalTab>,
     active_tab: Option<usize>,
+    /// #454：标签栏水平滚动偏移（内容坐标，像素）。
+    tab_strip_scroll_x: f32,
+    /// 最近一次已滚入可视区的活动标签；与 `active_tab` 不同则下一帧滚入。
+    tab_strip_synced_active: Option<usize>,
 
     /// 状态栏信息
     status_message: String,
@@ -1174,6 +1178,8 @@ impl MistTermApp {
             last_responsive_layout_band: None,
             tabs: Vec::new(),
             active_tab: None,
+            tab_strip_scroll_x: 0.0,
+            tab_strip_synced_active: None,
             action_bus: crate::ui::action::ActionBus::new(),
             status_message: String::new(),
             module_registry,
