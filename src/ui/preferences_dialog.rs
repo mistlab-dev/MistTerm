@@ -108,7 +108,13 @@ impl MistTermApp {
         if let Some(inner) = &modal_resp {
             crate::ui::chrome::raise_window_response(ctx, &inner.response);
         }
-        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+        // #452: Escape must not dismiss still-open Preferences while Software
+        // Update is in front. Close-button / click handling of this window is
+        // otherwise unchanged (prefs-vs-dock raise above is preserved).
+        if crate::ui::update_prefs_stack::escape_closes_preferences(
+            crate::ui::update_prefs_stack::front_dialog(self.update_ui.dialog_open(), true),
+        ) && ctx.input(|i| i.key_pressed(egui::Key::Escape))
+        {
             should_close = true;
         }
         if self.rule_manager_dialog.take_close_preferences() {

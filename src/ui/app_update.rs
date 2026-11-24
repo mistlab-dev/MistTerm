@@ -775,7 +775,7 @@ impl MistTermApp {
         let prefetching = self.update_ui.prefetching;
         let install_queued = self.update_ui.install_after_prefetch;
 
-        crate::ui::chrome::modal_window("update_modal", theme, ctx)
+        let modal_resp = crate::ui::chrome::modal_window("update_modal", theme, ctx)
             .open(&mut open)
             .default_pos(layout_util::modal_center_pos(ctx, modal_sz))
             .movable(true)
@@ -1076,7 +1076,17 @@ impl MistTermApp {
                 });
             });
 
-        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) && confirm.is_none() {
+        // #452: stay in front of a still-open Preferences (and the right dock)
+        // without changing Preferences' own raise-vs-dock behavior.
+        if let Some(inner) = &modal_resp {
+            crate::ui::chrome::raise_window_response(ctx, &inner.response);
+        }
+
+        if crate::ui::update_prefs_stack::escape_closes_update(
+            crate::ui::update_prefs_stack::front_dialog(true, self.dialog_flags.preferences),
+            confirm.is_some(),
+        ) && ctx.input(|i| i.key_pressed(egui::Key::Escape))
+        {
             should_close = true;
         }
 
