@@ -106,7 +106,14 @@ impl MistTermApp {
                 });
             });
         if let Some(inner) = &modal_resp {
-            crate::ui::chrome::raise_window_response(ctx, &inner.response);
+            // Keep the dock raise when Software Update is closed. While Update
+            // is open, do not raise Preferences: both would want the top and
+            // egui would keep the stored relative order (Update behind).
+            if crate::ui::update_prefs_stack::preferences_raises_above_dock(
+                self.update_ui.dialog_open(),
+            ) {
+                crate::ui::chrome::raise_window_response(ctx, &inner.response);
+            }
         }
         // #452: Escape must not dismiss still-open Preferences while Software
         // Update is in front. Close-button / click handling of this window is

@@ -74,6 +74,8 @@ pub(crate) struct UpdateUi {
     install_after_prefetch: bool,
     confirm: Option<Confirm>,
     close_requested: bool,
+    /// #452: fresh egui Area id after each close so reopen is not stuck behind Preferences.
+    dialog_generation: u64,
 }
 
 impl UpdateUi {
@@ -99,11 +101,21 @@ impl UpdateUi {
             install_after_prefetch: false,
             confirm: None,
             close_requested: false,
+            dialog_generation: 0,
         }
     }
 
     pub(crate) fn dialog_open(&self) -> bool {
         self.show_dialog
+    }
+
+    fn open_dialog(&mut self) {
+        crate::ui::update_prefs_stack::note_update_dialog_opening(self.show_dialog, &mut self.dialog_generation);
+        self.show_dialog = true;
+    }
+
+    fn dialog_window_id(&self) -> String {
+        crate::ui::update_prefs_stack::update_dialog_window_id(self.dialog_generation)
     }
 
     /// #453: reread last-check from this channel's isolated state file.
@@ -279,7 +291,7 @@ impl MistTermApp {
 
     /// 菜单 / 关于 / 偏好设置里的「检查更新」。
     pub(crate) fn update_check_now(&mut self, ctx: &egui::Context) {
-        self.update_ui.show_dialog = true;
+        self.update_ui.open_dialog();
         match self.update_ui.phase {
             // 正在下载 / 已装好：直接打开窗口看状态，不重新检查。
             Phase::Working(_) | Phase::Installed(_) => {}
@@ -289,7 +301,7 @@ impl MistTermApp {
     }
 
     pub(crate) fn update_open_dialog(&mut self) {
-        self.update_ui.show_dialog = true;
+        self.update_ui.open_dialog();
     }
 
     /// Help 菜单里的文字：有新版本时直接写出版本号。
@@ -648,7 +660,7 @@ impl MistTermApp {
             Err(e) => {
                 log::warn!("updater: install failed: {e}");
                 self.update_ui.phase = Phase::InstallFailed(e);
-                self.update_ui.show_dialog = true;
+                self.update_ui.open_dialog();
             }
         }
     }
@@ -775,7 +787,8 @@ impl MistTermApp {
         let prefetching = self.update_ui.prefetching;
         let install_queued = self.update_ui.install_after_prefetch;
 
-        let modal_resp = crate::ui::chrome::modal_window("update_modal", theme, ctx)
+        let window_id = self.update_ui.dialog_window_id();
+        let modal_resp = crate::ui::chrome::modal_window(&window_id, theme, ctx)
             .open(&mut open)
             .default_pos(layout_util::modal_center_pos(ctx, modal_sz))
             .movable(true)
@@ -1325,6 +1338,7 @@ mod update_dialog_tests {
             install_after_prefetch: false,
             confirm: None,
             close_requested: false,
+            dialog_generation: 1,
         }
     }
 
