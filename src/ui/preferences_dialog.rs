@@ -1353,10 +1353,16 @@ impl MistTermApp {
             |ui| {
                 // #279：术语补白话说明。
                 ui.label(
-                    RichText::new(crate::i18n::tr(
-                        ctx,
-                        "Audit log: keeps a local record of what was run and when, so you can trace things afterwards. It only records events — it does not block your actions.",
-                        "操作审计：把执行过什么、什么时候执行的记录下来，便于事后追查。它只记录事件，不会拦截你的操作。",
+                    RichText::new(crate::ui::cloud_sync_panel::cjk_wrap_lines(
+                        ui,
+                        theme,
+                        crate::i18n::tr(
+                            ctx,
+                            "Audit log: keeps a local record of what was run and when, so you can trace things afterwards. It only records events — it does not block your actions.",
+                            "操作审计：把执行过什么、什么时候执行的记录下来，便于事后追查。它只记录事件，不会拦截你的操作。",
+                        ),
+                        crate::ui::cloud_sync_panel::AUDIT_ZH_PHRASES,
+                        ui.available_width(),
                     ))
                     .size(theme.font_size_small())
                     .color(text_low),
@@ -1524,10 +1530,16 @@ impl MistTermApp {
                     }
                 });
                 ui.label(
-                    RichText::new(format!(
-                        "{}{}",
-                        crate::i18n::tr(ctx, "Audit directory: ", "审计目录："),
-                        self.app_settings.audit.file_dir.display(),
+                    RichText::new(crate::ui::cloud_sync_panel::cjk_wrap_lines(
+                        ui,
+                        theme,
+                        &format!(
+                            "{}{}",
+                            crate::i18n::tr(ctx, "Audit directory: ", "审计目录："),
+                            self.app_settings.audit.file_dir.display(),
+                        ),
+                        crate::ui::cloud_sync_panel::AUDIT_ZH_PHRASES,
+                        ui.available_width(),
                     ))
                     .size(theme.font_size_small())
                     .color(text_low),
