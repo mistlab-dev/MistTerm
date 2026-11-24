@@ -7921,8 +7921,11 @@ impl MistTermApp {
             self.edit_session_form.port = session.port;
             self.edit_session_form.port_str = session.port.to_string();
             self.edit_session_form.username = session.username;
-            // FUNCTIONAL_SPEC §1.3.3：不将真实密码填入 UI
-            self.edit_session_form.password = "****".to_string();
+            // FUNCTIONAL_SPEC §1.3.3：不将真实密码填入 UI。
+            // 仅当确实存有非空密码时才预填掩码哨兵；密钥 / Agent / vault
+            // 等无密码会话留空，配合「可留空」占位提示，避免看起来像已设密码。
+            self.edit_session_form.password =
+                crate::ui::session_form::edit_password_field_initial(&session.password);
             self.edit_session_form.group = session.group;
             self.edit_session_form.private_key_path = session.private_key_path;
             self.edit_session_form.use_ssh_agent = session.use_ssh_agent;
@@ -8002,12 +8005,12 @@ impl MistTermApp {
                 .any(|p| p.session_id == session_id && p.terminal.is_connected())
         });
 
-        let trimmed = self.edit_session_form.password.trim();
-        let password_to_store = if trimmed.is_empty() || trimmed == "****" {
-            old_password
-        } else {
-            self.edit_session_form.password.clone()
-        };
+        // 空或掩码哨兵 = 沿用旧密码（从未设过密码的会话保存后仍为空，
+        // 不会把 "****" 写成真实密码）；其它输入 = 替换为新密码。
+        let password_to_store = crate::ui::session_form::edit_password_to_store(
+            &self.edit_session_form.password,
+            &old_password,
+        );
 
         let updated = self.session_manager.update_session(
             &session_id,
