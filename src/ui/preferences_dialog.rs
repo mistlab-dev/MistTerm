@@ -1717,6 +1717,9 @@ impl MistTermApp {
                     if let Err(e) = self.app_settings.save() {
                         log::warn!("save update channel failed: {e}");
                     }
+                    // #453: immediately show this channel's last-check, without a restart.
+                    // Does not rewrite the other channel's state file.
+                    self.update_on_channel_changed();
                 }
                 Self::preferences_row_divider(ui, theme);
                 ui.label(
