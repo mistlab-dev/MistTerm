@@ -1689,10 +1689,14 @@ impl MistTermApp {
                             "尝鲜预览构建；不承诺按日发版",
                         ),
                     ] {
-                        if ui
-                            .radio(cur == ch, crate::i18n::tr(ctx, en, zh))
-                            .on_hover_text(crate::i18n::tr(ctx, tip_en, tip_zh))
-                            .clicked()
+                        if crate::ui::chrome::form_radio(
+                            ui,
+                            theme,
+                            cur == ch,
+                            crate::i18n::tr(ctx, en, zh),
+                        )
+                        .on_hover_text(crate::i18n::tr(ctx, tip_en, tip_zh))
+                        .clicked()
                             && cur != ch
                         {
                             changed = Some(ch);
