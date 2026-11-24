@@ -431,15 +431,12 @@ impl Sidebar {
                         let endpoint =
                             format!("{}@{}:{}", server.username, server.host, server.port);
                         let meta_px = theme.font_size_connection_meta();
-                        let measured_endpoint_w = row_ui.ctx().fonts_mut(|f| {
-                            f.layout_no_wrap(
-                                endpoint.clone(),
-                                egui::FontId::proportional(meta_px),
-                                theme.text_tertiary(),
-                            )
-                            .size()
-                            .x
-                        });
+                        let measured_endpoint_w = crate::ui::chrome::measure_readable_host_width(
+                            row_ui.ctx(),
+                            &endpoint,
+                            meta_px,
+                            theme.text_tertiary(),
+                        );
                         let gap = theme.spacing_sm().max(6.0);
                         let avail = row_ui.available_width();
                         let row_h = row_ui.available_height();
@@ -472,14 +469,12 @@ impl Sidebar {
                             end_rect).layout(egui::Layout::right_to_left(egui::Align::Center)),
                         );
                         end_ui.set_clip_rect(end_rect);
-                        end_ui.add(
-                            egui::Label::new(
-                                egui::RichText::new(endpoint)
-                                    .size(meta_px)
-                                    .color(theme.text_tertiary()),
-                            )
-                            .truncate()
-                            .wrap(),
+                        // #455: 团队服务器 endpoint 同样增强 IPv4 小数点；字符串本身不变。
+                        crate::ui::chrome::readable_host_line(
+                            &mut end_ui,
+                            &endpoint,
+                            meta_px,
+                            theme.text_tertiary(),
                         );
                         if response.clicked() {
                             connect_team_server_key = Some(server.list_key());
@@ -761,14 +756,12 @@ impl Sidebar {
                             } else {
                                 session.host.clone()
                             };
-                            text_ui.add(
-                                egui::Label::new(
-                                    egui::RichText::new(host_line)
-                                        .size(theme.font_size_caption())
-                                        .color(theme.color_caption_text()),
-                                )
-                                .truncate()
-                                .wrap(),
+                            // #455: 连接列表 host 行增强 IPv4 小数点可读性；host 字符串本身不变。
+                            crate::ui::chrome::readable_host_line(
+                                &mut text_ui,
+                                &host_line,
+                                theme.font_size_caption(),
+                                theme.color_caption_text(),
                             );
                             row_ui.add_space(gap);
                             let (status_rect, _) = row_ui.allocate_exact_size(

@@ -203,16 +203,16 @@ pub fn session_tab_chip(
     } else {
         theme.text_tertiary()
     };
-    let label_galley = ui.ctx().fonts_mut(|f| {
-        f.layout_no_wrap(
-            label.to_owned(),
-            egui::FontId::proportional(theme.font_size_tab_label()),
-            label_color,
-        )
-    });
+    // #455: IPv4 标签用增强小数点排版（逻辑字符串仍是 ASCII `.`），其它标题走原 galley。
+    let label_layout = super::layout_readable_host(
+        ui.ctx(),
+        label,
+        &egui::FontId::proportional(theme.font_size_tab_label()),
+        label_color,
+    );
     // 宽度随内容：状态槽位（圆点，有进度时再加一个独立的进度环）+ 标题 + 间距 + ×。
     let slot_w = status_slot_width(progress.is_some());
-    let content_w = slot_w + gap_dot + label_galley.size().x + gap_close + close_slot;
+    let content_w = slot_w + gap_dot + label_layout.size.x + gap_close + close_slot;
     let tab_w = (content_w + pad_x * 2.0).max(72.0);
     let size = egui::vec2(tab_w, theme.size_tab_min_h());
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
@@ -346,18 +346,12 @@ pub fn session_tab_chip(
             }
         }
     }
-    let ink = label_galley
-        .rows
-        .first()
-        .map(|r| r.visuals.mesh_bounds)
-        .filter(|b| b.is_positive())
-        .unwrap_or_else(|| egui::Rect::from_min_size(egui::Pos2::ZERO, label_galley.size()));
     let label_x = inner.min.x + slot_w + gap_dot;
-    let label_w = label_galley.size().x;
-    ui.painter().galley(
-        egui::pos2(label_x, cy - ink.center().y),
-        label_galley,
-        egui::Color32::WHITE,
+    let label_w = label_layout.size.x;
+    super::paint_readable_host(
+        ui.painter(),
+        egui::pos2(label_x, cy - label_layout.ink_center_y),
+        &label_layout,
     );
     // × 紧跟标题；始终占位，仅切换绘制，避免显隐导致 hover 闪烁。
     let close_visible = show_close || active || tab_hot;
