@@ -1110,16 +1110,36 @@ impl MistTermApp {
                                 ui.vertical(|ui| {
                                     ui.set_width(half);
                                     Self::ui_field_label(ui, theme, crate::i18n::tr(ctx, "Password", "密码"));
+                                    // 提示按「会话是否真存过密码」而不是输入框当前
+                                    // 内容来切换：没存过密码（密钥 / Agent / vault）
+                                    // 的会话展示「可留空」，存过的展示掩码沿用说明。
+                                    // 输入过程中提示不跳变，避免误导。
+                                    let session_has_saved_password = self
+                                        .edit_session_form
+                                        .id
+                                        .as_deref()
+                                        .and_then(|sid| self.session_manager.get_session(sid))
+                                        .map(|s| !s.password.is_empty())
+                                        .unwrap_or(false);
+                                    let password_hint = if session_has_saved_password {
+                                        crate::i18n::tr(
+                                            ctx,
+                                            "Masked: keeps the saved password; type a new one to replace it",
+                                            "已掩码：表示沿用已保存的密码；输入新值即可替换",
+                                        )
+                                    } else {
+                                        crate::i18n::tr(
+                                            ctx,
+                                            "Optional — leave empty when using a key or SSH Agent",
+                                            "可留空——使用密钥或 SSH Agent 时无需密码",
+                                        )
+                                    };
                                     Self::ui_form_singleline(
                                         ui,
                                         theme,
                                         "edit_session_password",
                                         &mut self.edit_session_form.password,
-                                        crate::i18n::tr(
-                                            ctx,
-                                            "**** keeps the saved password; enter a new value to reset",
-                                            "**** 表示沿用原密码；改为新口令以保存新密码",
-                                        ),
+                                        password_hint,
                                         half,
                                         true,
                                     );
