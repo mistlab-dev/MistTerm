@@ -106,9 +106,22 @@ impl MistTermApp {
                 });
             });
         if let Some(inner) = &modal_resp {
-            crate::ui::chrome::raise_window_response(ctx, &inner.response);
+            // Keep the dock raise when Software Update is closed. While Update
+            // is open, do not raise Preferences: both would want the top and
+            // egui would keep the stored relative order (Update behind).
+            if crate::ui::update_prefs_stack::preferences_raises_above_dock(
+                self.update_ui.dialog_open(),
+            ) {
+                crate::ui::chrome::raise_window_response(ctx, &inner.response);
+            }
         }
-        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+        // #452: Escape must not dismiss still-open Preferences while Software
+        // Update is in front. Close-button / click handling of this window is
+        // otherwise unchanged (prefs-vs-dock raise above is preserved).
+        if crate::ui::update_prefs_stack::escape_closes_preferences(
+            crate::ui::update_prefs_stack::front_dialog(self.update_ui.dialog_open(), true),
+        ) && ctx.input(|i| i.key_pressed(egui::Key::Escape))
+        {
             should_close = true;
         }
         if self.rule_manager_dialog.take_close_preferences() {
