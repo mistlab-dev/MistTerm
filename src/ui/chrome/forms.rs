@@ -304,6 +304,34 @@ pub fn form_checkbox_with_id(
 }
 
 
+/// 未选中单选圆环描边。必须是可见的实线（宽度 >= 1、颜色非透明）。
+/// 与 [`color_checkbox_off_stroke_color`] 同色，保证在现有主题底上能看出空心圆。
+pub fn form_radio_inactive_ring_stroke(theme: &Theme) -> egui::Stroke {
+    egui::Stroke::new(1.0, theme.color_checkbox_off_stroke_color())
+}
+
+
+/// 统一单选：未选中时圆环描边始终可见。
+/// 全局「暗夜」主题将 `inactive.bg_stroke` 设为 `NONE`，裸 `ui.radio` 的未选中项没有圆环像素（#451）。
+/// 只在本次调用内覆盖 widget stroke，不改全局主题，不改选项语义；填充保持原值，避免未选中项被涂成实心圆。
+pub fn form_radio(
+    ui: &mut Ui,
+    theme: &Theme,
+    selected: bool,
+    text: impl Into<egui::WidgetText>,
+) -> Response {
+    ui.scope(|ui| {
+        let ring = form_radio_inactive_ring_stroke(theme);
+        let w = &mut ui.style_mut().visuals.widgets;
+        w.inactive.bg_stroke = ring;
+        w.hovered.bg_stroke = egui::Stroke::new(1.0, theme.accent_dim_color());
+        w.active.bg_stroke = egui::Stroke::new(1.0, theme.accent_color());
+        ui.radio(selected, text)
+    })
+    .inner
+}
+
+
 /// 地址栏内嵌路径输入(无下划线、透明底，随剩余宽度伸缩)。
 pub fn form_singleline_field_sftp_embedded(
     ui: &mut Ui,
@@ -1344,3 +1372,50 @@ pub(crate) fn format_stepper_f32(v: f32, suffix: &str) -> String {
     }
 }
 
+
+
+#[cfg(test)]
+mod tests {
+    use super::form_radio_inactive_ring_stroke;
+    use crate::ui::theme::Theme;
+
+    fn builtin_themes() -> [Theme; 4] {
+        [
+            Theme::dark(),
+            Theme::light(),
+            Theme::ocean(),
+            Theme::forest(),
+        ]
+    }
+
+    #[test]
+    fn form_radio_inactive_ring_stroke_is_visible_on_builtin_themes() {
+        for theme in builtin_themes() {
+            let stroke = form_radio_inactive_ring_stroke(&theme);
+            assert!(
+                stroke.width >= 1.0,
+                "{}: unselected radio ring width must be visible, got {}",
+                theme.name,
+                stroke.width
+            );
+            assert!(
+                stroke.color.a() > 0,
+                "{}: unselected radio ring must not be transparent, got {:?}",
+                theme.name,
+                stroke.color
+            );
+        }
+    }
+
+    #[test]
+    fn form_radio_inactive_ring_stroke_covers_modern_dark_theme() {
+        let theme = Theme::dark();
+        assert!(
+            theme.uses_modern_palette(),
+            "dark/night is the modern palette that zeros inactive.bg_stroke"
+        );
+        let stroke = form_radio_inactive_ring_stroke(&theme);
+        assert!(stroke.width >= 1.0);
+        assert!(stroke.color.a() > 0);
+    }
+}
