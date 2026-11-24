@@ -9,6 +9,7 @@
 //! - 绝不自动重启；macOS 目前只提醒、引导手动更新。
 
 pub mod apply;
+pub mod channel_switch;
 pub mod check;
 pub mod error;
 pub mod fetch;
@@ -21,6 +22,7 @@ pub mod ping;
 pub mod state;
 pub mod verify;
 
+pub use channel_switch::{check_result_belongs_to_current, last_check_unix_for_channel, last_check_unix_from, state_file_in};
 pub use check::{check_for_update, CheckOptions, CheckOutcome, InstallPlan, ManualReason, UpdateInfo};
 pub use error::UpdateError;
 pub use manifest::{Manifest, PlatformAsset};

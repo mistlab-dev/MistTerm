@@ -984,11 +984,16 @@ impl MistTermApp {
             self.dialog_flags.about = open && !should_close;
         }
         self.render_licenses_modal(ctx, theme);
-        self.render_update_dialog(ctx, theme);
 
+        // #452: draw Preferences first (it still raises itself above the right
+        // dock). Software Update is drawn next and raises itself so it stays
+        // in front of a still-open Preferences. About and licenses remain
+        // drawn before this pair; workspace confirms, import, and help remain
+        // after both.
         if self.dialog_flags.preferences {
             self.show_preferences_modal(ctx, theme);
         }
+        self.render_update_dialog(ctx, theme);
 
         self.render_workspace_confirm_modals(ctx, theme);
 

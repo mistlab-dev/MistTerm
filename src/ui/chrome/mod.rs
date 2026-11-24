@@ -7,6 +7,7 @@
 mod buttons;
 mod dock;
 mod forms;
+mod host_text;
 mod modals;
 mod panels;
 mod tabs;
@@ -18,6 +19,8 @@ pub use buttons::*;
 pub use dock::*;
 
 pub use forms::*;
+
+pub use host_text::*;
 
 pub use modals::*;
 
