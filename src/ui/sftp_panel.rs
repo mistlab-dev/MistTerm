@@ -2780,6 +2780,23 @@ impl SftpPanel {
         s
     }
 
+    /// #469：人话错误按词组预折行，避免「请换路径」等从字中间拆开。
+    /// 不改 localize_* 返回值，只在绘制时插入换行。
+    fn paint_list_error_label(ui: &mut egui::Ui, theme: &Theme, msg: &str, small: bool) {
+        let wrapped = crate::ui::cloud_sync_panel::cjk_wrap_lines(
+            ui,
+            theme,
+            msg,
+            crate::ui::cloud_sync_panel::SFTP_LIST_ERROR_ZH_PHRASES,
+            ui.available_width(),
+        );
+        let mut rt = egui::RichText::new(wrapped).color(theme.red_color());
+        if small {
+            rt = rt.small();
+        }
+        ui.label(rt);
+    }
+
     fn localize_local_list_error(ctx: &egui::Context, msg: &str) -> String {
         // #440 点查：实机错误为 `[SFTP3] permission denied`（小写 p、含前缀），
         // 大小写敏感 contains 对不上——改用小写化匹配。
@@ -4010,7 +4027,7 @@ impl SftpPanel {
                 .corner_radius(theme.radius_list_item())
                 .inner_margin(egui::Margin::symmetric(theme.spacing_search_input_x() as i8, theme.spacing_search_input_y() as i8))
                 .show(ui, |ui| {
-                    ui.label(egui::RichText::new(msg).color(theme.red_color()));
+                    Self::paint_list_error_label(ui, theme, &msg, false);
                     ui.horizontal(|ui| {
                         if crate::ui::chrome::panel_action_primary_icon_button(
                             ui,
@@ -4329,7 +4346,7 @@ impl SftpPanel {
             }
             if let Some(err) = &self.local_list_err {
                 let msg = Self::localize_local_list_error(ctx, err);
-                ui.label(egui::RichText::new(msg).small().color(theme.red_color()));
+                Self::paint_list_error_label(ui, theme, &msg, true);
             }
             let mut enter_local: Option<PathBuf> = None;
             let local_block_h = local_list_h + theme.size_file_list_row_h();
@@ -5775,10 +5792,11 @@ impl SftpPanel {
             self.refresh_local_list();
         }
         if let Some(err) = &self.local_list_err {
-            ui.label(
-                egui::RichText::new(Self::localize_local_list_error(ctx, err))
-                    .small()
-                    .color(theme.red_color()),
+            Self::paint_list_error_label(
+                ui,
+                theme,
+                &Self::localize_local_list_error(ctx, err),
+                true,
             );
         }
     }
@@ -5933,10 +5951,11 @@ impl SftpPanel {
                 // #437：先报错（人话 + 不只是「空闲」页脚），空目录再给明确空态——
                 // 两者不混同；本机一侧不受影响，不冻结整窗。
                 if let Some(err) = &self.list_err {
-                    ui.label(
-                        egui::RichText::new(Self::localize_list_error(ctx, err))
-                            .small()
-                            .color(theme.red_color()),
+                    Self::paint_list_error_label(
+                        ui,
+                        theme,
+                        &Self::localize_list_error(ctx, err),
+                        true,
                     );
                     ui.add_space(theme.spacing_xs());
                 } else if self.entries.is_empty() && !self.busy {
@@ -6001,10 +6020,11 @@ impl SftpPanel {
         }
         if let Some(err) = self.list_err.clone() {
             ui.horizontal(|ui| {
-                ui.label(
-                    egui::RichText::new(Self::localize_list_error(ctx, &err))
-                        .small()
-                        .color(theme.red_color()),
+                Self::paint_list_error_label(
+                    ui,
+                    theme,
+                    &Self::localize_list_error(ctx, &err),
+                    true,
                 );
                 if ui
                     .small_button(crate::i18n::tr(ctx, "Retry", "重试"))

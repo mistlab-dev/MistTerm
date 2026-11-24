@@ -366,9 +366,15 @@ impl CloudSyncPanel {
                     ui.label(
                         chrome::rich_caption(
                             theme,
-                            loc.tr(
-                                "Technical: sealed with Argon2id + AES-256-GCM; server stores ciphertext and a kdf hint. This machine's device key cannot unwrap another machine's envelope.",
-                                "技术细节：使用 Argon2id + AES-256-GCM 封存；服务器只存密文和密钥派生提示。本机密钥不能解开另一台机器的信封。",
+                            &cjk_wrap_lines(
+                                ui,
+                                theme,
+                                loc.tr(
+                                    "Technical: sealed with Argon2id + AES-256-GCM; server stores ciphertext and a kdf hint. This machine's device key cannot unwrap another machine's envelope.",
+                                    "技术细节：使用 Argon2id + AES-256-GCM 封存；服务器只存密文和密钥派生提示。本机密钥不能解开另一台机器的信封。",
+                                ),
+                                CLOUD_SYNC_ZH_PHRASES,
+                                ui.available_width(),
                             ),
                         )
                         .color(theme.color_form_hint()),
@@ -400,9 +406,15 @@ impl CloudSyncPanel {
                 ui.label(
                     chrome::rich_caption(
                         theme,
-                        loc.tr(
-                            "Sign in above to sync. Local SSH keeps working.",
-                            "先在上方登录再同步。未登录时本机 SSH 保持原样。",
+                        &cjk_wrap_lines(
+                            ui,
+                            theme,
+                            loc.tr(
+                                "Sign in above to sync. Local SSH keeps working.",
+                                "先在上方登录再同步。未登录时本机 SSH 保持原样。",
+                            ),
+                            CLOUD_SYNC_ZH_PHRASES,
+                            ui.available_width(),
                         ),
                     )
                     .color(theme.color_form_hint()),
@@ -489,9 +501,15 @@ impl CloudSyncPanel {
                 ui.label(
                     chrome::rich_caption(
                         theme,
-                        loc.tr(
-                            "Copy this backup unlock code and store it outside this machine.",
-                            "请抄下备用解锁码，并保管在这台机器之外。",
+                        &cjk_wrap_lines(
+                            ui,
+                            theme,
+                            loc.tr(
+                                "Copy this backup unlock code and store it outside this machine.",
+                                "请抄下备用解锁码，并保管在这台机器之外。",
+                            ),
+                            CLOUD_SYNC_ZH_PHRASES,
+                            ui.available_width(),
                         ),
                     )
                     .color(theme.red_color()),
@@ -1429,9 +1447,15 @@ impl CloudSyncPanel {
                             ui.label(
                                 chrome::rich_caption(
                                     theme,
-                                    loc.tr(
-                                        "When off, the whole library is replaced. Session/credential import may overwrite local files.",
-                                        "关闭上项则整库替换。会话/凭证导入可能覆盖本机文件。",
+                                    &cjk_wrap_lines(
+                                        ui,
+                                        theme,
+                                        loc.tr(
+                                            "When off, the whole library is replaced. Session/credential import may overwrite local files.",
+                                            "关闭上项则整库替换。会话/凭证导入可能覆盖本机文件。",
+                                        ),
+                                        CLOUD_SYNC_ZH_PHRASES,
+                                        ui.available_width(),
                                     ),
                                 )
                                 .color(theme.color_form_hint()),
@@ -1660,12 +1684,25 @@ fn paint_bullet_list(
 }
 
 
-/// #418：云端同步面板中文文案里的词组表（点查复验：除「密钥路径」外还有
-/// 「登录令牌」「丢失时」等同类拆字）。cjk_word_safe 逐个插 U+2060。
+/// #418 / #469：云端同步面板中文说明里不可拆的词组。
+/// 匹配时按字数从长到短替换，避免「加密密码」被较短的「密码」先切走。
 const CLOUD_SYNC_ZH_PHRASES: &[&str] = &[
-    "名称", "主机", "端口", "用户", "分组", "认证提示", "密钥路径", "密码",
-    "私钥文件", "本机", "登录令牌", "云端凭证", "加密密码", "解锁码",
-    "凭证库", "同步包", "主机列表", "丢失", "数据", "令牌",
+    "名称", "主机", "端口", "用户", "分组", "认证提示", "密钥路径",
+    "私钥文件", "本机密钥", "本机", "登录令牌", "云端凭证", "加密密码",
+    "会话密码", "备用解锁码", "解锁码", "凭证库", "同步包", "主机列表",
+    "密钥派生提示", "技术细节", "整库替换", "服务器", "上传", "密文",
+    "密码", "丢失", "数据", "令牌",
+];
+
+/// #469：操作审计说明 / 只读路径标签里不可拆的词组。
+pub(crate) const AUDIT_ZH_PHRASES: &[&str] = &[
+    "审计目录", "操作审计", "事后追查", "审计日志", "保留天数",
+];
+
+/// #469：文件面板人话错误里不可拆的词组。
+pub(crate) const SFTP_LIST_ERROR_ZH_PHRASES: &[&str] = &[
+    "请换路径", "没有权限", "该目录", "目录不存在", "请检查路径",
+    "无法读取", "请稍候", "子系统不可用",
 ];
 
 /// #418 复验定性：egui 0.37 的折行是自家启发式（epaint text_layout
@@ -1685,9 +1722,19 @@ pub(crate) fn cjk_wrap_lines(
     // 1) 切 token：词组优先（原子），其余逐字符（CJK）或按非 CJK 连续段。
     let mut tokens: Vec<String> = Vec::new();
     let mut rest = text.to_string();
-    // 先把词组替换成占位符防止被逐字切开。
+    // 先把词组替换成占位符防止被逐字切开；长词优先，避免短词切掉长词。
     let mut placeholders: Vec<(String, String)> = Vec::new();
-    for (i, phrase) in phrases.iter().enumerate() {
+    let mut ranked: Vec<(usize, &str)> = phrases.iter().copied().enumerate().collect();
+    ranked.sort_by(|a, b| {
+        b.1.chars()
+            .count()
+            .cmp(&a.1.chars().count())
+            .then(a.0.cmp(&b.0))
+    });
+    for (i, phrase) in ranked {
+        if phrase.is_empty() {
+            continue;
+        }
         let ph = format!("\u{E000}{i}\u{E001}"); // 私有区占位，不会与正文冲突
         placeholders.push((ph.clone(), phrase.to_string()));
         rest = rest.replace(phrase, &ph);
@@ -1716,6 +1763,17 @@ pub(crate) fn cjk_wrap_lines(
                 cur.clear();
             }
             tokens.push(ph);
+        } else if is_cjk_stop(c) {
+            // 句读贴到前一个 token（如「审计目录：」），避免冒号落到下一行行首。
+            if !cur.is_empty() {
+                cur.push(c);
+                tokens.push(std::mem::take(&mut cur));
+            } else if let Some(last) = tokens.last_mut() {
+                last.push(c);
+            } else {
+                tokens.push(c.to_string());
+            }
+            i += 1;
         } else if is_cjk_char(c) || (c.is_ascii_punctuation() && !cur.is_empty() && !cur.chars().all(|x| x.is_ascii_alphanumeric())) {
             // CJK 字符与 ASCII 标点：标点贴前面。句读（、。；：！？）作为边界
             // 附着当前 token；非句读 ASCII 标点（如 URL 里的 / .）与前后合并。
@@ -1791,19 +1849,20 @@ fn is_cjk_char(c: char) -> bool {
         || ('\u{2B740}'..='\u{2B81F}').contains(&c)
 }
 
+/// 中文句读：附着在前一 token 上，不单独开行。
+fn is_cjk_stop(c: char) -> bool {
+    matches!(c, '、' | '。' | '；' | '：' | '！' | '？' | '，')
+}
+
 
 #[cfg(test)]
 mod cjk_wrap_tests {
-    use super::{cjk_wrap_lines, CLOUD_SYNC_ZH_PHRASES};
+    use super::{
+        cjk_wrap_lines, AUDIT_ZH_PHRASES, CLOUD_SYNC_ZH_PHRASES, SFTP_LIST_ERROR_ZH_PHRASES,
+    };
 
-    /// #418 复验定性：egui 的 U+2060 WORD JOINER 无效（invisible_char 无字形、
-    /// CJK 逐字是 good break candidate）。应用层预折行必须保证：词组不跨行。
-    /// 本测试用真实 egui 字体量宽，把可用宽压到必然折行的程度，断言每行
-    /// 完整包含词组（词组两端不出现在行界两侧）。
-    #[test]
-    fn wrap_keeps_phrases_whole() {
+    fn wrap_at(text: &str, phrases: &[&str], max_width: f32) -> String {
         let ctx = egui::Context::default();
-        let text = "只同步名称、主机、端口、用户、分组、认证提示和密钥路径。密码和私钥文件留在本机。";
         let mut lines_out = String::new();
         let mut full = ctx.run_ui(
             egui::RawInput {
@@ -1819,31 +1878,99 @@ mod cjk_wrap_tests {
                         ui,
                         &crate::ui::theme::Theme::dark(),
                         text,
-                        CLOUD_SYNC_ZH_PHRASES,
-                        120.0,
+                        phrases,
+                        max_width,
                     );
                 });
             },
         );
         full.textures_delta.clear();
-        let lines = lines_out;
-        println!("DBG lines={lines:?}");
-        assert!(lines.contains('\n'), "窄宽下应折成多行");
-        // 关键断言：合并所有行后与原文一致（无丢字）。
+        lines_out
+    }
+
+    fn assert_phrases_stay_whole(text: &str, phrases: &[&str], lines: &str) {
         let joined: String = lines.split('\n').collect::<Vec<_>>().concat();
-        assert_eq!(joined, text, "折行不得丢字/改字");
-        // 逐词组：任意行不得以词组的前缀结尾（除非整个词组在本行）。
-        for phrase in CLOUD_SYNC_ZH_PHRASES {
+        assert_eq!(joined, text, "折行不得丢字/改字；lines={lines:?}");
+        for phrase in phrases {
+            if !text.contains(phrase) {
+                continue;
+            }
             for k in 1..phrase.chars().count() {
                 let prefix: String = phrase.chars().take(k).collect();
                 let suffix: String = phrase.chars().skip(k).collect();
-                for line in lines.split('\n') {
-                    assert!(
-                        !(line.ends_with(&prefix) && lines.split('\n').any(|n| n.starts_with(&suffix))),
-                        "词组 {phrase} 被拆行：{prefix:?} 行尾 / {suffix:?} 行首\n{lines}"
-                    );
+                let line_list: Vec<&str> = lines.split('\n').collect();
+                for (i, line) in line_list.iter().enumerate() {
+                    if line.ends_with(&prefix) {
+                        let split = line_list
+                            .get(i + 1)
+                            .is_some_and(|next| next.starts_with(&suffix));
+                        assert!(
+                            !split,
+                            "词组 {phrase} 被拆行：{prefix:?} 行尾 / {suffix:?} 行首\n{lines}"
+                        );
+                    }
                 }
             }
         }
+    }
+
+    /// #418 复验定性：egui 的 U+2060 WORD JOINER 无效（invisible_char 无字形、
+    /// CJK 逐字是 good break candidate）。应用层预折行必须保证：词组不跨行。
+    /// 本测试用真实 egui 字体量宽，把可用宽压到必然折行的程度，断言每行
+    /// 完整包含词组（词组两端不出现在行界两侧）。
+    #[test]
+    fn wrap_keeps_phrases_whole() {
+        let text = "只同步名称、主机、端口、用户、分组、认证提示和密钥路径。密码和私钥文件留在本机。";
+        let lines = wrap_at(text, CLOUD_SYNC_ZH_PHRASES, 120.0);
+        println!("DBG lines={lines:?}");
+        assert!(lines.contains('\n'), "窄宽下应折成多行");
+        assert_phrases_stay_whole(text, CLOUD_SYNC_ZH_PHRASES, &lines);
+    }
+
+    /// #469：点查漏网词组「上传」「服务器」「审计目录」「请换路径」在窄宽下也不拆字。
+    #[test]
+    fn wrap_keeps_issue_469_phrases_whole() {
+        let cases: &[(&str, &[&str])] = &[
+            (
+                "开启后，会话密码和凭证库秘密先用加密密码加封再上传，服务器只保存密文。",
+                CLOUD_SYNC_ZH_PHRASES,
+            ),
+            (
+                "技术细节：使用 Argon2id + AES-256-GCM 封存；服务器只存密文和密钥派生提示。本机密钥不能解开另一台机器的信封。",
+                CLOUD_SYNC_ZH_PHRASES,
+            ),
+            (
+                "审计目录：/workspace/foo/gui-home/.config/mistterm/audit",
+                AUDIT_ZH_PHRASES,
+            ),
+            (
+                "没有权限读取该目录，请换路径或点「上级」返回。",
+                SFTP_LIST_ERROR_ZH_PHRASES,
+            ),
+            (
+                "操作审计：把执行过什么、什么时候执行的记录下来，便于事后追查。它只记录事件，不会拦截你的操作。",
+                AUDIT_ZH_PHRASES,
+            ),
+        ];
+        for (text, phrases) in cases {
+            for width in [80.0, 100.0, 120.0, 160.0, 200.0] {
+                let lines = wrap_at(text, phrases, width);
+                assert_phrases_stay_whole(text, phrases, &lines);
+            }
+        }
+        // 句读贴在词组后：不得出现「审计目录」与全角冒号分处两行。
+        let dir_lines = wrap_at(
+            "审计目录：/workspace/foo/gui-home/.config/mistterm/audit",
+            AUDIT_ZH_PHRASES,
+            80.0,
+        );
+        assert!(
+            !dir_lines.split('\n').any(|line| line.starts_with('：')),
+            "全角冒号不应落到下一行行首：{dir_lines:?}"
+        );
+        assert!(
+            dir_lines.contains("审计目录：") || dir_lines.lines().any(|l| l.ends_with("审计目录：")),
+            "审计目录应与全角冒号同处：{dir_lines:?}"
+        );
     }
 }
