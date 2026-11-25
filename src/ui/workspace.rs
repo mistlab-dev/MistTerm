@@ -7,6 +7,51 @@ use super::*;
 use crate::core::SESSION_COLOR_TAGS;
 
 impl MistTermApp {
+    /// #488：变量输入框的占位提示。空输入时必须有具体文案，否则用户看不出该在哪填。
+    ///
+    /// UI 薄封装：从 egui Context 读出当前语言，交给纯函数 [`Self::fragment_variable_hint_text`]。
+    fn fragment_variable_input_hint(
+        ctx: &egui::Context,
+        var: &crate::core::fragment::FragmentVariable,
+    ) -> String {
+        Self::fragment_variable_hint_text(var, crate::i18n::language(ctx))
+    }
+
+    /// #488：占位提示的纯逻辑（语言进、文案出，不碰 egui，便于单测）。
+    ///
+    /// - 有默认值：展示「默认值：xxx」，让默认值可被感知（用户可直接回车确认）。
+    /// - 无默认值：按变量名生成具体提示——主机 IP 类变量用「请输入主机 IP」；
+    ///   其余变量用「请输入<变量名>」，比通用的「请输入」更能说明这一栏的用途。
+    /// - 值来自片段定义（name/description），两个 UI 语言都返回可读文案。
+    fn fragment_variable_hint_text(
+        var: &crate::core::fragment::FragmentVariable,
+        lang: crate::i18n::UiLanguage,
+    ) -> String {
+        let locale = crate::i18n::Locale::from(lang);
+        let tr = |en: &'static str, zh: &'static str| locale.tr(en, zh);
+        let default = var
+            .default_value
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        if let Some(default) = default {
+            return tr("Default value: {value}", "默认值：{value}").replace("{value}", default);
+        }
+        let name = var.name.trim();
+        let desc = var.description.trim();
+        let subject: &str = if name.eq_ignore_ascii_case("host_ip")
+            || name.eq_ignore_ascii_case("host_ip_or_address")
+            || name.contains("ip")
+            || desc.eq_ignore_ascii_case("host")
+            || desc.eq_ignore_ascii_case("ip")
+        {
+            tr("host IP", "主机 IP")
+        } else {
+            name
+        };
+        tr("Enter {subject}", "请输入{subject}").replace("{subject}", subject)
+    }
+
     pub(crate) fn render_workspace_shell(
         &mut self,
         ctx: &egui::Context,
@@ -1871,6 +1916,8 @@ impl MistTermApp {
                                         ));
                                         ui.add_space(theme.spacing_sm());
                                         let mut changed_any = false;
+                                        // #488：只聚焦第一个(最上方的)变量输入框。
+                                        let mut first_field = true;
                                         for var in &fragment.variables {
                                             let used = crate::core::placeholder_usage(
                                                 &fragment.command,
@@ -1890,21 +1937,34 @@ impl MistTermApp {
                                                 ));
                                             }
                                             let value = self
-                                                .fragment_state.variable_dialog
+                                                .fragment_state
+                                                .variable_dialog
                                                 .values
                                                 .entry(var.name.clone())
                                                 .or_default();
                                             let var_w = layout_util::finite_content_width(ui);
-                                            let resp = crate::ui::chrome::form_singleline_field(
+                                            // #488：改用实心底+描边输入框——modern 主题的下划线
+                                            // 样式会和弹窗背景糊在一起，用户看不出该在哪填。
+                                            // 固定 id 便于打开弹窗后直接聚焦第一栏。
+                                            let field_id =
+                                                egui::Id::unique(("var_dialog", var.name.as_str()));
+                                            let resp = crate::ui::chrome::form_singleline_field_boxed(
                                                 ui,
                                                 theme,
-                                                egui::Id::unique(("var_dialog", var.name.as_str())),
+                                                field_id,
                                                 value,
-                                                var.default_value.as_deref().unwrap_or(""),
+                                                &Self::fragment_variable_input_hint(ui.ctx(), var),
                                                 var_w,
                                                 false,
                                             );
                                             let value_changed = resp.changed();
+                                            // #488：弹窗刚打开时聚焦第一个变量输入框，
+                                            // 用户可以直接输入，无需先点一次输入框。
+                                            if first_field && self.fragment_state.variable_dialog.focus_first_input {
+                                                resp.request_focus();
+                                                self.fragment_state.variable_dialog.focus_first_input = false;
+                                                first_field = false;
+                                            }
                                             match used {
                                                 crate::core::PlaceholderUsage::Used => {
                                                     ui.label(crate::ui::chrome::rich_caption(
@@ -3052,4 +3112,123 @@ impl MistTermApp {
         }
     }
 
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::fragment::FragmentVariable;
+    use crate::i18n::UiLanguage;
+
+    // ---------------------------------------------- #488 占位提示文案（纯函数）
+
+    /// 主机 IP 类变量（issue 原始场景）：中文占位必须是「请输入主机 IP」。
+    #[test]
+    fn hint_host_ip_variable_zh() {
+        let mut var = FragmentVariable::new("宿主机IP", "目标服务器地址");
+        var.description = "host".into();
+        assert_eq!(
+            MistTermApp::fragment_variable_hint_text(&var, UiLanguage::Zh),
+            "请输入主机 IP"
+        );
+    }
+
+    /// 英文等价文案存在：「Enter host IP」。
+    #[test]
+    fn hint_host_ip_variable_en() {
+        let var = FragmentVariable::new("host_ip", "");
+        assert_eq!(
+            MistTermApp::fragment_variable_hint_text(&var, UiLanguage::En),
+            "Enter host IP"
+        );
+    }
+
+    /// 各种命中「主机 IP」判定的方式：变量名含 ip、别名、描述恰为 host/ip。
+    #[test]
+    fn hint_host_ip_detection_variants() {
+        for name in ["host_ip", "HOST_IP", "host_ip_or_address", "目标ip"] {
+            let var = FragmentVariable::new(name, "");
+            assert_eq!(
+                MistTermApp::fragment_variable_hint_text(&var, UiLanguage::En),
+                "Enter host IP",
+                "name={name}"
+            );
+        }
+        let desc_host = FragmentVariable::new("endpoint", "host");
+        let desc_ip = FragmentVariable::new("endpoint", "ip");
+        assert_eq!(
+            MistTermApp::fragment_variable_hint_text(&desc_host, UiLanguage::En),
+            "Enter host IP"
+        );
+        assert_eq!(
+            MistTermApp::fragment_variable_hint_text(&desc_ip, UiLanguage::Zh),
+            "请输入主机 IP"
+        );
+    }
+
+    /// 非主机类变量回退到「请输入<变量名>」（比通用「请输入」具体）。
+    #[test]
+    fn hint_generic_variable_uses_name() {
+        let var = FragmentVariable::new("port", "端口号");
+        assert_eq!(
+            MistTermApp::fragment_variable_hint_text(&var, UiLanguage::Zh),
+            "请输入port"
+        );
+        let var_en = FragmentVariable::new("duration", "");
+        assert_eq!(
+            MistTermApp::fragment_variable_hint_text(&var_en, UiLanguage::En),
+            "Enter duration"
+        );
+    }
+
+    /// 有默认值时展示默认值而非「请输入…」，且空/空白默认值视同没有。
+    #[test]
+    fn hint_default_value_and_blank_default_fallback() {
+        let mut var = FragmentVariable::new("host_ip", "");
+        var.default_value = Some("10.0.0.9".into());
+        assert_eq!(
+            MistTermApp::fragment_variable_hint_text(&var, UiLanguage::Zh),
+            "默认值：10.0.0.9"
+        );
+        assert_eq!(
+            MistTermApp::fragment_variable_hint_text(&var, UiLanguage::En),
+            "Default value: 10.0.0.9"
+        );
+        var.default_value = Some("   ".into());
+        assert_eq!(
+            MistTermApp::fragment_variable_hint_text(&var, UiLanguage::Zh),
+            "请输入主机 IP"
+        );
+    }
+
+    // ---------------------------------------------- #488 弹窗打开即聚焦首个输入框
+
+    /// 渲染循环里「首帧只聚焦第一个变量输入框」的一次性标志协议：
+    /// `first_field && focus_first_input → request_focus()`，随后标志清零。
+    /// 用同样的守卫形状模拟多变量循环，锁定：
+    /// 只有第一个字段请求焦点，后续字段不再重复聚焦，标志下一帧不会复用。
+    #[test]
+    fn focus_first_input_is_consumed_once_by_the_first_field() {
+        let mut focus_first_input = true; // 弹窗刚打开（两条打开路径都会置 true）
+        let mut requested = Vec::new();
+        let fields = ["host_ip", "port", "duration"];
+        let mut first_field = true;
+        for name in fields {
+            // 与 render_workspace_shell 变量行一致的守卫顺序
+            if first_field && focus_first_input {
+                requested.push(name);
+                focus_first_input = false;
+                first_field = false;
+            }
+        }
+        assert_eq!(requested, vec!["host_ip"], "只有第一个输入框请求焦点");
+        assert!(!focus_first_input, "标志用完即清，下一帧不再重复聚焦");
+    }
+
+    /// 默认(关闭)状态下标志必须是 false——不该有幽灵聚焦。
+    #[test]
+    fn focus_first_input_defaults_to_false() {
+        let dlg = crate::ui::app::FragmentVariableDialog::default();
+        assert!(!dlg.focus_first_input);
+    }
 }

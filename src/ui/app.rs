@@ -237,6 +237,9 @@ pub struct FragmentVariableDialog {
     pub command_edit: String,
     /// 点「插入/执行」时若 `{{ … }}` 展开失败，在弹窗内展示(避免用户以为按钮失灵)。
     pub last_finalize_error: Option<String>,
+    /// #488：弹窗刚打开时为 true，首个输入框本帧 `request_focus` 后即清零，
+    /// 让用户打开弹窗就能直接输入，无需先点输入框。
+    pub focus_first_input: bool,
 }
 
 /// 「填写片段变量」弹窗关闭后的动作(插入终端 vs ⌘J 直接发送)
@@ -8979,6 +8982,7 @@ impl MistTermApp {
             self.fragment_state.variable_dialog.command_edit =
                 self.build_fragment_command_preview(fragment, &self.fragment_state.variable_dialog.values);
             self.fragment_state.variable_dialog.paste_after_fill = true;
+            self.fragment_state.variable_dialog.focus_first_input = true;
             self.fragment_state.variable_dialog.last_finalize_error = None;
             return;
         }
@@ -10590,6 +10594,7 @@ impl MistTermApp {
             self.fragment_state.variable_dialog.command_edit =
                 self.build_fragment_command_preview(fragment, &self.fragment_state.variable_dialog.values);
             self.fragment_state.variable_dialog.paste_after_fill = false;
+            self.fragment_state.variable_dialog.focus_first_input = true;
             self.fragment_state.variable_dialog.last_finalize_error = None;
             return;
         }
