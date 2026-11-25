@@ -8,8 +8,43 @@ use std::collections::{HashMap, HashSet};
 use chrono::{Local, TimeZone};
 
 use super::batch_exec::batch_endpoint_key;
-use super::session::SessionConfig;
+use super::session::{SessionConfig, DEFAULT_SSH_PORT};
 use super::session_sort::{sort_sessions, SessionSortBy};
+
+/// 端口搜索文本：与连接列表实际显示一致（#486）。
+///
+/// UI 规则（见 sidebar 行绘制与 [`session_tab_label_with`]）：端口 ≠ 22 时
+/// 显示 `host:port`，端口 = 22 时只显示 `host`。搜索文本据此构造：
+/// - 一律包含 `host:port`：非默认端口的整串、端口段都能被搜到；
+/// - 端口 = 22 时显示串里没有端口，再补一份裸端口文本，保证按真实
+///   端口「22」搜索仍能命中该会话。
+fn session_port_search_text(session: &SessionConfig) -> String {
+    let mut text = format!("{}:{}", session.host, session.port);
+    if session.port == DEFAULT_SSH_PORT {
+        // 22 端口在 UI 上不显示，但仍允许按真实端口搜到该会话。
+        text.push_str(&format!(" {}", session.port));
+    }
+    text
+}
+
+/// 连接列表搜索匹配（#486）：名称 / 主机 / 用户名 / 分组 / 可见端口。
+///
+/// `query` 应为已 `trim()` 并 `to_lowercase()` 后的搜索词。
+/// 端口匹配基于 [`session_port_search_text`]：
+/// - 非默认端口会话显示 `host:port`，`host:port` 整串参与匹配，
+///   所以输入 `41025` 或 `127.0.0.1:41025` 都能命中；
+/// - 默认端口 22 会话显示时省略端口，但按「22」搜索仍应命中（真实端口）。
+pub fn session_matches_connection_search(session: &SessionConfig, query: &str) -> bool {
+    let query = query.trim().to_lowercase();
+    if query.is_empty() {
+        return true;
+    }
+    session.name.to_lowercase().contains(&query)
+        || session.host.to_lowercase().contains(&query)
+        || session.username.to_lowercase().contains(&query)
+        || session.group.to_lowercase().contains(&query)
+        || session_port_search_text(session).contains(&query)
+}
 
 /// 去重键：优先保存主机 ID；ID 为空时回退 `user@host:port`（大小写不敏感）。
 pub fn session_dedup_key(session: &SessionConfig) -> String {
@@ -438,5 +473,63 @@ mod tests {
         assert_eq!(zh, "昨天 23:14 最后连接");
         let en = format_offline_last_connected(false, Some(ts), now_local.timestamp());
         assert_eq!(en, "Last connected yesterday 23:14");
+    }
+
+    // ---- #486 连接列表搜索应匹配实际显示的端口 ----
+
+    #[test]
+    fn search_486_custom_port_query_matches_saved_session() {
+        // 复现 issue：mist413z / mist410s 显示为 127.0.0.1:4102x，搜端口却「没有匹配的会话」
+        let a = sc("s1", "mist413z", "127.0.0.1", 41023, "root", "默认", None);
+        let b = sc("s2", "mist410s", "127.0.0.1", 41025, "root", "默认", None);
+        assert!(session_matches_connection_search(&a, "41023"), "搜可见端口 41023 应命中 mist413z");
+        assert!(session_matches_connection_search(&b, "41025"), "搜可见端口 41025 应命中 mist410s");
+        // host:port 整串也命中（列表就显示这一串）
+        assert!(session_matches_connection_search(&a, "127.0.0.1:41023"));
+        assert!(session_matches_connection_search(&b, "127.0.0.1:41025"));
+        // 端口查询只命中对应行，不串行
+        assert!(!session_matches_connection_search(&a, "41025"));
+        assert!(!session_matches_connection_search(&b, "41023"));
+        // 原 IP / 名称搜索不回归
+        assert!(session_matches_connection_search(&a, "127.0.0.1"));
+        assert!(session_matches_connection_search(&a, "mist413z"));
+        assert!(session_matches_connection_search(&b, "mist410s"));
+    }
+
+    #[test]
+    fn search_486_default_port_22_hidden_but_still_searchable() {
+        // 端口 22 时列表只显示 host，不显示 :22；但按真实端口 22 搜应命中
+        let s = sc("s1", "prod", "10.0.0.8", 22, "deploy", "默认", None);
+        assert!(session_matches_connection_search(&s, "22"));
+        assert!(session_matches_connection_search(&s, "10.0.0.8"));
+        assert!(session_matches_connection_search(&s, "prod"));
+        assert!(session_matches_connection_search(&s, "deploy"));
+        // 大小写不敏感与首尾空白行为与原实现一致
+        assert!(session_matches_connection_search(&s, "  PROD  "));
+    }
+
+    #[test]
+    fn search_486_port_nobody_has_yields_no_match() {
+        let a = sc("s1", "mist413z", "127.0.0.1", 41023, "root", "默认", None);
+        let b = sc("s2", "plain22", "10.0.0.8", 22, "deploy", "默认", None);
+        for q in ["41025", "9999", "410234", "40"] {
+            assert!(!session_matches_connection_search(&a, q), "q={q} 不应命中 41023 行");
+            assert!(!session_matches_connection_search(&b, q), "q={q} 不应命中 22 行");
+        }
+        // 空查询 = 不过滤
+        assert!(session_matches_connection_search(&a, ""));
+        assert!(session_matches_connection_search(&a, "   "));
+    }
+
+    #[test]
+    fn search_486_name_ip_user_group_queries_unchanged() {
+        let s = sc("s1", "Web 生产", "192.168.1.10", 2202, "ops", "生产", None);
+        assert!(session_matches_connection_search(&s, "Web"));
+        assert!(session_matches_connection_search(&s, "生产"));
+        assert!(session_matches_connection_search(&s, "192.168.1"));
+        assert!(session_matches_connection_search(&s, "ops"));
+        assert!(session_matches_connection_search(&s, "2202"));
+        assert!(!session_matches_connection_search(&s, "staging"));
+        assert!(!session_matches_connection_search(&s, "backup"));
     }
 }

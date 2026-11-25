@@ -7,8 +7,8 @@ use std::collections::{HashMap, HashSet};
 use std::time::{SystemTime, UNIX_EPOCH};
 use crate::core::session::SessionManager;
 use crate::core::session_list::{
-    connection_status_label, dedupe_sessions_for_connection_list, session_group_key,
-    sort_sessions_keeping_groups,
+    connection_status_label, dedupe_sessions_for_connection_list,
+    session_matches_connection_search, session_group_key, sort_sessions_keeping_groups,
 };
 use crate::core::team::TeamServer;
 use crate::core::session_sort::SessionSortBy;
@@ -502,11 +502,10 @@ impl Sidebar {
                             if search_query.trim().is_empty() {
                                 return true;
                             }
-                            let query = search_query.to_lowercase();
-                            s.name.to_lowercase().contains(&query)
-                                || s.host.to_lowercase().contains(&query)
-                                || s.username.to_lowercase().contains(&query)
-                                || s.group.to_lowercase().contains(&query)
+                            // #486：除名称/host/用户名/分组外，还要匹配列表行实际显示的
+                            // `host:port` 里的端口（非 22 端口显示 `host:port`；22 仍按
+                            // 真实端口命中）。逻辑收口在 session_matches_connection_search。
+                            session_matches_connection_search(s, search_query)
                         })
                         .cloned()
                         .collect();
