@@ -431,6 +431,7 @@ impl Sidebar {
                         let endpoint =
                             format!("{}@{}:{}", server.username, server.host, server.port);
                         let meta_px = theme.font_size_connection_meta();
+                        // 视觉回退 #476：endpoint 宽度按普通字体 galley 量取。
                         let measured_endpoint_w = crate::ui::chrome::measure_readable_host_width(
                             row_ui.ctx(),
                             &endpoint,
@@ -469,7 +470,7 @@ impl Sidebar {
                             end_rect).layout(egui::Layout::right_to_left(egui::Align::Center)),
                         );
                         end_ui.set_clip_rect(end_rect);
-                        // #455: 团队服务器 endpoint 同样增强 IPv4 小数点；字符串本身不变。
+                        // 视觉回退 #476：endpoint 用普通字体句点绘制；字符串本身不变。
                         crate::ui::chrome::readable_host_line(
                             &mut end_ui,
                             &endpoint,
@@ -756,7 +757,7 @@ impl Sidebar {
                             } else {
                                 session.host.clone()
                             };
-                            // #455: 连接列表 host 行增强 IPv4 小数点可读性；host 字符串本身不变。
+                            // 视觉回退 #476：连接列表 host 行用普通字体句点绘制；host 字符串本身不变。
                             crate::ui::chrome::readable_host_line(
                                 &mut text_ui,
                                 &host_line,

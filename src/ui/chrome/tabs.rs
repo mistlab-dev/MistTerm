@@ -228,7 +228,7 @@ pub fn session_tab_chip(
     } else {
         theme.text_tertiary()
     };
-    // #455: IPv4 标签用增强小数点排版（逻辑字符串仍是 ASCII `.`），其它标题走原 galley。
+    // 视觉回退 #476：标签标题按普通字体 galley 排版（IPv4 分隔点即字体句点）。
     let label_layout = super::layout_readable_host(
         ui.ctx(),
         label,
