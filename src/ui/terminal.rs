@@ -4077,9 +4077,15 @@ impl TerminalView {
                 // EventFilter 需上一帧已聚焦才生效；首帧 Tab 仍可能失焦
                 self.pending_focus_terminal = true;
             }
-            if crate::ui::terminal_keys::forward_non_text_keys(i, |bytes| {
-                self.append_offline_bytes(bytes);
-            }) {
+            // #482：断线重发路径与 PTY 路径用同一套字节序列，方向键同样
+            // 按对端 DECCKM 模式编码。
+            if crate::ui::terminal_keys::forward_non_text_keys_with_mode(
+                i,
+                self.terminal.is_application_cursor_mode(),
+                |bytes| {
+                    self.append_offline_bytes(bytes);
+                },
+            ) {
                 self.pending_focus_terminal = true;
             }
             let mut sent_ctrl = [false; 32];
@@ -4406,9 +4412,15 @@ impl TerminalView {
                 self.pending_focus_terminal = true;
             }
             // Esc / F1–F12 / Insert / 带修饰方向键等(egui 常无 Text 事件)
-            if crate::ui::terminal_keys::forward_non_text_keys(i, |bytes| {
-                let _ = self.send_pty_input(bytes);
-            }) {
+            // #482：方向键按对端 DECCKM 模式编码（vim / top 字段管理等
+            // 发 `CSI ?1h` 后须回 SS3 序列）。
+            if crate::ui::terminal_keys::forward_non_text_keys_with_mode(
+                i,
+                self.terminal.is_application_cursor_mode(),
+                |bytes| {
+                    let _ = self.send_pty_input(bytes);
+                },
+            ) {
                 // EventFilter 生效前的兜底(帧初 Tab/Esc/方向键抢焦点)
                 self.pending_focus_terminal = true;
             }

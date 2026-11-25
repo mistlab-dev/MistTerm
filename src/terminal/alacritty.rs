@@ -223,6 +223,17 @@ impl Terminal {
             .contains(alacritty_terminal::term::TermMode::ALT_SCREEN)
     }
 
+    /// 对端是否处于 DEC 应用光标键模式（DECCKM / DECSET 1，`CSI ?1h` 置位、
+    /// `CSI ?1l` 复位；`top` 字段管理 / vim 等 smkx 会开启）。
+    ///
+    /// 输入编码层据此把无修饰方向键 / Home / End 编成 SS3（`ESC O A..F`），
+    /// 见 issue #482。模式本身由 alacritty 状态机维护，这里只读。
+    pub fn is_application_cursor_mode(&self) -> bool {
+        self.term
+            .mode()
+            .contains(alacritty_terminal::term::TermMode::APP_CURSOR)
+    }
+
     /// #402：强制清掉 bracketed paste 模式（断线重连路径用）。
     /// 远端 vim 崩溃前开着 DECSET 2004 → 断线 → 重连复用同一 Terminal 时，
     /// 新 shell 没开 2004，残留状态会把粘贴包成包裹串打进命令行。
@@ -1894,5 +1905,59 @@ mod command_block_tests {
         let screen = t.get_formatted_output();
         assert!(screen.contains("hello"), "{screen}");
         assert!(screen.contains("world"), "{screen}");
+    }
+
+    // ---- #482：DECCKM（应用光标键）模式跟踪 ----
+
+    #[test]
+    fn application_cursor_mode_defaults_off() {
+        let t = Terminal::new(40, 8);
+        assert!(!t.is_application_cursor_mode());
+    }
+
+    #[test]
+    fn decset_1_enables_and_decrst_1_disables_application_cursor_mode() {
+        // smkx（`\x1b[?1h`，`top` / vim 进全屏/字段界面时发）置位。
+        let mut t = Terminal::new(40, 8);
+        t.feed(b"\x1b[?1h");
+        assert!(t.is_application_cursor_mode());
+        // rmkx（`\x1b[?1l`，退出时发）复位：Shell 提示符恢复正常方向键。
+        t.feed(b"\x1b[?1l");
+        assert!(!t.is_application_cursor_mode());
+    }
+
+    #[test]
+    fn decckm_in_multi_param_csi_only_mode1_toggles() {
+        let mut t = Terminal::new(40, 8);
+        t.feed(b"\x1b[?1000;1h");
+        assert!(t.is_application_cursor_mode());
+        t.feed(b"\x1b[?1;1002l");
+        assert!(!t.is_application_cursor_mode());
+    }
+
+    #[test]
+    fn decckm_is_independent_from_alt_screen_and_other_modes() {
+        // `top` Fields Management 只发 `CSI ?1h`，不进备用屏；
+        // 1049 只动备用屏，25 只动光标可见性。
+        let mut t = Terminal::new(40, 8);
+        t.feed(b"\x1b[?1h");
+        assert!(t.is_application_cursor_mode());
+        assert!(!t.is_alt_screen());
+        t.feed(b"\x1b[?1049h\x1b[?25l");
+        assert!(t.is_application_cursor_mode());
+        assert!(t.is_alt_screen());
+        t.feed(b"\x1b[?1049l");
+        assert!(t.is_application_cursor_mode());
+        assert!(!t.is_alt_screen());
+    }
+
+    #[test]
+    fn full_param_like_10_or_25_does_not_toggle_decckm() {
+        // 参数按完整数字匹配：`?10h` / `?25h` 不得误触 mode 1。
+        let mut t = Terminal::new(40, 8);
+        t.feed(b"\x1b[?10h");
+        assert!(!t.is_application_cursor_mode());
+        t.feed(b"\x1b[?25h");
+        assert!(!t.is_application_cursor_mode());
     }
 }
