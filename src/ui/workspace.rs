@@ -6,6 +6,20 @@
 use super::*;
 use crate::core::SESSION_COLOR_TAGS;
 
+/// #488 / #493：一次性「聚焦首栏」协议。
+///
+/// 仅当 `first_field` 且持久标志仍为 true 时返回 true，并立刻把标志清掉。
+/// 若只清局部拷贝、让状态位每帧保持 true，下一帧会再次 `request_focus`
+/// 第一栏，第二栏无法点击或 Tab 聚焦（输入全进第一栏）。
+pub(crate) fn consume_focus_first_once(flag: &mut bool, first_field: bool) -> bool {
+    if first_field && *flag {
+        *flag = false;
+        true
+    } else {
+        false
+    }
+}
+
 impl MistTermApp {
     /// #488：变量输入框的占位提示。空输入时必须有具体文案，否则用户看不出该在哪填。
     ///
@@ -1582,49 +1596,148 @@ impl MistTermApp {
                             );
                             ui.add_space(theme.spacing_panel_gap());
                             let var_field_w = layout_util::finite_content_width(ui);
+                            // #493：与 #491 的「填写变量」弹窗一致——不再让用户
+                            // 「填完再点一次重算」，说明文案直接讲清楚实时预览。
                             ui.label(crate::ui::chrome::rich_caption(
                                 theme,
                                 crate::i18n::tr(
                                     ctx,
-                                    "Each field replaces the matching <placeholder>; the command below updates when you recompute it.",
-                                    "每一栏会替换命令里对应的 <占位符>；点「根据变量重算命令」后下方命令随之更新。",
+                                    "Type a value here and the command below will change: it replaces the matching <placeholder> in the snippet.",
+                                    "在这里填值，下面的命令会随之改变：它会替换片段里对应的 <占位符>。",
                                 ),
                             ));
+                            ui.add_space(theme.spacing_sm());
+                            let mut changed_any = false;
+                            // #488 / #491 同款：弹窗刚打开时聚焦第一个变量输入框，
+                            // 用户可以直接输入，无需先点一次输入框。
+                            // 必须清掉持久状态位本身（不能只清局部拷贝），
+                            // 否则每帧都会把焦点抢回第一栏。
+                            let mut first_field = true;
                             for (key, value) in &mut self.fragment_state.pending_fragment_vars {
                                 crate::ui::chrome::form_field_label(
                                     ui,
                                     theme,
                                     &format!("<{}>", key),
                                 );
-                                crate::ui::chrome::form_singleline_field(
+                                let field_id =
+                                    egui::Id::unique(("pending_frag_var", key.as_str()));
+                                // #493：实心底 + 描边输入框（modern 主题的下划线样式
+                                // 会和弹窗背景糊在一起），占位符与输入正文左对齐，
+                                // 与 #491 之后的「填写变量」弹窗一致。
+                                let resp = crate::ui::chrome::form_singleline_field_boxed_with_align(
                                     ui,
                                     theme,
-                                    egui::Id::unique(("pending_frag_var", key.as_str())),
+                                    field_id,
                                     value,
                                     "",
                                     var_field_w,
                                     false,
+                                    egui::Align2::LEFT_CENTER,
                                 );
+                                if resp.changed() {
+                                    changed_any = true;
+                                }
+                                if consume_focus_first_once(
+                                    &mut self.fragment_state.pending_fragment_vars_focus_first,
+                                    first_field,
+                                ) {
+                                    resp.request_focus();
+                                    first_field = false;
+                                }
+                                // #466 / #493：这一栏必须真的对应模板里的 <占位符>，
+                                // 否则填了也不会改变命令——要给出可操作提示。
+                                match crate::core::placeholder_usage(
+                                    &self.fragment_state.pending_fragment_command,
+                                    key,
+                                ) {
+                                    crate::core::PlaceholderUsage::Used => {
+                                        ui.label(crate::ui::chrome::rich_caption(
+                                            theme,
+                                            &format!(
+                                                "{} <{}>",
+                                                crate::i18n::tr(
+                                                    ctx,
+                                                    "Replaces",
+                                                    "将替换"
+                                                ),
+                                                key
+                                            ),
+                                        ));
+                                    }
+                                    crate::core::PlaceholderUsage::Missing => {
+                                        ui.label(
+                                            egui::RichText::new(format!(
+                                                "{}{}",
+                                                crate::i18n::tr(
+                                                    ctx,
+                                                    "Not in the command yet: put ",
+                                                    "当前命令里还没有这个占位符：请在模板里加上 "
+                                                ),
+                                                format!("<{}>{}", key,
+                                                    crate::i18n::tr(
+                                                        ctx,
+                                                        " into the snippet template, or this field will not change the command.",
+                                                        "，否则这一栏不会改变当前命令。"
+                                                    ))
+                                            ))
+                                            .size(theme.font_size_fragment_dialog_caption())
+                                            .color(theme.color_status_warning_text()),
+                                        );
+                                    }
+                                }
                                 ui.add_space(theme.spacing_panel_gap());
                             }
-                            ui.separator();
-                            ui.horizontal(|ui| {
-                                if crate::ui::chrome::panel_action_button_with_icon_ex(
-                                    ui,
+                            // 没有输入框时循环不会消费标志，这里一并清掉，
+                            // 避免状态位粘在 true。
+                            self.fragment_state.pending_fragment_vars_focus_first = false;
+                            // #493：与 #491 相同的 changed_any 兜底——任何一栏有变化
+                            // 就立刻用当前值重建预览并清掉上次的发送错误。
+                            if changed_any {
+                                self.fragment_state.last_fragment_vars_finalize_error = None;
+                                self.sync_pending_fragment_command_edit();
+                            }
+                            if let Some(ref err) = self.fragment_state.last_fragment_vars_finalize_error {
+                                ui.add_space(theme.spacing_panel_gap());
+                                ui.label(
+                                    egui::RichText::new(err)
+                                        .size(theme.font_size_fragment_dialog_caption())
+                                        .color(theme.color_danger_emphasis()),
+                                );
+                            }
+                            let unmatched = crate::core::unmatched_variable_names(
+                                &self.fragment_state.pending_fragment_command,
+                                self.fragment_state.pending_fragment_vars.iter().map(|(k, _)| k.as_str()),
+                            );
+                            if !unmatched.is_empty() {
+                                ui.separator();
+                                ui.label(crate::ui::chrome::rich_caption(
                                     theme,
-                                    crate::ui::icons::IconId::Refresh,
-                                    crate::i18n::tr(ctx, "Recompute command", "根据变量重算命令"),
-                                    true,
-                                )
-                                .clicked()
-                                {
-                                    self.sync_pending_fragment_command_edit();
+                                    crate::i18n::tr(
+                                        ctx,
+                                        "These fields are not used by this snippet's command, so they will not change it:",
+                                        "这些变量没有出现在本片段的命令里，填了也不会改变它：",
+                                    ),
+                                ));
+                                for name in &unmatched {
+                                    ui.label(crate::ui::chrome::rich_caption(
+                                        theme,
+                                        &format!("  <{}>", name),
+                                    ));
                                 }
-                            });
+                                ui.label(crate::ui::chrome::rich_caption(
+                                    theme,
+                                    crate::i18n::tr(
+                                        ctx,
+                                        "Add the placeholder to the snippet, or edit the command below directly.",
+                                        "把上面的 <变量名> 加进片段模板，或直接编辑下面的命令。",
+                                    ),
+                                ));
+                            }
+                            ui.separator();
                             crate::ui::chrome::form_field_label(
                                 ui,
                                 theme,
-                                crate::i18n::tr(ctx, "Command to run (editable)", "将要执行（可编辑）"),
+                                crate::i18n::tr(ctx, "Command to run (editable)", "将要执行的命令（可编辑）"),
                             );
                             crate::ui::chrome::form_multiline_field(
                                 ui,
@@ -1655,6 +1768,8 @@ impl MistTermApp {
                                     {
                                         match self.finalize_pending_fragment_send() {
                                             Ok(filled) => {
+                                                // #493：发送成功后清掉弹窗内展示的上次错误。
+                                                self.fragment_state.last_fragment_vars_finalize_error = None;
                                                 match self.fragment_state.fragment_vars_completion {
                                                     FragmentVarsCompletion::PasteInsertStats => {
                                                         if let Some(id) =
@@ -1733,12 +1848,13 @@ impl MistTermApp {
                                                 should_close = true;
                                             }
                                             Err(e) => {
-                                                self.notify_error(
-                                                    crate::i18n::localize_fragment_expr_error(
+                                                // #493：错误留在弹窗内（可操作反馈），
+                                                // 不再用 toast——用户能边改边重试。
+                                                self.fragment_state.last_fragment_vars_finalize_error =
+                                                    Some(crate::i18n::localize_fragment_expr_error(
                                                         crate::i18n::language(ctx),
                                                         &e,
-                                                    ),
-                                                );
+                                                    ));
                                             }
                                         }
                                     }
@@ -1760,6 +1876,8 @@ impl MistTermApp {
                 self.fragment_state.pending_fragment_name.clear();
                 self.fragment_state.pending_fragment_command.clear();
                 self.fragment_state.pending_fragment_vars.clear();
+                self.fragment_state.last_fragment_vars_finalize_error = None;
+                self.fragment_state.pending_fragment_vars_focus_first = false;
             }
             self.fragment_state.show_fragment_vars_dialog = open && !should_close;
         }
@@ -2139,6 +2257,8 @@ impl MistTermApp {
                                                         FragmentVarsCompletion::QuickExecuteSend
                                                     };
                                                     self.sync_pending_fragment_command_edit();
+                                                    // #493：旧路径弹窗刚打开时同样聚焦第一栏。
+                                                    self.fragment_state.pending_fragment_vars_focus_first = true;
                                                     self.fragment_state.show_fragment_vars_dialog = true;
                                                 }
                                                 self.fragment_state.variable_dialog.paste_after_fill = false;
@@ -3405,6 +3525,371 @@ mod tests {
         assert!(
             field_block.contains("request_focus"),
             "输入框之后必须仍有首个字段 request_focus 守卫"
+        );
+    }
+
+    // ---------------------------------------------- #493 填写片段变量（旧路径）与 #491 对齐
+
+    /// 「填写片段变量」弹窗（fragment_vars_modal / show_fragment_vars_dialog）
+    /// 的说明文案不再指向「根据变量重算命令」，而是与 #491 的「填写变量」
+    /// 弹窗一致：在这里填值，下面的命令会随之改变。
+    #[test]
+    fn fragment_vars_caption_no_longer_tells_user_to_recompute() {
+        let ws = include_str!("workspace.rs");
+        // 用锚点 "modal_window(\"fragment_vars_modal\"" 精确切出本弹窗主体：
+        // 不能裸用 "fragment_vars_modal"（会被 layout_util::fragment_vars_modal_size 抢走第一刀）。
+        let modal = ws
+            .split("modal_window(\"fragment_vars_modal\"")
+            .nth(1)
+            .expect("「填写片段变量」弹窗片段应存在");
+        let tail = &modal[..modal.find("quick_fragment_selector").unwrap_or(modal.len())];
+        assert!(
+            !tail.contains("根据变量重算命令"),
+            "中文说明不能再让用户点「根据变量重算命令」"
+        );
+        assert!(
+            !tail.contains("Recompute command"),
+            "英文说明不能再让用户点 Recompute command"
+        );
+        assert!(
+            tail.contains("Type a value here and the command below will change")
+                && tail.contains("在这里填值，下面的命令会随之改变"),
+            "说明文案应与 #491 的「填写变量」弹窗一致（实时预览语义）"
+        );
+    }
+
+    /// 「根据变量重算命令 / Recompute command」按钮（含 Refresh 图标）必须从
+    /// fragment_vars_modal 弹窗里移除；不影响 #491 已接受的 fragment_variable_modal。
+    #[test]
+    fn fragment_vars_modal_has_no_recompute_button_or_refresh_icon() {
+        let ws = include_str!("workspace.rs");
+        // UI 源码里（弹窗主体 1559 行附近到 1874 行前）不得再出现重算按钮文案：
+        // 用行号切片而不是全文 contains，避免误伤本测试自身的断言字符串。
+        // 用锚点 "modal_window(\"fragment_vars_modal\"" 精确切出本弹窗主体：
+        // 不能裸用 "fragment_vars_modal"（会被 layout_util::fragment_vars_modal_size 抢走第一刀）。
+        let ui_src_only = {
+            let start = ws
+                .find("modal_window(\"fragment_vars_modal\"")
+                .expect("弹窗片段应存在");
+            let end = ws.find("mod tests").expect("测试模块应存在");
+            &ws[start..end]
+        };
+        assert!(
+            !ui_src_only.contains("根据变量重算命令"),
+            "「根据变量重算命令」中文文案必须从 UI 源码移除"
+        );
+        assert!(
+            !ui_src_only.contains("Recompute command"),
+            "Recompute command 英文文案必须从 UI 源码移除"
+        );
+        let modal = ws
+            .split("modal_window(\"fragment_vars_modal\"")
+            .nth(1)
+            .expect("「填写片段变量」弹窗片段应存在");
+        let tail = &modal[..modal.find("quick_fragment_selector").unwrap_or(modal.len())];
+        assert!(
+            !tail.contains("IconId::Refresh"),
+            "fragment_vars_modal 内不应再有 Refresh 图标按钮"
+        );
+        // #491 弹窗保持原样：没有 rewrite 按钮（它的断言在 rewrite_button_labels_removed_from_variable_dialog）。
+        assert!(
+            ws.contains("fragment_variable_modal"),
+            "「填写变量」弹窗必须原样保留"
+        );
+    }
+
+    /// 与 #491 相同：fragment_vars_modal 的变量输入框走实心底+描边的
+    /// boxed 带 align 版本，且显式 LEFT_CENTER（占位符与输入正文都左对齐）。
+    #[test]
+    fn fragment_vars_modal_fields_are_boxed_and_left_aligned() {
+        let ws = include_str!("workspace.rs");
+        let modal = ws
+            .split("modal_window(\"fragment_vars_modal\"")
+            .nth(1)
+            .expect("「填写片段变量」弹窗片段应存在");
+        let tail = &modal[..modal.find("fragment_variable_modal").unwrap_or(modal.len())];
+        let call = tail
+            .split("form_singleline_field_boxed_with_align")
+            .nth(1)
+            .expect("fragment_vars_modal 应改用带对齐参数的 boxed 输入框");
+        let call_tail = &call[..call.find(';').unwrap_or(call.len())];
+        assert!(
+            call_tail.contains("Align2::LEFT_CENTER"),
+            "fragment_vars_modal 的变量输入框必须显式左对齐：{call_tail}"
+        );
+        assert!(
+            !tail.contains("form_singleline_field("),
+            "fragment_vars_modal 不应回退到下划线样式的 form_singleline_field"
+        );
+    }
+
+    /// 回归 #493 Linux GUI Fail：旧实现把 `pending_fragment_vars_focus_first`
+    /// 拷到局部变量，`request_focus` 后只清局部，状态位每帧仍为 true，
+    /// 第二栏无法点击或 Tab 聚焦，输入全进第一栏。
+    ///
+    /// 本测试直接驱动生产 hook `consume_focus_first_once`（不是源码字符串
+    /// 检查），用两栏、两帧验证：成功申请首栏焦点后必须清掉持久状态位，
+    /// 第二帧不得再把焦点抢回第一栏。
+    #[test]
+    fn pending_fragment_vars_focus_first_must_not_steal_focus_every_frame() {
+        let mut pending_fragment_vars_focus_first = true; // 弹窗刚打开
+        let fields = ["who", "host_ip"];
+
+        // 第一帧：只应聚焦第一栏，并且清掉持久标志。
+        let mut requested = Vec::new();
+        let mut first_field = true;
+        for name in fields {
+            if super::consume_focus_first_once(
+                &mut pending_fragment_vars_focus_first,
+                first_field,
+            ) {
+                requested.push(name);
+                first_field = false;
+            }
+        }
+        assert_eq!(requested, vec!["who"], "只有第一个输入框请求焦点");
+        assert!(
+            !pending_fragment_vars_focus_first,
+            "成功申请首栏焦点后必须清掉状态位，不能只清局部变量"
+        );
+
+        // 第二帧：用户点击或 Tab 到第二栏。状态位已清，不得再抢回第一栏。
+        requested.clear();
+        first_field = true;
+        for name in fields {
+            if super::consume_focus_first_once(
+                &mut pending_fragment_vars_focus_first,
+                first_field,
+            ) {
+                requested.push(name);
+                first_field = false;
+            }
+        }
+        assert!(
+            requested.is_empty(),
+            "第二帧不得把焦点抢回第一栏（旧 bug：状态位仍为 true）"
+        );
+        assert!(!pending_fragment_vars_focus_first);
+    }
+
+    /// 没有输入框时 hook 不会被调用，标志必须仍可由调用方清掉；
+    /// 同时锁定：非首栏或标志已是 false 时都不得请求焦点。
+    #[test]
+    fn consume_focus_first_once_only_fires_for_first_field_while_flag_is_set() {
+        let mut flag = true;
+        assert!(
+            !super::consume_focus_first_once(&mut flag, false),
+            "非首栏不得消费标志"
+        );
+        assert!(flag, "非首栏调用不得提前清掉标志");
+        assert!(super::consume_focus_first_once(&mut flag, true));
+        assert!(!flag);
+        assert!(
+            !super::consume_focus_first_once(&mut flag, true),
+            "标志用过一次后，即使仍是首栏也不得再聚焦"
+        );
+        assert!(!flag);
+    }
+
+    /// fragment_vars_modal 打开即聚焦第一个输入框：一次性标志协议与 #488 相同
+    /// （pending_fragment_vars_focus_first → request_focus → 清零）。
+    #[test]
+    fn fragment_vars_modal_focuses_first_field_once() {
+        let mut focus_first = true; // 两条打开路径都会置 true
+        let mut requested = Vec::new();
+        let fields = ["who", "times"];
+        let mut first_field = true;
+        for name in fields {
+            // 与 fragment_vars_modal 变量行一致：走生产 hook，清的是持久标志。
+            if super::consume_focus_first_once(&mut focus_first, first_field) {
+                requested.push(name);
+                first_field = false;
+            }
+        }
+        assert_eq!(requested, vec!["who"], "只有第一个输入框请求焦点");
+        assert!(!focus_first, "标志用完即清，下一帧不再重复聚焦");
+        let ws = include_str!("workspace.rs");
+        let modal = ws
+            .split("modal_window(\"fragment_vars_modal\"")
+            .nth(1)
+            .expect("「填写片段变量」弹窗片段应存在");
+        let tail = &modal[..modal.find("quick_fragment_selector").unwrap_or(modal.len())];
+        assert!(
+            tail.contains("pending_fragment_vars_focus_first")
+                && tail.contains("request_focus")
+                && tail.contains("consume_focus_first_once"),
+            "fragment_vars_modal 必须用 consume_focus_first_once 消费持久状态位后再 request_focus"
+        );
+        // 弹窗关闭时清掉聚焦标志（与变量值一起清理，避免下一帧幽灵聚焦）
+        assert!(
+            tail.contains("pending_fragment_vars_focus_first = false"),
+            "关闭弹窗时必须清掉聚焦标志"
+        );
+        let fs = include_str!("fragment_state.rs");
+        assert!(
+            fs.contains("pending_fragment_vars_focus_first: false,"),
+            "默认(关闭)状态下聚焦标志必须是 false——不该有幽灵聚焦"
+        );
+        // 两条打开路径都必须置位该标志（与 #488 在 variable_dialog 打开路径置位一致）
+        let app = include_str!("app.rs");
+        let paste_path = app
+            .split("FragmentVarsCompletion::PasteInsertStats")
+            .nth(1)
+            .expect("右栏插入路径应存在");
+        assert!(
+            paste_path.contains("pending_fragment_vars_focus_first = true"),
+            "右栏插入路径打开弹窗时必须置位聚焦标志"
+        );
+        let quick_path = app
+            .split("FragmentVarsCompletion::QuickExecuteSend")
+            .nth(1)
+            .expect("快速执行路径应存在");
+        assert!(
+            quick_path.contains("pending_fragment_vars_focus_first = true"),
+            "快速执行路径打开弹窗时必须置位聚焦标志"
+        );
+        // 第三条打开路径：#491「填写变量」确认后仍有 <占位符> → 切到本弹窗（workspace.rs 内）。
+        let handoff_path = ws
+            .split("sync_pending_fragment_command_edit")
+            .nth(2)
+            .expect("workspace.rs 的打开路径应存在");
+        assert!(
+            handoff_path.contains("pending_fragment_vars_focus_first = true"),
+            "从「填写变量」切换到本弹窗的路径也必须置位聚焦标志"
+        );
+    }
+
+    /// 预览实时性（旧路径）：changed_any → sync_pending_fragment_command_edit
+    /// 用当前 pending_fragment_vars 重建 pending_fragment_command_edit，
+    /// 无需任何按钮；同时清掉上次的发送错误。
+    #[test]
+    fn fragment_vars_changed_any_rebuilds_preview_and_clears_error() {
+        // 纯展开逻辑：模板 + 当前变量值 → 替换后的命令（弹窗 changed_any 分支做的事）。
+        use crate::core::fragment::expand_fragment_command_stages;
+        let template = "echo hello <who>";
+        let mut m = std::collections::HashMap::new();
+        let initial = expand_fragment_command_stages(template, None, &m).expect("展开应成功");
+        assert_eq!(initial, "echo hello <who>", "初始预览保留占位符");
+        // 用户打字 → values 变化 → 预览逐帧重建（无按钮参与）
+        m.insert("who".to_string(), "world".to_string());
+        let live = expand_fragment_command_stages(template, None, &m).expect("展开应成功");
+        assert_eq!(live, "echo hello world", "输入即刷新，无需额外点击");
+        // 继续编辑 → 预览继续跟随
+        m.insert("who".to_string(), "mist".to_string());
+        let live2 = expand_fragment_command_stages(template, None, &m).expect("展开应成功");
+        assert_eq!(live2, "echo hello mist");
+        // 兜底协议：changed_any → 重建预览并清掉上次的 finalize 错误
+        let mut changed_any = false;
+        let mut rebuild = false;
+        let mut last_error: Option<String> = Some("boom".to_string());
+        for value_changed in [false, true, false, true] {
+            if value_changed {
+                changed_any = true;
+            }
+            if changed_any {
+                rebuild = true;
+                last_error = None;
+            }
+        }
+        assert!(rebuild, "字段变化后预览必须重建");
+        assert!(last_error.is_none(), "重建预览时清掉旧错误");
+        let ws = include_str!("workspace.rs");
+        let modal = ws
+            .split("modal_window(\"fragment_vars_modal\"")
+            .nth(1)
+            .expect("「填写片段变量」弹窗片段应存在");
+        let tail = &modal[..modal.find("quick_fragment_selector").unwrap_or(modal.len())];
+        assert!(
+            tail.contains("changed_any") && tail.contains("sync_pending_fragment_command_edit"),
+            "fragment_vars_modal 必须保留 changed_any → sync 预览重建路径"
+        );
+    }
+
+    /// 未匹配 / 缺失的占位符：fragment_vars_modal 也要给出可见且可操作的反馈，
+    /// 不能静默无变化——逐栏警示 + 汇总清单（与 #491 同款文案来源）。
+    #[test]
+    fn fragment_vars_unmatched_placeholder_gets_actionable_feedback() {
+        // 模板里根本没有 <who> → placeholder_usage 必须 Missing
+        assert_eq!(
+            crate::core::placeholder_usage("echo hello", "who"),
+            crate::core::PlaceholderUsage::Missing
+        );
+        // <who> 在模板里 → Used（占位符语法是 <name>，不是 ${var}）
+        assert_eq!(
+            crate::core::placeholder_usage("echo hello <who>", "who"),
+            crate::core::PlaceholderUsage::Used
+        );
+        // unmatched_variable_names 汇总出填了也不会生效的栏位
+        let names = ["who", "times"];
+        let unmatched = crate::core::unmatched_variable_names("echo hello", names);
+        assert_eq!(unmatched, vec!["who".to_string(), "times".to_string()]);
+        let with_used = crate::core::unmatched_variable_names("echo hello <who>", names);
+        assert_eq!(with_used, vec!["times".to_string()], "已匹配的占位符不进警示清单");
+        // 文案存在且给出下一步动作（中英双语言）
+        let locale_zh = crate::i18n::Locale::from(UiLanguage::Zh);
+        let zh_summary = locale_zh.tr(
+            "These fields are not used by this snippet's command, so they will not change it:",
+            "这些变量没有出现在本片段的命令里，填了也不会改变它：",
+        );
+        assert!(zh_summary.contains("不会改变"), "中文汇总要说明填了也不生效");
+        let zh_action = locale_zh.tr(
+            "Add the placeholder to the snippet, or edit the command below directly.",
+            "把上面的 <变量名> 加进片段模板，或直接编辑下面的命令。",
+        );
+        assert!(zh_action.contains("模板") && zh_action.contains("命令"), "中文提示要指到下一步");
+        let locale_en = crate::i18n::Locale::from(UiLanguage::En);
+        let en_summary = locale_en.tr(
+            "These fields are not used by this snippet's command, so they will not change it:",
+            "这些变量没有出现在本片段的命令里，填了也不会改变它：",
+        );
+        assert!(en_summary.contains("not used"), "英文汇总要说明字段未被使用");
+        let ws = include_str!("workspace.rs");
+        let modal = ws
+            .split("modal_window(\"fragment_vars_modal\"")
+            .nth(1)
+            .expect("「填写片段变量」弹窗片段应存在");
+        let tail = &modal[..modal.find("quick_fragment_selector").unwrap_or(modal.len())];
+        assert!(
+            tail.contains("unmatched_variable_names")
+                && tail.contains("PlaceholderUsage::Missing"),
+            "fragment_vars_modal 必须保留 Missing 分支与未匹配汇总"
+        );
+    }
+
+    /// #491 已接受的「填写变量」弹窗行为不回归：live preview（changed_any 重建
+    /// command_edit）、无重写按钮、LEFT_CENTER 对齐、#488 首栏聚焦仍然成立。
+    #[test]
+    fn variable_dialog_behavior_unchanged_by_493() {
+        let ws = include_str!("workspace.rs");
+        let modal = ws
+            .split("modal_window(\"fragment_variable_modal\"")
+            .nth(1)
+            .expect("「填写变量」弹窗片段应存在");
+        let tail = &modal[..modal.find("mod tests").unwrap_or(modal.len())];
+        // live preview 路径仍在：changed_any → build_fragment_command_preview
+        assert!(
+            tail.contains("changed_any") && tail.contains("build_fragment_command_preview"),
+            "「填写变量」弹窗的实时预览路径不能被 #493 改掉"
+        );
+        // 输入框仍是 boxed 带 align、LEFT_CENTER
+        let call = tail
+            .split("form_singleline_field_boxed_with_align")
+            .nth(1)
+            .expect("「填写变量」弹窗应使用带对齐参数的 boxed 输入框");
+        let call_tail = &call[..call.find(';').unwrap_or(call.len())];
+        assert!(
+            call_tail.contains("Align2::LEFT_CENTER"),
+            "「填写变量」弹窗输入框必须保持左对齐"
+        );
+        // #488 聚焦标志协议仍在
+        assert!(
+            tail.contains("focus_first_input") && tail.contains("request_focus"),
+            "「填写变量」弹窗的首个字段聚焦协议不能丢"
+        );
+        // 无重写按钮
+        assert!(
+            !tail.contains("IconId::Refresh"),
+            "「填写变量」弹窗内不应有刷新(重写)图标按钮"
         );
     }
 }
