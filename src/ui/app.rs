@@ -9018,6 +9018,8 @@ impl MistTermApp {
                 needs_user.into_iter().map(|k| (k, String::new())).collect();
             self.sync_pending_fragment_command_edit();
             self.fragment_state.fragment_vars_completion = FragmentVarsCompletion::PasteInsertStats;
+            // #493：弹窗刚打开即聚焦第一个变量输入框（与 #488 / #491 一致）。
+            self.fragment_state.pending_fragment_vars_focus_first = true;
             self.fragment_state.show_fragment_vars_dialog = true;
         }
     }
@@ -10678,6 +10680,8 @@ impl MistTermApp {
         self.fragment_state.pending_fragment_vars = needs.into_iter().map(|k| (k, String::new())).collect();
         self.sync_pending_fragment_command_edit();
         self.fragment_state.fragment_vars_completion = FragmentVarsCompletion::QuickExecuteSend;
+        // #493：弹窗刚打开即聚焦第一个变量输入框（与 #488 / #491 一致）。
+        self.fragment_state.pending_fragment_vars_focus_first = true;
         self.fragment_state.show_fragment_vars_dialog = true;
     }
 
