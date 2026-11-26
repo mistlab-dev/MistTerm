@@ -6,6 +6,20 @@
 use super::*;
 use crate::core::SESSION_COLOR_TAGS;
 
+/// #488 / #493：一次性「聚焦首栏」协议。
+///
+/// 仅当 `first_field` 且持久标志仍为 true 时返回 true，并立刻把标志清掉。
+/// 若只清局部拷贝、让状态位每帧保持 true，下一帧会再次 `request_focus`
+/// 第一栏，第二栏无法点击或 Tab 聚焦（输入全进第一栏）。
+pub(crate) fn consume_focus_first_once(flag: &mut bool, first_field: bool) -> bool {
+    if first_field && *flag {
+        *flag = false;
+        true
+    } else {
+        false
+    }
+}
+
 impl MistTermApp {
     /// #488：变量输入框的占位提示。空输入时必须有具体文案，否则用户看不出该在哪填。
     ///
@@ -1596,8 +1610,8 @@ impl MistTermApp {
                             let mut changed_any = false;
                             // #488 / #491 同款：弹窗刚打开时聚焦第一个变量输入框，
                             // 用户可以直接输入，无需先点一次输入框。
-                            let mut focus_pending_var_first =
-                                self.fragment_state.pending_fragment_vars_focus_first;
+                            // 必须清掉持久状态位本身（不能只清局部拷贝），
+                            // 否则每帧都会把焦点抢回第一栏。
                             let mut first_field = true;
                             for (key, value) in &mut self.fragment_state.pending_fragment_vars {
                                 crate::ui::chrome::form_field_label(
@@ -1623,9 +1637,11 @@ impl MistTermApp {
                                 if resp.changed() {
                                     changed_any = true;
                                 }
-                                if first_field && focus_pending_var_first {
+                                if consume_focus_first_once(
+                                    &mut self.fragment_state.pending_fragment_vars_focus_first,
+                                    first_field,
+                                ) {
                                     resp.request_focus();
-                                    focus_pending_var_first = false;
                                     first_field = false;
                                 }
                                 // #466 / #493：这一栏必须真的对应模板里的 <占位符>，
@@ -1671,9 +1687,9 @@ impl MistTermApp {
                                 }
                                 ui.add_space(theme.spacing_panel_gap());
                             }
-                            if focus_pending_var_first {
-                                self.fragment_state.pending_fragment_vars_focus_first = false;
-                            }
+                            // 没有输入框时循环不会消费标志，这里一并清掉，
+                            // 避免状态位粘在 true。
+                            self.fragment_state.pending_fragment_vars_focus_first = false;
                             // #493：与 #491 相同的 changed_any 兜底——任何一栏有变化
                             // 就立刻用当前值重建预览并清掉上次的发送错误。
                             if changed_any {
@@ -3607,6 +3623,74 @@ mod tests {
         );
     }
 
+    /// 回归 #493 Linux GUI Fail：旧实现把 `pending_fragment_vars_focus_first`
+    /// 拷到局部变量，`request_focus` 后只清局部，状态位每帧仍为 true，
+    /// 第二栏无法点击或 Tab 聚焦，输入全进第一栏。
+    ///
+    /// 本测试直接驱动生产 hook `consume_focus_first_once`（不是源码字符串
+    /// 检查），用两栏、两帧验证：成功申请首栏焦点后必须清掉持久状态位，
+    /// 第二帧不得再把焦点抢回第一栏。
+    #[test]
+    fn pending_fragment_vars_focus_first_must_not_steal_focus_every_frame() {
+        let mut pending_fragment_vars_focus_first = true; // 弹窗刚打开
+        let fields = ["who", "host_ip"];
+
+        // 第一帧：只应聚焦第一栏，并且清掉持久标志。
+        let mut requested = Vec::new();
+        let mut first_field = true;
+        for name in fields {
+            if super::consume_focus_first_once(
+                &mut pending_fragment_vars_focus_first,
+                first_field,
+            ) {
+                requested.push(name);
+                first_field = false;
+            }
+        }
+        assert_eq!(requested, vec!["who"], "只有第一个输入框请求焦点");
+        assert!(
+            !pending_fragment_vars_focus_first,
+            "成功申请首栏焦点后必须清掉状态位，不能只清局部变量"
+        );
+
+        // 第二帧：用户点击或 Tab 到第二栏。状态位已清，不得再抢回第一栏。
+        requested.clear();
+        first_field = true;
+        for name in fields {
+            if super::consume_focus_first_once(
+                &mut pending_fragment_vars_focus_first,
+                first_field,
+            ) {
+                requested.push(name);
+                first_field = false;
+            }
+        }
+        assert!(
+            requested.is_empty(),
+            "第二帧不得把焦点抢回第一栏（旧 bug：状态位仍为 true）"
+        );
+        assert!(!pending_fragment_vars_focus_first);
+    }
+
+    /// 没有输入框时 hook 不会被调用，标志必须仍可由调用方清掉；
+    /// 同时锁定：非首栏或标志已是 false 时都不得请求焦点。
+    #[test]
+    fn consume_focus_first_once_only_fires_for_first_field_while_flag_is_set() {
+        let mut flag = true;
+        assert!(
+            !super::consume_focus_first_once(&mut flag, false),
+            "非首栏不得消费标志"
+        );
+        assert!(flag, "非首栏调用不得提前清掉标志");
+        assert!(super::consume_focus_first_once(&mut flag, true));
+        assert!(!flag);
+        assert!(
+            !super::consume_focus_first_once(&mut flag, true),
+            "标志用过一次后，即使仍是首栏也不得再聚焦"
+        );
+        assert!(!flag);
+    }
+
     /// fragment_vars_modal 打开即聚焦第一个输入框：一次性标志协议与 #488 相同
     /// （pending_fragment_vars_focus_first → request_focus → 清零）。
     #[test]
@@ -3616,10 +3700,9 @@ mod tests {
         let fields = ["who", "times"];
         let mut first_field = true;
         for name in fields {
-            // 与 fragment_vars_modal 变量行一致的守卫顺序
-            if first_field && focus_first {
+            // 与 fragment_vars_modal 变量行一致：走生产 hook，清的是持久标志。
+            if super::consume_focus_first_once(&mut focus_first, first_field) {
                 requested.push(name);
-                focus_first = false;
                 first_field = false;
             }
         }
@@ -3632,8 +3715,10 @@ mod tests {
             .expect("「填写片段变量」弹窗片段应存在");
         let tail = &modal[..modal.find("quick_fragment_selector").unwrap_or(modal.len())];
         assert!(
-            tail.contains("pending_fragment_vars_focus_first") && tail.contains("request_focus"),
-            "fragment_vars_modal 必须保留首个字段 request_focus 守卫"
+            tail.contains("pending_fragment_vars_focus_first")
+                && tail.contains("request_focus")
+                && tail.contains("consume_focus_first_once"),
+            "fragment_vars_modal 必须用 consume_focus_first_once 消费持久状态位后再 request_focus"
         );
         // 弹窗关闭时清掉聚焦标志（与变量值一起清理，避免下一帧幽灵聚焦）
         assert!(
@@ -3735,7 +3820,7 @@ mod tests {
             crate::core::PlaceholderUsage::Used
         );
         // unmatched_variable_names 汇总出填了也不会生效的栏位
-        let names = vec!["who", "times"];
+        let names = ["who", "times"];
         let unmatched = crate::core::unmatched_variable_names("echo hello", names);
         assert_eq!(unmatched, vec!["who".to_string(), "times".to_string()]);
         let with_used = crate::core::unmatched_variable_names("echo hello <who>", names);
