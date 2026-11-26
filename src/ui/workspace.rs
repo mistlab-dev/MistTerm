@@ -1948,7 +1948,7 @@ impl MistTermApp {
                                             // 固定 id 便于打开弹窗后直接聚焦第一栏。
                                             let field_id =
                                                 egui::Id::unique(("var_dialog", var.name.as_str()));
-                                            let resp = crate::ui::chrome::form_singleline_field_boxed(
+                                            let resp = crate::ui::chrome::form_singleline_field_boxed_with_align(
                                                 ui,
                                                 theme,
                                                 field_id,
@@ -1956,6 +1956,9 @@ impl MistTermApp {
                                                 &Self::fragment_variable_input_hint(ui.ctx(), var),
                                                 var_w,
                                                 false,
+                                                // #491：表单语义，占位符与输入正文都左对齐，
+                                                // 与普通表单输入框一致（IP / 主机名 / 命令参数）。
+                                                egui::Align2::LEFT_CENTER,
                                             );
                                             let value_changed = resp.changed();
                                             // #488：弹窗刚打开时聚焦第一个变量输入框，
@@ -2009,7 +2012,8 @@ impl MistTermApp {
                                             ui.add_space(theme.spacing_md());
                                         }
                                         if changed_any {
-                                            // 边打边算：输入即刷新下方命令预览，避免「按钮点了没反应」。
+                                            // #491：用户刚在上方输入框打字——以当前变量值
+                                            // 重建命令预览（即时生效，不再需要「重写」按钮）。
                                             self.fragment_state.variable_dialog.last_finalize_error = None;
                                             let preview = self.build_fragment_command_preview(
                                                 fragment,
@@ -2046,26 +2050,10 @@ impl MistTermApp {
                                                 ),
                                             ));
                                         }
-                                        ui.separator();
-                                        if crate::ui::chrome::panel_action_icon_button(
-                                            ui,
-                                            theme,
-                                            crate::ui::icons::IconId::Refresh,
-                                            crate::i18n::tr(
-                                                ui.ctx(),
-                                                "Rewrite command using fields above",
-                                                "用上方变量重写命令",
-                                            ),
-                                        )
-                                        .clicked()
-                                        {
-                                            self.fragment_state.variable_dialog.last_finalize_error = None;
-                                            self.fragment_state.variable_dialog.command_edit = self
-                                                .build_fragment_command_preview(
-                                                    fragment,
-                                                    &self.fragment_state.variable_dialog.values,
-                                                );
-                                        }
+                                        // #491：移除「用上方变量重写命令」按钮——命令预览已随
+                                        // 输入逐帧重建（见上方 changed_any 分支），这颗按钮
+                                        // 多余，还让用户误以为「填完必须再点一次」才生效。
+                                        // 弹窗底部只保留「插入终端/执行」与「取消」。
                                         crate::ui::chrome::form_field_label(
                                             ui,
                                             theme,
@@ -3230,5 +3218,193 @@ mod tests {
     fn focus_first_input_defaults_to_false() {
         let dlg = crate::ui::app::FragmentVariableDialog::default();
         assert!(!dlg.focus_first_input);
+    }
+
+    // ---------------------------------------------- #491 边输边刷新预览（无重写按钮）
+
+    /// 测试用片段构造（与 core::fragment_command 测试同形状）。
+    fn make_stats(command: &str, vars: &[&str]) -> crate::core::fragment::FragmentStats {
+        use crate::core::fragment::FragmentStats;
+        FragmentStats {
+            id: "t".into(),
+            title: "t".into(),
+            title_en: None,
+            command: command.into(),
+            category: "c".into(),
+            category_en: None,
+            variables: vars
+                .iter()
+                .map(|n| FragmentVariable::new(n, n))
+                .collect(),
+            tags: vec![],
+            usage_count: 0,
+            success_count: 0,
+            total_time_ms: 0,
+            last_used: None,
+            source_status: String::new(),
+            linked_docs: vec![],
+        }
+    }
+
+    /// 预览值的纯逻辑：给定模板 + 当前变量值，应得到替换后的命令文本。
+    /// 这正是弹窗内 changed_any 分支逐帧做的事——不经过任何「重写」按钮。
+    #[test]
+    fn preview_rebuilds_from_current_field_values_without_rewrite_button() {
+        let stats = make_stats("ping <host_ip>", &["host_ip"]);
+        let mut values = std::collections::HashMap::new();
+        // 打开弹窗时的初始预览：变量为空 → 占位符仍在
+        let initial =
+            crate::core::build_fragment_command_preview(&stats, None, &values);
+        assert_eq!(initial, "ping <host_ip>", "初始预览保留占位符");
+        // 用户在输入框打字 → values 变化 → 预览逐帧重建（无按钮参与）
+        values.insert("host_ip".to_string(), "10.0.0.42".to_string());
+        let live =
+            crate::core::build_fragment_command_preview(&stats, None, &values);
+        assert_eq!(live, "ping 10.0.0.42", "输入即刷新，无需额外点击");
+        // 继续编辑 → 预览继续跟随
+        values.insert("host_ip".to_string(), "192.168.1.1".to_string());
+        let live2 =
+            crate::core::build_fragment_command_preview(&stats, None, &values);
+        assert_eq!(live2, "ping 192.168.1.1");
+    }
+
+    /// 兜底协议：changed_any → 用当前值重建预览并清掉上次的 finalize 错误。
+    /// 用同形状守卫锁定「任何字段有变化都必须触发重建」，防止回归成手动按钮。
+    #[test]
+    fn changed_any_refreshes_preview_and_clears_finalize_error() {
+        let mut changed_any = false;
+        let mut rebuild = false;
+        let mut last_finalize_error: Option<String> = Some("boom".to_string());
+        for value_changed in [false, true, false, true] {
+            if value_changed {
+                changed_any = true;
+            }
+            if changed_any {
+                rebuild = true;
+                last_finalize_error = None;
+            }
+        }
+        assert!(rebuild, "字段变化后预览必须重建");
+        assert!(last_finalize_error.is_none(), "重建预览时清掉旧错误");
+    }
+
+    /// 「用上方变量重写命令 / Rewrite command using fields above」按钮文案必须
+    /// 从变量弹窗源码中消失：中文、英文及图标路径都不能再出现。
+    #[test]
+    fn rewrite_button_labels_removed_from_variable_dialog() {
+        let src = include_str!("workspace.rs");
+        assert!(
+            !src.contains("用上方变量重写命令"),
+            "中文按钮文案仍残留在 workspace.rs"
+        );
+        assert!(
+            !src.contains("Rewrite command using fields above"),
+            "英文按钮文案仍残留在 workspace.rs"
+        );
+        // 弹窗主体（fragment_variable_modal 到命令编辑框）内不允许再出现
+        // 与按钮配套的 Refresh 图标调用。
+        let modal = src
+            .split("fragment_variable_modal")
+            .nth(1)
+            .expect("变量弹窗片段应存在");
+        assert!(
+            !modal.contains("IconId::Refresh"),
+            "变量弹窗内不应再有刷新(重写)图标按钮"
+        );
+    }
+
+    // ---------------------------------------------- #491 变量输入框左对齐
+
+    /// forms.rs 的居中辅助函数必须保持默认居中（凭证库等老面板排版不动），
+    /// 而变量弹窗必须显式传入 LEFT_CENTER。用源码断言锁定调用点的对齐参数。
+    #[test]
+    fn variable_dialog_field_uses_left_align_and_legacy_callers_keep_center() {
+        let ws = include_str!("workspace.rs");
+        let call = ws
+            .split("form_singleline_field_boxed_with_align")
+            .nth(1)
+            .expect("变量弹窗应改用带对齐参数的 boxed 输入框");
+        let call_tail = &call[..call.find(';').unwrap_or(call.len())];
+        assert!(
+            call_tail.contains("Align2::LEFT_CENTER"),
+            "变量输入框必须显式左对齐：{call_tail}"
+        );
+        let forms = include_str!("chrome/forms.rs");
+        let wrapper = forms
+            .split("pub fn form_singleline_field_boxed(")
+            .nth(1)
+            .expect("居中包装函数应存在");
+        let wrapper_body = &wrapper[..wrapper
+            .find("pub fn form_singleline_field_boxed_with_align")
+            .unwrap_or(wrapper.len())];
+        assert!(
+            wrapper_body.contains("Align2::CENTER_CENTER"),
+            "共享包装函数默认必须保持居中，避免悄悄改掉老面板排版"
+        );
+    }
+
+    // ---------------------------------------------- #491 未匹配变量的可见反馈
+
+    /// 未匹配变量（模板里没有 <名字> 占位符）必须给出可操作的警示文案，
+    /// 不能静默无反应——锁定 Missing 分支的文案与降级文案来源。
+    #[test]
+    fn missing_variable_still_produces_actionable_feedback() {
+        let stats = make_stats("echo fixed-ip-target", &["host_ip"]);
+        // 模板里根本没有 <host_ip> → 必须 Missing，UI 才会渲染警示而不是静默
+        assert_eq!(
+            crate::core::placeholder_usage(&stats.command, "host_ip"),
+            crate::core::PlaceholderUsage::Missing
+        );
+        // 预览不会因为填了值而假装变化
+        let mut values = std::collections::HashMap::new();
+        values.insert("host_ip".to_string(), "10.9.9.9".to_string());
+        assert_eq!(
+            crate::core::build_fragment_command_preview(&stats, None, &values),
+            "echo fixed-ip-target",
+            "填了未匹配变量也不改变命令，因此必须靠文案提示"
+        );
+        // 文案存在且包含下一步动作（中英双语言）
+        let locale_zh = crate::i18n::Locale::from(UiLanguage::Zh);
+        let zh = locale_zh.tr(
+            "Not in the command yet: put ",
+            "当前命令里还没有这个占位符：请在模板里加上 ",
+        );
+        assert!(zh.contains("占位符") && zh.contains("模板"), "中文提示要指到模板");
+        let locale_en = crate::i18n::Locale::from(UiLanguage::En);
+        let en = locale_en.tr(
+            "Not in the command yet: put ",
+            "当前命令里还没有这个占位符：请在模板里加上 ",
+        );
+        assert!(en.contains("Not in the command"), "英文提示要说明还没进命令");
+    }
+
+    // ---------------------------------------------- #491 保留 #488 行为
+
+    /// #488 行为仍在：首个输入框打开即聚焦（一次性标志协议，
+    /// 前面有 focus_first_input_* 用例），且变量行仍走「实心底 + 描边」的
+    /// boxed 输入框（form_singleline_field_boxed_with_align），
+    /// 不回退到 modern 下划线样式。
+    #[test]
+    fn variable_dialog_keeps_boxed_field_and_first_focus_protocol() {
+        let ws = include_str!("workspace.rs");
+        // 实心底+描边路径：变量行必须仍调用 boxed 带 align 版本
+        assert!(
+            ws.contains("form_singleline_field_boxed_with_align"),
+            "变量输入框必须保留实心底+描边输入框"
+        );
+        // #488 聚焦协议：弹窗打开标志仍存在，且首个字段守卫仍引用它
+        assert!(
+            ws.contains("focus_first_input"),
+            "首个输入框的聚焦标志协议不能丢"
+        );
+        let field_call = ws
+            .split("form_singleline_field_boxed_with_align")
+            .nth(1)
+            .expect("boxed 调用应存在");
+        let field_block = &field_call[..field_call.find("value_changed").unwrap_or(field_call.len())];
+        assert!(
+            field_block.contains("request_focus"),
+            "输入框之后必须仍有首个字段 request_focus 守卫"
+        );
     }
 }

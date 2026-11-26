@@ -471,6 +471,25 @@ pub fn form_singleline_field_boxed(
     desired_width: f32,
     password: bool,
 ) -> Response {
+    // #491：默认保持历史居中排版（老面板不动），表单类弹窗请显式选 LEFT。
+    form_singleline_field_boxed_with_align(ui, theme, id, text, hint, desired_width, password, egui::Align2::CENTER_CENTER)
+}
+
+/// [`form_singleline_field_boxed`] 的对齐参数版（#491）。
+///
+/// 「填写变量」这类表单弹窗输入的是 IP / 主机名 / 命令参数，占位符与正文必须
+/// 左对齐（`LEFT_CENTER`），和普通表单一致；凭证库等既有面板继续用居中排版。
+/// 底色、描边、聚焦描边与高度完全一致，只差文本水平对齐。
+pub fn form_singleline_field_boxed_with_align(
+    ui: &mut Ui,
+    theme: &Theme,
+    id: egui::Id,
+    text: &mut String,
+    hint: &str,
+    desired_width: f32,
+    password: bool,
+    text_align: egui::Align2,
+) -> Response {
     let focused = ui.memory(|m| m.has_focus(id));
     let row_h = theme.size_control_btn_h().max(28.0);
     let width = desired_width.max(96.0);
@@ -504,7 +523,7 @@ pub fn form_singleline_field_boxed(
                     .id(id)
                     .frame(egui::Frame::NONE)
                     .desired_width(inner.width().max(40.0))
-                    .align(egui::Align2::CENTER_CENTER)
+                    .align(text_align)
                     .text_color(theme.color_text_input_text())
                     .font(egui::FontId::proportional(theme.font_size_control_input()));
                 if !hint.is_empty() {
