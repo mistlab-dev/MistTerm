@@ -16,6 +16,20 @@ fn xterm_modifier_param(mods: Modifiers) -> u8 {
 
 /// 方向 / Home / End / PgUp / PgDn(含 Shift/Ctrl/Alt 组合)
 pub fn encode_nav_key(key: Key, mods: Modifiers) -> Option<Vec<u8>> {
+    encode_nav_key_in_mode(key, mods, false)
+}
+
+/// 同 [`encode_nav_key`]，但按对端 DECCKM（应用光标键）模式编码。
+///
+/// `application_cursor == true`（对端发过 `CSI ?1h`）时，无修饰的方向键 /
+/// Home / End 按 SS3 编码（`ESC O A/B/C/D/H/F`）；带修饰键仍走 xterm
+/// `CSI 1;{param}{letter}`（与 xterm 行为一致）。PgUp / PgDn 与 DECCKM
+/// 无关，两种模式下都用 CSI `{n}~`。见 issue #482。
+pub fn encode_nav_key_in_mode(
+    key: Key,
+    mods: Modifiers,
+    application_cursor: bool,
+) -> Option<Vec<u8>> {
     if mods_reserved_for_app(mods) {
         return None;
     }
@@ -38,6 +52,9 @@ pub fn encode_nav_key(key: Key, mods: Modifiers) -> Option<Vec<u8>> {
         return Some(format!("\x1b[1;{param}{suffix}~").into_bytes());
     }
     if param == 1 {
+        if application_cursor {
+            return Some(format!("\x1bO{suffix}").into_bytes());
+        }
         return Some(format!("\x1b[{suffix}").into_bytes());
     }
     Some(format!("\x1b[1;{param}{suffix}").into_bytes())
@@ -683,8 +700,14 @@ pub fn terminal_keyboard_event_filter() -> egui::EventFilter {
 }
 
 /// 消费并编码本帧内「无 Text」的特殊键；`send` 写入 PTY 或离线缓冲。
+/// `application_cursor`：对端是否处于 DEC 应用光标键模式（DECCKM /
+/// `CSI ?1h`），取自终端模拟器 [`crate::terminal::Terminal::is_application_cursor_mode`]。
 /// 若本帧转发了任意键，返回 `true`(Esc/方向键等可能触发 egui 焦点变化时的兜底，见 `pending_focus_terminal`)。
-pub fn forward_non_text_keys(i: &mut egui::InputState, mut send: impl FnMut(&[u8])) -> bool {
+pub fn forward_non_text_keys_with_mode(
+    i: &mut egui::InputState,
+    application_cursor: bool,
+    mut send: impl FnMut(&[u8]),
+) -> bool {
     let mut any_sent = false;
     for mods in MOD_COMBOS {
         if i.consume_key(mods, Key::Escape) {
@@ -693,7 +716,7 @@ pub fn forward_non_text_keys(i: &mut egui::InputState, mut send: impl FnMut(&[u8
         }
         for key in NAV_KEYS {
             if i.consume_key(mods, key) {
-                if let Some(bytes) = encode_nav_key(key, mods) {
+                if let Some(bytes) = encode_nav_key_in_mode(key, mods, application_cursor) {
                     send(&bytes);
                     any_sent = true;
                 }
@@ -713,6 +736,11 @@ pub fn forward_non_text_keys(i: &mut egui::InputState, mut send: impl FnMut(&[u8
         any_sent = true;
     }
     any_sent
+}
+
+/// 兼容入口：正常模式（DECCKM 复位）下的编码。
+pub fn forward_non_text_keys(i: &mut egui::InputState, mut send: impl FnMut(&[u8])) -> bool {
+    forward_non_text_keys_with_mode(i, false, send)
 }
 
 #[cfg(test)]
@@ -764,6 +792,99 @@ mod tests {
             .unwrap(),
             b"\x1b[1;2A"
         );
+    }
+
+    // ---- #482：DECCKM（应用光标键）模式下的方向键编码 ----
+
+    #[test]
+    fn normal_mode_arrows_use_csi_sequences() {
+        let none = Modifiers::NONE;
+        assert_eq!(encode_nav_key_in_mode(Key::ArrowUp, none, false).unwrap(), b"\x1b[A");
+        assert_eq!(encode_nav_key_in_mode(Key::ArrowDown, none, false).unwrap(), b"\x1b[B");
+        assert_eq!(encode_nav_key_in_mode(Key::ArrowRight, none, false).unwrap(), b"\x1b[C");
+        assert_eq!(encode_nav_key_in_mode(Key::ArrowLeft, none, false).unwrap(), b"\x1b[D");
+        assert_eq!(encode_nav_key_in_mode(Key::Home, none, false).unwrap(), b"\x1b[H");
+        assert_eq!(encode_nav_key_in_mode(Key::End, none, false).unwrap(), b"\x1b[F");
+    }
+
+    #[test]
+    fn application_mode_arrows_use_ss3_sequences() {
+        // 对端发 `CSI ?1h`（DECCKM 置位）后，无修饰方向键 / Home / End 须为 SS3。
+        let none = Modifiers::NONE;
+        assert_eq!(encode_nav_key_in_mode(Key::ArrowUp, none, true).unwrap(), b"\x1bOA");
+        assert_eq!(encode_nav_key_in_mode(Key::ArrowDown, none, true).unwrap(), b"\x1bOB");
+        assert_eq!(encode_nav_key_in_mode(Key::ArrowRight, none, true).unwrap(), b"\x1bOC");
+        assert_eq!(encode_nav_key_in_mode(Key::ArrowLeft, none, true).unwrap(), b"\x1bOD");
+        assert_eq!(encode_nav_key_in_mode(Key::Home, none, true).unwrap(), b"\x1bOH");
+        assert_eq!(encode_nav_key_in_mode(Key::End, none, true).unwrap(), b"\x1bOF");
+    }
+
+    #[test]
+    fn decrst_1_returns_to_normal_sequences() {
+        // `CSI ?1l` 复位后必须回到 CSI 序列（Shell 提示符历史/行编辑不变）。
+        let none = Modifiers::NONE;
+        assert_eq!(encode_nav_key_in_mode(Key::ArrowUp, none, true).unwrap(), b"\x1bOA");
+        assert_eq!(encode_nav_key_in_mode(Key::ArrowUp, none, false).unwrap(), b"\x1b[A");
+        assert_eq!(encode_nav_key_in_mode(Key::ArrowDown, none, false).unwrap(), b"\x1b[B");
+    }
+
+    #[test]
+    fn application_mode_keeps_modified_arrows_as_csi_modify() {
+        // 带修饰键时 xterm 仍用 CSI 1;{param} 形式，DECCKM 不改变它。
+        let shift = Modifiers {
+            shift: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            encode_nav_key_in_mode(Key::ArrowUp, shift, true).unwrap(),
+            b"\x1b[1;2A"
+        );
+        let ctrl = Modifiers {
+            ctrl: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            encode_nav_key_in_mode(Key::ArrowRight, ctrl, true).unwrap(),
+            b"\x1b[1;5C"
+        );
+    }
+
+    #[test]
+    fn page_up_down_ignore_application_cursor_mode() {
+        // PgUp / PgDn 与 DECCKM 无关：两种模式下都是 CSI {n}~。
+        let none = Modifiers::NONE;
+        assert_eq!(encode_nav_key_in_mode(Key::PageUp, none, false).unwrap(), b"\x1b[5~");
+        assert_eq!(encode_nav_key_in_mode(Key::PageUp, none, true).unwrap(), b"\x1b[5~");
+        assert_eq!(encode_nav_key_in_mode(Key::PageDown, none, true).unwrap(), b"\x1b[6~");
+    }
+
+    #[test]
+    fn compat_wrapper_encodes_normal_mode() {
+        assert_eq!(encode_nav_key(Key::ArrowUp, Modifiers::NONE).unwrap(), b"\x1b[A");
+    }
+
+    #[test]
+    fn forward_non_text_keys_with_mode_sends_ss3_when_application_cursor() {
+        egui::__run_test_ui(|ui| {
+            ui.input_mut(|i| {
+                i.events.push(key_press(Key::ArrowUp, Modifiers::NONE));
+                let mut sent = Vec::new();
+                assert!(forward_non_text_keys_with_mode(i, true, |b| sent.push(b.to_vec())));
+                assert_eq!(sent, vec![b"\x1bOA".to_vec()]);
+            });
+        });
+    }
+
+    #[test]
+    fn forward_non_text_keys_with_mode_sends_csi_when_normal() {
+        egui::__run_test_ui(|ui| {
+            ui.input_mut(|i| {
+                i.events.push(key_press(Key::ArrowUp, Modifiers::NONE));
+                let mut sent = Vec::new();
+                assert!(forward_non_text_keys_with_mode(i, false, |b| sent.push(b.to_vec())));
+                assert_eq!(sent, vec![b"\x1b[A".to_vec()]);
+            });
+        });
     }
 
     #[test]
