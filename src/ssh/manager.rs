@@ -197,6 +197,26 @@ pub struct SshSessionHandle {
     pump_poller: Arc<polling::Poller>,
 }
 
+/// 把一帧 ZMODEM 写出排进 shell 泵，并 `notify()` 唤醒 `poll.wait`。
+///
+/// 必须用阻塞 `send`（上传线程可等，不能丢帧），入队后立刻唤醒泵。
+/// 只 `send`、不 `notify` 时，泵会停在 `poll.wait`（最长 keepalive 10s），
+/// 直到用户按键走 `send_input`（会 notify）才把数据写到 PTY——这就是
+/// `rz -bye` 上传必须一直按回车才继续传数据的原因（#494）。
+/// UI 路径的 [`SshSessionHandle::send_zmodem`] 用 `try_send` 以免卡住 UI；
+/// 上传线程不能用那条，队满时应阻塞等待而不是丢包。
+pub(crate) fn enqueue_zmodem_write(
+    pump_tx: &ShellPumpTx,
+    pump_poller: &polling::Poller,
+    data: Vec<u8>,
+) -> Result<(), String> {
+    pump_tx
+        .send(ShellPumpCommand::ZmodemWrite(data))
+        .map_err(|e| format!("SSH shell 泵已关闭或队列断开: {e}"))?;
+    let _ = pump_poller.notify();
+    Ok(())
+}
+
 impl SshSessionHandle {
     /// 写入 shell 泵命令队列。
     ///
@@ -266,20 +286,29 @@ impl SshSessionHandle {
     /// 与 [`Self::pump_send`] 同理使用 `try_send`（非阻塞）：泵线程被长读/写卡住、
     /// `interrupt_tx` 队列打满时**绝不阻塞调用方（UI 线程）**，避免整界面冻死。
     pub fn send_priority_interrupt(&self, data: Vec<u8>) -> Result<(), String> {
-        self.interrupt_tx
-            .try_send(data)
-            .map_err(|e| match e {
-                std::sync::mpsc::TrySendError::Full(_) => {
-                    "interrupt queue full, dropped".to_string()
-                }
-                std::sync::mpsc::TrySendError::Disconnected(_) => {
-                    "interrupt queue disconnected".to_string()
-                }
-            })
+        let queued = self.interrupt_tx.try_send(data);
+        // 成功或队满都要唤醒泵：泵在 poll.wait 里睡觉时，只入队不 notify
+        // 会等到下一次按键或最多约 10s keepalive（#423 改成事件驱动后的同类缺口）。
+        // 队满时唤醒是为了让泵立刻排空；断开则不必 notify。
+        if !matches!(queued, Err(std::sync::mpsc::TrySendError::Disconnected(_))) {
+            let _ = self.pump_poller.notify();
+        }
+        queued.map_err(|e| match e {
+            std::sync::mpsc::TrySendError::Full(_) => {
+                "interrupt queue full, dropped".to_string()
+            }
+            std::sync::mpsc::TrySendError::Disconnected(_) => {
+                "interrupt queue disconnected".to_string()
+            }
+        })
     }
 
     pub fn shell_pump_tx(&self) -> ShellPumpTx {
         self.pump_tx.clone()
+    }
+
+    pub fn shell_pump_poller(&self) -> Arc<polling::Poller> {
+        self.pump_poller.clone()
     }
 
     /// 排入一次 PTY 尺寸变更。
@@ -293,16 +322,19 @@ impl SshSessionHandle {
     pub fn resize_pty(&self, cols: u32, rows: u32) -> Result<(), String> {
         let cols = cols.clamp(20, 512);
         let rows = rows.clamp(5, 256);
-        self.resize_tx
-            .try_send((cols, rows))
-            .map_err(|e| match e {
-                std::sync::mpsc::TrySendError::Full(_) => {
-                    "resize queue full, dropped (will re-send next frame)".to_string()
-                }
-                std::sync::mpsc::TrySendError::Disconnected(_) => {
-                    "resize queue disconnected".to_string()
-                }
-            })
+        let queued = self.resize_tx.try_send((cols, rows));
+        // 与 send_priority_interrupt 相同：只拉窗口、不按键时也要叫醒泵。
+        if !matches!(queued, Err(std::sync::mpsc::TrySendError::Disconnected(_))) {
+            let _ = self.pump_poller.notify();
+        }
+        queued.map_err(|e| match e {
+            std::sync::mpsc::TrySendError::Full(_) => {
+                "resize queue full, dropped (will re-send next frame)".to_string()
+            }
+            std::sync::mpsc::TrySendError::Disconnected(_) => {
+                "resize queue disconnected".to_string()
+            }
+        })
     }
 
     /// 将远程一次 `exec` 排入 **shell 泵线程**，与 PTY 读写在同一 OS 线程互斥执行。
@@ -1740,7 +1772,7 @@ mod tests {
     use super::*;
     use std::sync::mpsc::sync_channel;
     use std::sync::{Arc, Mutex};
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     /// 端到端：按 UI 粘贴的分片方式经 `write_pty_with_drain` 写入远端 PTY 上的 `cat > file`，
     /// 逐字节比对。需本地 sshd（`MISTTERM_TEST_SSH_*`），否则 skip。
@@ -2295,5 +2327,142 @@ mod tests {
             out2.contains("pump-alive"),
             "pump died after resize/collect: {out2}"
         );
+    }
+
+    /// #494：只把 ZmodemWrite 送进队列、不 notify，泵会一直停在 poll.wait，
+    /// 表现为上传要靠回车（send_input 会 notify）才继续。
+    #[test]
+    fn zmodem_write_without_notify_does_not_wake_poll_wait() {
+        use std::num::NonZeroUsize;
+        let poller = polling::Poller::new().expect("poller");
+        let (tx, rx) = sync_channel::<ShellPumpCommand>(8);
+        tx.send(ShellPumpCommand::ZmodemWrite(vec![0x2a, 0x2a]))
+            .expect("enqueue without notify");
+        let mut events = polling::Events::with_capacity(NonZeroUsize::new(1).unwrap());
+        let started = Instant::now();
+        poller
+            .wait(&mut events, Some(Duration::from_millis(80)))
+            .expect("wait");
+        assert!(
+            started.elapsed() >= Duration::from_millis(50),
+            "raw ZmodemWrite must not wake poll.wait; elapsed={:?}",
+            started.elapsed()
+        );
+        match rx.try_recv() {
+            Ok(ShellPumpCommand::ZmodemWrite(v)) => assert_eq!(v, vec![0x2a, 0x2a]),
+            other => panic!("expected queued ZmodemWrite, got {other:?}"),
+        }
+    }
+
+    /// #494：上传路径入队后必须 notify，这样不按回车也能立刻唤醒泵把数据写出。
+    #[test]
+    fn enqueue_zmodem_write_wakes_poll_wait_without_keypress() {
+        use std::num::NonZeroUsize;
+        let poller = polling::Poller::new().expect("poller");
+        let (tx, rx) = sync_channel::<ShellPumpCommand>(8);
+        enqueue_zmodem_write(&tx, &poller, vec![0x18, 0x42]).expect("enqueue+notify");
+        let mut events = polling::Events::with_capacity(NonZeroUsize::new(1).unwrap());
+        let started = Instant::now();
+        poller
+            .wait(&mut events, Some(Duration::from_secs(2)))
+            .expect("wait");
+        assert!(
+            started.elapsed() < Duration::from_millis(500),
+            "enqueue_zmodem_write must wake poll.wait without a keypress; elapsed={:?}",
+            started.elapsed()
+        );
+        match rx.try_recv() {
+            Ok(ShellPumpCommand::ZmodemWrite(v)) => assert_eq!(v, vec![0x18, 0x42]),
+            other => panic!("expected queued ZmodemWrite, got {other:?}"),
+        }
+    }
+
+    /// #423 回归：interrupt / resize 旁路队列只 try_send、不 notify 时，
+    /// 泵会停在 poll.wait（取消传输或只拉窗口、不按键就会卡住）。
+    #[test]
+    fn interrupt_or_resize_without_notify_does_not_wake_poll_wait() {
+        use std::num::NonZeroUsize;
+
+        let poller = polling::Poller::new().expect("poller");
+        let (interrupt_tx, interrupt_rx) = sync_channel::<Vec<u8>>(8);
+        interrupt_tx
+            .try_send(vec![0x18, 0x03])
+            .expect("enqueue interrupt without notify");
+        let mut events = polling::Events::with_capacity(NonZeroUsize::new(1).unwrap());
+        let started = Instant::now();
+        poller
+            .wait(&mut events, Some(Duration::from_millis(80)))
+            .expect("wait");
+        assert!(
+            started.elapsed() >= Duration::from_millis(50),
+            "raw interrupt enqueue must not wake poll.wait; elapsed={:?}",
+            started.elapsed()
+        );
+        assert_eq!(
+            interrupt_rx.try_recv().expect("queued interrupt"),
+            vec![0x18, 0x03]
+        );
+
+        let poller = polling::Poller::new().expect("poller");
+        let (resize_tx, resize_rx) = sync_channel::<(u32, u32)>(8);
+        resize_tx
+            .try_send((100, 40))
+            .expect("enqueue resize without notify");
+        let mut events = polling::Events::with_capacity(NonZeroUsize::new(1).unwrap());
+        let started = Instant::now();
+        poller
+            .wait(&mut events, Some(Duration::from_millis(80)))
+            .expect("wait");
+        assert!(
+            started.elapsed() >= Duration::from_millis(50),
+            "raw resize enqueue must not wake poll.wait; elapsed={:?}",
+            started.elapsed()
+        );
+        assert_eq!(resize_rx.try_recv().expect("queued resize"), (100, 40));
+    }
+
+    /// 取消 ZMODEM（send_priority_interrupt）入队后必须 notify，不按键也能立刻唤醒泵。
+    #[test]
+    fn send_priority_interrupt_wakes_poll_wait_without_keypress() {
+        use std::num::NonZeroUsize;
+        let (handle, (_pump_rx, interrupt_rx, _resize_rx)) = new_session_handle(0);
+        handle
+            .send_priority_interrupt(vec![0x18, 0x03])
+            .expect("interrupt+notify");
+        let mut events = polling::Events::with_capacity(NonZeroUsize::new(1).unwrap());
+        let started = Instant::now();
+        handle
+            .pump_poller
+            .wait(&mut events, Some(Duration::from_secs(2)))
+            .expect("wait");
+        assert!(
+            started.elapsed() < Duration::from_millis(500),
+            "send_priority_interrupt must wake poll.wait without a keypress; elapsed={:?}",
+            started.elapsed()
+        );
+        assert_eq!(
+            interrupt_rx.try_recv().expect("queued interrupt"),
+            vec![0x18, 0x03]
+        );
+    }
+
+    /// 窗口缩放（resize_pty）入队后必须 notify，只拉窗口、不按键也能立刻唤醒泵。
+    #[test]
+    fn resize_pty_wakes_poll_wait_without_keypress() {
+        use std::num::NonZeroUsize;
+        let (handle, (_pump_rx, _interrupt_rx, resize_rx)) = new_session_handle(0);
+        handle.resize_pty(100, 40).expect("resize+notify");
+        let mut events = polling::Events::with_capacity(NonZeroUsize::new(1).unwrap());
+        let started = Instant::now();
+        handle
+            .pump_poller
+            .wait(&mut events, Some(Duration::from_secs(2)))
+            .expect("wait");
+        assert!(
+            started.elapsed() < Duration::from_millis(500),
+            "resize_pty must wake poll.wait without a keypress; elapsed={:?}",
+            started.elapsed()
+        );
+        assert_eq!(resize_rx.try_recv().expect("queued resize"), (100, 40));
     }
 }

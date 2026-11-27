@@ -3656,8 +3656,10 @@ impl TerminalView {
                                 && !is_rz_upload_handshake
                                 && self.expect_sz_download_active()
                             {
-                                if let Some(pump_tx) =
-                                    self.ssh_handle.as_ref().map(|h| h.shell_pump_tx())
+                                if let Some((pump_tx, pump_poller)) = self
+                                    .ssh_handle
+                                    .as_ref()
+                                    .map(|h| (h.shell_pump_tx(), h.shell_pump_poller()))
                                 {
                                     let resolved = crate::core::local_dir::current();
                                     if let Some(missing) = &resolved.missing {
@@ -3676,7 +3678,7 @@ impl TerminalView {
                                         self.feed_user_warn_line(theme, &warn);
                                     }
                                     self.lrzsz.set_download_dir(resolved.dir);
-                                    match self.lrzsz.start_receive_pump(pump_tx) {
+                                    match self.lrzsz.start_receive_pump(pump_tx, pump_poller) {
                                         Ok(()) => {
                                             if self.lrzsz.feed_receive_data(&data) {
                                                 continue;
@@ -5214,13 +5216,14 @@ impl TerminalView {
             .as_ref()
             .ok_or_else(|| loc.tr("PTY not ready", "PTY 未就绪").to_string())?;
         let pump_tx = handle.shell_pump_tx();
+        let pump_poller = handle.shell_pump_poller();
         self.rz_control_mode_until = Some(Instant::now() + Duration::from_secs(90));
         log::info!(
             "start_rz_upload: path={} session_id={:?}",
             path.display(),
             handle.session_id
         );
-        match self.lrzsz.start_send(path_str, pump_tx) {
+        match self.lrzsz.start_send(path_str, pump_tx, pump_poller) {
             Ok(()) => Ok(()),
             Err(e) => {
                 self.lrzsz.end_rz_handshake_capture();

@@ -15,7 +15,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::ssh::lrzsz::TransferEvent;
-use crate::ssh::manager::{ShellPumpCommand, ShellPumpTx};
+use crate::ssh::manager::{enqueue_zmodem_write, ShellPumpTx};
 
 const CHUNK: usize = 64 * 1024;
 const TRANSFER_DEADLINE: Duration = Duration::from_secs(300);
@@ -45,6 +45,7 @@ pub(super) fn run_upload_external_sz(
     file_name: &str,
     file_size: u64,
     pump_tx: &ShellPumpTx,
+    pump_poller: &polling::Poller,
     upload_pty_rx: &Arc<Mutex<Vec<u8>>>,
     is_active: &Arc<AtomicBool>,
     received_bytes: &AtomicU64,
@@ -147,9 +148,8 @@ pub(super) fn run_upload_external_sz(
             Ok(n) => {
                 pumped += n as u64;
                 received_bytes.store(pumped.min(file_size), Ordering::Relaxed);
-                pump_tx
-                    .send(ShellPumpCommand::ZmodemWrite(buf[..n].to_vec()))
-                    .map_err(|e| format!("SSH shell 泵队列断开: {}", e))?;
+                enqueue_zmodem_write(&pump_tx, pump_poller, buf[..n].to_vec())
+                    .map_err(|e| format!("SSH shell 泵队列断开: {e}"))?;
                 if pumped.saturating_sub(last_progress_at) >= PROGRESS_STEP {
                     last_progress_at = pumped;
                     let _ = tx.send(TransferEvent::FileProgress {
