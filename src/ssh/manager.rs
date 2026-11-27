@@ -197,6 +197,26 @@ pub struct SshSessionHandle {
     pump_poller: Arc<polling::Poller>,
 }
 
+/// 把一帧 ZMODEM 写出排进 shell 泵，并 `notify()` 唤醒 `poll.wait`。
+///
+/// 必须用阻塞 `send`（上传线程可等，不能丢帧），入队后立刻唤醒泵。
+/// 只 `send`、不 `notify` 时，泵会停在 `poll.wait`（最长 keepalive 10s），
+/// 直到用户按键走 `send_input`（会 notify）才把数据写到 PTY——这就是
+/// `rz -bye` 上传必须一直按回车才继续传数据的原因（#494）。
+/// UI 路径的 [`SshSessionHandle::send_zmodem`] 用 `try_send` 以免卡住 UI；
+/// 上传线程不能用那条，队满时应阻塞等待而不是丢包。
+pub(crate) fn enqueue_zmodem_write(
+    pump_tx: &ShellPumpTx,
+    pump_poller: &polling::Poller,
+    data: Vec<u8>,
+) -> Result<(), String> {
+    pump_tx
+        .send(ShellPumpCommand::ZmodemWrite(data))
+        .map_err(|e| format!("SSH shell 泵已关闭或队列断开: {e}"))?;
+    let _ = pump_poller.notify();
+    Ok(())
+}
+
 impl SshSessionHandle {
     /// 写入 shell 泵命令队列。
     ///
@@ -280,6 +300,10 @@ impl SshSessionHandle {
 
     pub fn shell_pump_tx(&self) -> ShellPumpTx {
         self.pump_tx.clone()
+    }
+
+    pub fn shell_pump_poller(&self) -> Arc<polling::Poller> {
+        self.pump_poller.clone()
     }
 
     /// 排入一次 PTY 尺寸变更。
@@ -1740,7 +1764,7 @@ mod tests {
     use super::*;
     use std::sync::mpsc::sync_channel;
     use std::sync::{Arc, Mutex};
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     /// 端到端：按 UI 粘贴的分片方式经 `write_pty_with_drain` 写入远端 PTY 上的 `cat > file`，
     /// 逐字节比对。需本地 sshd（`MISTTERM_TEST_SSH_*`），否则 skip。
@@ -2295,5 +2319,53 @@ mod tests {
             out2.contains("pump-alive"),
             "pump died after resize/collect: {out2}"
         );
+    }
+
+    /// #494：只把 ZmodemWrite 送进队列、不 notify，泵会一直停在 poll.wait，
+    /// 表现为上传要靠回车（send_input 会 notify）才继续。
+    #[test]
+    fn zmodem_write_without_notify_does_not_wake_poll_wait() {
+        use std::num::NonZeroUsize;
+        let poller = polling::Poller::new().expect("poller");
+        let (tx, rx) = sync_channel::<ShellPumpCommand>(8);
+        tx.send(ShellPumpCommand::ZmodemWrite(vec![0x2a, 0x2a]))
+            .expect("enqueue without notify");
+        let mut events = polling::Events::with_capacity(NonZeroUsize::new(1).unwrap());
+        let started = Instant::now();
+        poller
+            .wait(&mut events, Some(Duration::from_millis(80)))
+            .expect("wait");
+        assert!(
+            started.elapsed() >= Duration::from_millis(50),
+            "raw ZmodemWrite must not wake poll.wait; elapsed={:?}",
+            started.elapsed()
+        );
+        match rx.try_recv() {
+            Ok(ShellPumpCommand::ZmodemWrite(v)) => assert_eq!(v, vec![0x2a, 0x2a]),
+            other => panic!("expected queued ZmodemWrite, got {other:?}"),
+        }
+    }
+
+    /// #494：上传路径入队后必须 notify，这样不按回车也能立刻唤醒泵把数据写出。
+    #[test]
+    fn enqueue_zmodem_write_wakes_poll_wait_without_keypress() {
+        use std::num::NonZeroUsize;
+        let poller = polling::Poller::new().expect("poller");
+        let (tx, rx) = sync_channel::<ShellPumpCommand>(8);
+        enqueue_zmodem_write(&tx, &poller, vec![0x18, 0x42]).expect("enqueue+notify");
+        let mut events = polling::Events::with_capacity(NonZeroUsize::new(1).unwrap());
+        let started = Instant::now();
+        poller
+            .wait(&mut events, Some(Duration::from_secs(2)))
+            .expect("wait");
+        assert!(
+            started.elapsed() < Duration::from_millis(500),
+            "enqueue_zmodem_write must wake poll.wait without a keypress; elapsed={:?}",
+            started.elapsed()
+        );
+        match rx.try_recv() {
+            Ok(ShellPumpCommand::ZmodemWrite(v)) => assert_eq!(v, vec![0x18, 0x42]),
+            other => panic!("expected queued ZmodemWrite, got {other:?}"),
+        }
     }
 }

@@ -5214,13 +5214,14 @@ impl TerminalView {
             .as_ref()
             .ok_or_else(|| loc.tr("PTY not ready", "PTY 未就绪").to_string())?;
         let pump_tx = handle.shell_pump_tx();
+        let pump_poller = handle.shell_pump_poller();
         self.rz_control_mode_until = Some(Instant::now() + Duration::from_secs(90));
         log::info!(
             "start_rz_upload: path={} session_id={:?}",
             path.display(),
             handle.session_id
         );
-        match self.lrzsz.start_send(path_str, pump_tx) {
+        match self.lrzsz.start_send(path_str, pump_tx, pump_poller) {
             Ok(()) => Ok(()),
             Err(e) => {
                 self.lrzsz.end_rz_handshake_capture();

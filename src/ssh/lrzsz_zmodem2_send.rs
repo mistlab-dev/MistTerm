@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 use zmodem2::{Sender as ZmodemSender, SenderEvent};
 
 use crate::ssh::lrzsz::TransferEvent;
-use crate::ssh::manager::{ShellPumpCommand, ShellPumpTx};
+use crate::ssh::manager::{enqueue_zmodem_write, ShellPumpTx};
 use crate::ssh::zmodem_pty_pipeline::{UploadIngressPhase, ZmodemPtyIngress};
 
 const TRANSFER_DEADLINE: Duration = Duration::from_secs(300);
@@ -267,6 +267,7 @@ fn split_handshake_writes_enabled() -> bool {
 fn flush_sender_out(
     sender: &mut ZmodemSender,
     pump_tx: &ShellPumpTx,
+    pump_poller: &polling::Poller,
     first_wire_logged: &mut bool,
     dump_tx: bool,
     tx_accum: &mut Vec<u8>,
@@ -303,12 +304,10 @@ fn flush_sender_out(
                 if dump_tx {
                     tx_accum.extend_from_slice(&out[..split]);
                 }
-                pump_tx
-                    .send(ShellPumpCommand::ZmodemWrite(out[..split].to_vec()))
-                    .map_err(|e| {
-                        log::error!("flush_sender_out: pump_tx.send failed: {}", e);
-                        format!("SSH shell 泵已关闭或队列断开: {}", e)
-                    })?;
+                enqueue_zmodem_write(pump_tx, pump_poller, out[..split].to_vec()).map_err(|e| {
+                    log::error!("flush_sender_out: enqueue failed: {e}");
+                    e
+                })?;
                 sender.advance_outgoing(split);
                 total += split;
                 chunks += 1;
@@ -318,12 +317,10 @@ fn flush_sender_out(
                 if dump_tx {
                     tx_accum.extend_from_slice(rest);
                 }
-                pump_tx
-                    .send(ShellPumpCommand::ZmodemWrite(rest.to_vec()))
-                    .map_err(|e| {
-                        log::error!("flush_sender_out: pump_tx.send failed: {}", e);
-                        format!("SSH shell 泵已关闭或队列断开: {}", e)
-                    })?;
+                enqueue_zmodem_write(pump_tx, pump_poller, rest.to_vec()).map_err(|e| {
+                    log::error!("flush_sender_out: enqueue failed: {e}");
+                    e
+                })?;
                 sender.advance_outgoing(rn);
                 total += rn;
                 chunks += 1;
@@ -354,12 +351,10 @@ fn flush_sender_out(
         if dump_tx {
             tx_accum.extend_from_slice(out);
         }
-        pump_tx
-            .send(ShellPumpCommand::ZmodemWrite(out.to_vec()))
-            .map_err(|e| {
-                log::error!("flush_sender_out: pump_tx.send failed: {}", e);
-                format!("SSH shell 泵已关闭或队列断开: {}", e)
-            })?;
+        enqueue_zmodem_write(pump_tx, pump_poller, out.to_vec()).map_err(|e| {
+            log::error!("flush_sender_out: enqueue failed: {e}");
+            e
+        })?;
         sender.advance_outgoing(n);
     }
     if chunks > 1 {
@@ -379,6 +374,7 @@ pub(super) fn run_upload_zmodem2(
     file_path: PathBuf,
     file_size: u64,
     pump_tx: &ShellPumpTx,
+    pump_poller: &polling::Poller,
     upload_pty_rx: &Arc<Mutex<Vec<u8>>>,
     is_active: &AtomicBool,
     received_bytes: &AtomicU64,
@@ -460,6 +456,7 @@ pub(super) fn run_upload_zmodem2(
     flush_sender_out(
         &mut sender,
         pump_tx,
+        pump_poller,
         &mut first_wire_logged,
         dump_tx,
         &mut tx_dump_buf,
@@ -500,6 +497,7 @@ pub(super) fn run_upload_zmodem2(
         flush_sender_out(
             &mut sender,
             pump_tx,
+            pump_poller,
             &mut first_wire_logged,
             dump_tx,
             &mut tx_dump_buf,
@@ -594,6 +592,7 @@ pub(super) fn run_upload_zmodem2(
             flush_sender_out(
                 &mut sender,
                 pump_tx,
+                pump_poller,
                 &mut first_wire_logged,
                 dump_tx,
                 &mut tx_dump_buf,
@@ -641,6 +640,7 @@ pub(super) fn run_upload_zmodem2(
             flush_sender_out(
                 &mut sender,
                 pump_tx,
+                pump_poller,
                 &mut first_wire_logged,
                 dump_tx,
                 &mut tx_dump_buf,
@@ -669,6 +669,7 @@ pub(super) fn run_upload_zmodem2(
                     flush_sender_out(
                         &mut sender,
                         pump_tx,
+                        pump_poller,
                         &mut first_wire_logged,
                         dump_tx,
                         &mut tx_dump_buf,
@@ -685,6 +686,7 @@ pub(super) fn run_upload_zmodem2(
             flush_sender_out(
                 &mut sender,
                 pump_tx,
+                pump_poller,
                 &mut first_wire_logged,
                 dump_tx,
                 &mut tx_dump_buf,
@@ -740,6 +742,7 @@ pub(super) fn run_upload_zmodem2(
                         flush_sender_out(
                             &mut sender,
                             pump_tx,
+                            pump_poller,
                             &mut first_wire_logged,
                             dump_tx,
                             &mut tx_dump_buf,

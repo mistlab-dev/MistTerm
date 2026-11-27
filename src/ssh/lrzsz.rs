@@ -713,7 +713,7 @@ impl LrzszTransfer {
     }
 
     /// 发送文件（sz）。**不得**再持有 `ssh2::Channel`：所有 ZMODEM 字节经 `pump_tx` 进入 shell 泵队列，与键盘输入 FIFO 串行写出。
-    pub fn start_send(&self, file_path: &str, pump_tx: ShellPumpTx) -> Result<(), String> {
+    pub fn start_send(&self, file_path: &str, pump_tx: ShellPumpTx, pump_poller: Arc<polling::Poller>) -> Result<(), String> {
         let path = PathBuf::from(file_path);
         if !path.exists() {
             return Err(format!("File does not exist: {}", file_path));
@@ -777,6 +777,7 @@ impl LrzszTransfer {
                     &file_name,
                     file_size,
                     &pump_tx,
+                    &pump_poller,
                     &upload_pty_rx,
                     &is_active,
                     &received_bytes,
@@ -806,6 +807,7 @@ impl LrzszTransfer {
                     file_path_clone.clone(),
                     file_size,
                     &pump_tx,
+                    &pump_poller,
                     &upload_pty_rx,
                     &is_active,
                     &received_bytes,
