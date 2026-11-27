@@ -15,6 +15,17 @@ const RETENTION_DAYS: i64 = 60;
 const MAX_COMMAND_LEN: usize = 1000;
 pub const DISPLAY_COMMAND_MAX: usize = 500;
 
+/// 把字节下标向下取整到 UTF-8 字符边界，避免在多字节字符中间切片 panic。
+fn floor_char_boundary(s: &str, mut index: usize) -> usize {
+    if index >= s.len() {
+        return s.len();
+    }
+    while index > 0 && !s.is_char_boundary(index) {
+        index -= 1;
+    }
+    index
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct HistoryEntry {
     pub command: String,
@@ -142,7 +153,9 @@ impl CommandHistory {
             return;
         }
         let stored = if cmd.len() > MAX_COMMAND_LEN {
-            cmd[..MAX_COMMAND_LEN].to_string()
+            // 按字符边界截断，避免第 1000 字节落在 CJK 等多字节字符中间时 panic。
+            let cut = floor_char_boundary(cmd, MAX_COMMAND_LEN);
+            cmd[..cut].to_string()
         } else {
             cmd.to_string()
         };
@@ -267,5 +280,57 @@ mod tests {
         let r = h.search_filtered("", true, Some("s1"));
         assert_eq!(r.len(), 2);
         assert!(r.iter().all(|e| e.session_id.as_deref() == Some("s1")));
+    }
+
+    /// 超长命令截断时若第 1000 字节落在 CJK 等多字节字符中间，
+    /// 旧的按字节切片会 panic（#500）。record() 必须按字符边界截断。
+    #[test]
+    fn record_truncates_on_char_boundary() {
+        let mut h = CommandHistory {
+            entries: VecDeque::new(),
+            persist_path: PathBuf::from("/tmp/unused"),
+            dirty: false,
+            load_rx: None,
+        };
+        // 333 个三字节 CJK 字符共 999 字节（加 echo 前缀后基线再偏移）：
+        // 跨越 1000 字节截断点的那个字符占据字节 998..1001（对应线上
+        // 在「东」字中间崩溃的情形；换用「与」开头则为 999..1002）。
+        let unit = "东与";
+        let cmd = format!("echo {}", unit.repeat(501));
+        assert!(cmd.len() > MAX_COMMAND_LEN);
+        let boundary = floor_char_boundary(&cmd, MAX_COMMAND_LEN);
+        assert!(cmd.is_char_boundary(boundary), "截断点必须是字符边界");
+        assert!(boundary <= MAX_COMMAND_LEN, "截断点不得超过 1000 字节");
+        h.record(&cmd, None, None, true);
+        assert_eq!(h.entries.len(), 1, "record 不得 panic 且必须保留条目");
+        let stored = &h.entries[0].command;
+        assert!(stored.len() <= MAX_COMMAND_LEN, "存储长度不得超过 1000 字节");
+        assert!(stored.is_char_boundary(stored.len()), "存储文本末尾必须是字符边界");
+        // 存储内容必须是原始命令的安全前缀，且不含被截断的半个字符。
+        assert!(cmd.starts_with(stored.as_str()), "存储文本必须是原命令前缀");
+        let split = floor_char_boundary(&cmd, MAX_COMMAND_LEN);
+        let head: String = cmd[..split].chars().collect();
+        let stored_chars: String = stored.chars().collect();
+        assert_eq!(stored_chars, head, "截断不得吞掉或拆散任何完整字符");
+    }
+
+    /// 字节截断点恰好落在多字节字符起始字节时，同样不能 panic。
+    #[test]
+    fn record_long_ascii_suffix_after_cjk() {
+        let mut h = CommandHistory {
+            entries: VecDeque::new(),
+            persist_path: PathBuf::from("/tmp/unused"),
+            dirty: false,
+            load_rx: None,
+        };
+        // 前 996 字节为 332 个三字节 CJK 字符，随后 ASCII 字符补齐超过 1000。
+        // 字节 1000 位于 ASCII 段内，属于字符边界，应精确截到 1000 字节。
+        let cmd = format!("{}{}", "东".repeat(332), "x".repeat(50));
+        assert!(cmd.len() > MAX_COMMAND_LEN);
+        h.record(&cmd, None, None, true);
+        let stored = &h.entries[0].command;
+        assert!(stored.len() <= MAX_COMMAND_LEN);
+        assert!(stored.is_char_boundary(stored.len()));
+        assert!(cmd.starts_with(stored.as_str()));
     }
 }
