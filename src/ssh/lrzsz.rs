@@ -9,7 +9,7 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use ssh2::Channel;
-use super::manager::{ShellPumpCommand, ShellPumpTx, SshSessionHandle};
+use super::manager::{enqueue_zmodem_write, ShellPumpTx, SshSessionHandle};
 
 const RX_INCOMING_CAP: usize = 512 * 1024;
 
@@ -202,7 +202,7 @@ pub struct LrzszTransfer {
     recv_side: Arc<Mutex<Option<RecvSide>>>,
     // 新增：SSH 通道引用
     channel: Arc<Mutex<Option<Arc<Mutex<Channel>>>>>,
-    receive_pump_tx: Arc<Mutex<Option<ShellPumpTx>>>,
+    receive_pump: Arc<Mutex<Option<(ShellPumpTx, Arc<polling::Poller>)>>>,
     // 新增：当前接收的文件句柄
     receive_file: Arc<Mutex<Option<File>>>,
     /// rz→本机（上传）时，PTY 上来自远端的 ZMODEM 帧只能经 SSH 泵线程读出；
@@ -241,7 +241,7 @@ impl LrzszTransfer {
             download_dir: download_path,
             recv_side: Arc::new(Mutex::new(None)),
             channel: Arc::new(Mutex::new(None)),
-            receive_pump_tx: Arc::new(Mutex::new(None)),
+            receive_pump: Arc::new(Mutex::new(None)),
             receive_file: Arc::new(Mutex::new(None)),
             upload_pty_rx: Arc::new(Mutex::new(Vec::new())),
             upload_pty_capture_on: Arc::new(AtomicBool::new(false)),
@@ -335,7 +335,7 @@ impl LrzszTransfer {
         self.is_active.store(false, Ordering::Relaxed);
         *self.recv_side.lock().unwrap() = None;
         *self.receive_file.lock().unwrap() = None;
-        *self.receive_pump_tx.lock().unwrap() = None;
+        *self.receive_pump.lock().unwrap() = None;
     }
 
     /// 获取接收进度
@@ -396,7 +396,7 @@ impl LrzszTransfer {
         self.received_bytes.store(0, Ordering::Relaxed);
         self.total_bytes.store(0, Ordering::Relaxed);
         *self.channel.lock().unwrap() = Some(channel);
-        *self.receive_pump_tx.lock().unwrap() = None;
+        *self.receive_pump.lock().unwrap() = None;
         *self.recv_side.lock().unwrap() = Some(RecvSide::Passive {
             pending: Vec::new(),
         });
@@ -414,7 +414,7 @@ impl LrzszTransfer {
         self.received_bytes.store(0, Ordering::Relaxed);
         self.total_bytes.store(0, Ordering::Relaxed);
         *self.channel.lock().unwrap() = Some(channel);
-        *self.receive_pump_tx.lock().unwrap() = None;
+        *self.receive_pump.lock().unwrap() = None;
 
         let receiver = zmodem2::Receiver::new().map_err(|e| format!("ZMODEM Receiver::new: {}", e))?;
         let mut session = ZmodemRxSession {
@@ -429,7 +429,13 @@ impl LrzszTransfer {
     }
 
     /// 通过 shell pump 写回接收端 ACK（交互式 shell 使用同一 PTY FIFO）。
-    pub fn start_receive_pump(&self, pump_tx: ShellPumpTx) -> Result<(), String> {
+    ///
+    /// `pump_tx` 与 `pump_poller` 必须一起登记，避免写出应答时有队列却唤不醒泵。
+    pub fn start_receive_pump(
+        &self,
+        pump_tx: ShellPumpTx,
+        pump_poller: Arc<polling::Poller>,
+    ) -> Result<(), String> {
         if self.is_active.load(Ordering::Relaxed) {
             return Err("Transfer already in progress".to_string());
         }
@@ -438,7 +444,7 @@ impl LrzszTransfer {
         self.received_bytes.store(0, Ordering::Relaxed);
         self.total_bytes.store(0, Ordering::Relaxed);
         *self.channel.lock().unwrap() = None;
-        *self.receive_pump_tx.lock().unwrap() = Some(pump_tx);
+        *self.receive_pump.lock().unwrap() = Some((pump_tx, pump_poller));
         *self.recv_side.lock().unwrap() = Some(RecvSide::Passive {
             pending: Vec::new(),
         });
@@ -447,11 +453,21 @@ impl LrzszTransfer {
     }
 
     /// 向 SSH 通道写 ZMODEM 出站字节（`zmodem2::Receiver::drain_outgoing`）
+    ///
+    /// 交互式 shell 路径必须走 `enqueue_zmodem_write`（阻塞 send + notify）：
+    /// 泵把远端 ZRQINIT 交给界面后会回到 `poll.wait`，界面再排队 ZRINIT/ZACK
+    /// 时若不唤醒，对端就一直等应答（#442，与 #494 上传同源）。
     fn write_to_channel(&self, data: &[u8]) {
-        if let Ok(pump_guard) = self.receive_pump_tx.lock() {
-            if let Some(ref pump_tx) = *pump_guard {
-                let _ = pump_tx.send(ShellPumpCommand::ZmodemWrite(data.to_vec()));
-                log::debug!("ZMODEM queued {} bytes via shell pump", data.len());
+        if let Ok(pump_guard) = self.receive_pump.lock() {
+            if let Some((ref pump_tx, ref pump_poller)) = *pump_guard {
+                match enqueue_zmodem_write(pump_tx, pump_poller, data.to_vec()) {
+                    Ok(()) => {
+                        log::debug!("ZMODEM queued {} bytes via shell pump", data.len());
+                    }
+                    Err(e) => {
+                        log::warn!("ZMODEM enqueue via shell pump failed: {e}");
+                    }
+                }
                 return;
             }
         }
@@ -546,7 +562,7 @@ impl LrzszTransfer {
                 }
                 zmodem2::ReceiverEvent::SessionComplete => {
                     *self.receive_file.lock().unwrap() = None;
-                    *self.receive_pump_tx.lock().unwrap() = None;
+                    *self.receive_pump.lock().unwrap() = None;
                     self.is_active.store(false, Ordering::Relaxed);
                     let _ = self.tx.send(TransferEvent::TransferComplete);
                     return Ok(true);
@@ -634,7 +650,7 @@ impl LrzszTransfer {
         self.write_to_channel(&abort_bytes);
         *slot = None;
         *self.receive_file.lock().unwrap() = None;
-        *self.receive_pump_tx.lock().unwrap() = None;
+        *self.receive_pump.lock().unwrap() = None;
         self.is_active.store(false, Ordering::Relaxed);
         let fname = self.current_filename.lock().unwrap().clone();
         let _ = self.tx.send(TransferEvent::FileError {

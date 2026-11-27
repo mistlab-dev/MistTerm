@@ -3656,8 +3656,10 @@ impl TerminalView {
                                 && !is_rz_upload_handshake
                                 && self.expect_sz_download_active()
                             {
-                                if let Some(pump_tx) =
-                                    self.ssh_handle.as_ref().map(|h| h.shell_pump_tx())
+                                if let Some((pump_tx, pump_poller)) = self
+                                    .ssh_handle
+                                    .as_ref()
+                                    .map(|h| (h.shell_pump_tx(), h.shell_pump_poller()))
                                 {
                                     let resolved = crate::core::local_dir::current();
                                     if let Some(missing) = &resolved.missing {
@@ -3676,7 +3678,7 @@ impl TerminalView {
                                         self.feed_user_warn_line(theme, &warn);
                                     }
                                     self.lrzsz.set_download_dir(resolved.dir);
-                                    match self.lrzsz.start_receive_pump(pump_tx) {
+                                    match self.lrzsz.start_receive_pump(pump_tx, pump_poller) {
                                         Ok(()) => {
                                             if self.lrzsz.feed_receive_data(&data) {
                                                 continue;
