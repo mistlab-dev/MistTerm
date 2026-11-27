@@ -2168,7 +2168,9 @@ impl MistTermApp {
                                                 ),
                                             ));
                                         }
-                                        // #491：移除「用上方变量重写命令」按钮——命令预览已随
+                                        // #491：移除「重写命令」按钮（原文案用 上方变量 + 重写命令
+                                        // 组成，此处已拆开，避免 include_str! 源码扫描自匹配）——
+                                        // 命令预览已随
                                         // 输入逐帧重建（见上方 changed_any 分支），这颗按钮
                                         // 多余，还让用户误以为「填完必须再点一次」才生效。
                                         // 弹窗底部只保留「插入终端/执行」与「取消」。
@@ -3408,17 +3410,22 @@ mod tests {
         assert!(last_finalize_error.is_none(), "重建预览时清掉旧错误");
     }
 
-    /// 「用上方变量重写命令 / Rewrite command using fields above」按钮文案必须
-    /// 从变量弹窗源码中消失：中文、英文及图标路径都不能再出现。
+    /// 重写按钮的旧文案（中文按钮标题 + 英文按钮标题）必须从变量弹窗源码中
+    /// 消失：中文、英文及图标路径都不能再出现。断言字面量用片段拼接构建，
+    /// 避免本测试自己的源码里出现完整连续的按钮文案（include_str! 自匹配）。
     #[test]
     fn rewrite_button_labels_removed_from_variable_dialog() {
         let src = include_str!("workspace.rs");
+        // 中文文案：按钮标题的两个词。
+        let zh = format!("用上方变量{}命令", "重写");
         assert!(
-            !src.contains("用上方变量重写命令"),
+            !src.contains(&zh),
             "中文按钮文案仍残留在 workspace.rs"
         );
+        // 英文文案：Rewrite 前缀 + using fields above 后缀拼出完整标题。
+        let en = format!("Rewrite {}command using fields above", "");
         assert!(
-            !src.contains("Rewrite command using fields above"),
+            !src.contains(&en),
             "英文按钮文案仍残留在 workspace.rs"
         );
         // 弹窗主体（fragment_variable_modal 到命令编辑框）内不允许再出现
