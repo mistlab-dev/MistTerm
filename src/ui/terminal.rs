@@ -1752,6 +1752,35 @@ impl TerminalView {
         self.startup_cd_deadline = Some(Instant::now() + Duration::from_secs(6));
     }
 
+    /// 源会话迟到刷新：只更新**尚未发出**的启动 cd 路径，保留原 policy / deadline。
+    ///
+    /// 已发出（`pending_startup_cd` 已 take）或从未 arm → 返回 `false`，绝不重新排队，
+    /// 避免第二条 `cd` 打进已交互 shell，也避免把 `Match` 盖成 `Unconditional`。
+    pub(crate) fn update_pending_startup_directory(&mut self, cwd: &str) -> bool {
+        let cwd = cwd.trim();
+        if cwd.is_empty() || self.pending_startup_cd.is_none() {
+            return false;
+        }
+        self.shell_cwd = Some(cwd.to_string());
+        self.pending_startup_cd = Some(cwd.to_string());
+        true
+    }
+
+    /// 测试/诊断：当前启动 cd 策略是否为跨会话 Match。
+    #[cfg(test)]
+    pub(crate) fn startup_cd_is_match_policy(&self) -> bool {
+        matches!(self.startup_cd_policy, Some(StartupCdPolicy::Match(_)))
+    }
+
+    /// 测试/诊断：当前启动 cd 策略是否为同会话 Unconditional。
+    #[cfg(test)]
+    pub(crate) fn startup_cd_is_unconditional(&self) -> bool {
+        matches!(
+            self.startup_cd_policy,
+            Some(StartupCdPolicy::Unconditional)
+        )
+    }
+
     /// #401：跨会话继承目录。源窗格的身份未知时干脆不继承——
     /// 拿不到身份就无法确认目标机器/账号，硬 `cd` 过去只会换一种方式报错。
     pub(crate) fn arm_startup_directory_cross_session(
@@ -7998,6 +8027,55 @@ mod oob_cwd_tests {
             "在途查询 Empty 时刷新不得 sleep 排空（开标签卡顿来源）"
         );
         assert_eq!(view.oob_cwd_intent, OobCwdIntent::RefreshForInherit);
+    }
+
+    /// 场景（#401 / PR 审查）：跨会话已按 Match arm；迟到刷新只改路径，不得改成 Unconditional。
+    #[test]
+    fn late_refresh_preserves_cross_session_match_policy() {
+        use crate::terminal::shell_integration::RemoteIdentity;
+        let mut view = TerminalView::new();
+        view.arm_startup_directory_cross_session(
+            "/cached/home",
+            Some(RemoteIdentity {
+                host: "box".into(),
+                user: "deploy".into(),
+            }),
+        );
+        assert!(view.startup_cd_is_match_policy());
+        assert!(view.update_pending_startup_directory("/real/project"));
+        assert_eq!(view.pending_startup_directory(), Some("/real/project"));
+        assert!(
+            view.startup_cd_is_match_policy(),
+            "迟到刷新不得把 Match 盖成 Unconditional"
+        );
+    }
+
+    /// 场景：启动 cd 已发出（pending take）后，迟到刷新不得再排队第二条 cd。
+    #[test]
+    fn late_refresh_does_not_rearm_after_startup_cd_sent() {
+        let mut view = TerminalView::new();
+        view.arm_startup_directory("/cached/home");
+        assert!(view.startup_cd_is_unconditional());
+        let _ = view.pending_startup_cd.take();
+        view.startup_cd_policy = None;
+        view.startup_cd_deadline = None;
+        assert!(
+            !view.update_pending_startup_directory("/real/project"),
+            "已发出后不得重新 arm"
+        );
+        assert!(view.pending_startup_directory().is_none());
+    }
+
+    /// 场景：跨会话源身份未知时初始就不继承；迟到路径同样不能发明一条 Unconditional cd。
+    #[test]
+    fn cross_session_unknown_identity_never_arms() {
+        let mut view = TerminalView::new();
+        view.arm_startup_directory_cross_session("/somewhere", None);
+        assert!(view.pending_startup_directory().is_none());
+        assert!(
+            !view.update_pending_startup_directory("/elsewhere"),
+            "从未 arm 时迟到刷新仍不得排队 cd"
+        );
     }
 
     #[test]

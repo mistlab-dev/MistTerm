@@ -274,12 +274,18 @@ enum ActiveRightDock {
     Postmortem,
 }
 
-/// 开新标签/分屏时：源 pane 带外 cwd 刷新尚未完成，先用缓存建窗，结果到了再补 `pending_startup_cd`。
+/// 开新标签/分屏时：源 pane 带外 cwd 刷新尚未完成，先用缓存建窗，结果到了再补路径。
+///
+/// 用 `session_id` + `pane_token` 作稳定身份，不用 tab/pane 下标——约 1.2s 窗口内
+/// 关左侧标签会导致下标漂移，分屏尤其可能把 `cd` 注入错误会话。
 struct PendingInheritCwd {
-    source_tab: usize,
-    source_pane: usize,
-    dest_tab: usize,
-    dest_pane: usize,
+    source_session_id: String,
+    source_pane_token: u64,
+    dest_session_id: String,
+    dest_pane_token: u64,
+    /// 登记时同会话 → 迟到投递只更新路径；跨会话带 `origin`（未知则根本不登记）。
+    same_session: bool,
+    origin: Option<crate::terminal::shell_integration::RemoteIdentity>,
     started: Instant,
 }
 
@@ -6023,25 +6029,38 @@ impl MistTermApp {
         dest_tab: usize,
         dest_pane: usize,
     ) {
-        if source_tab >= self.tabs.len() {
-            return;
-        }
         let Some(src) = self.tabs.get(source_tab).and_then(|t| t.panes.get(source_pane)) else {
             return;
         };
         if src.terminal.is_local_shell() {
             return;
         }
+        let Some(dest) = self.tabs.get(dest_tab).and_then(|t| t.panes.get(dest_pane)) else {
+            return;
+        };
+        let same_session = src.session_id == dest.session_id;
+        let origin = if same_session {
+            None
+        } else {
+            src.terminal.remote_identity()
+        };
+        // 跨会话且源身份未知：初始 arm 已放弃；迟到刷新也不得发明继承。
+        if !same_session && origin.is_none() {
+            log::debug!("oob cwd inherit: skip track, cross-session source identity unknown");
+            return;
+        }
         self.pending_inherit_cwd.push(PendingInheritCwd {
-            source_tab,
-            source_pane,
-            dest_tab,
-            dest_pane,
+            source_session_id: src.session_id.clone(),
+            source_pane_token: src.pane_token,
+            dest_session_id: dest.session_id.clone(),
+            dest_pane_token: dest.pane_token,
+            same_session,
+            origin,
             started: Instant::now(),
         });
     }
 
-    /// 轮询源会话带外刷新；完成后把真实 cwd 投递到目标 pane 的 `pending_startup_cd`。
+    /// 轮询源会话带外刷新；完成后只更新目标「尚未发出」的启动 cd 路径，保留原 policy。
     fn poll_inherit_cwd_deliveries(&mut self, ctx: &egui::Context) {
         if self.pending_inherit_cwd.is_empty() {
             return;
@@ -6059,10 +6078,18 @@ impl MistTermApp {
                 );
                 continue;
             }
+            let Some((src_ti, src_pi)) = crate::ui::tab_pane::pane_location_by_token(
+                &self.tabs,
+                &job.source_session_id,
+                job.source_pane_token,
+            ) else {
+                log::debug!("oob cwd inherit: source pane gone, drop delivery");
+                continue;
+            };
             let Some(src) = self
                 .tabs
-                .get_mut(job.source_tab)
-                .and_then(|t| t.panes.get_mut(job.source_pane))
+                .get_mut(src_ti)
+                .and_then(|t| t.panes.get_mut(src_pi))
             else {
                 continue;
             };
@@ -6077,18 +6104,39 @@ impl MistTermApp {
                 log::debug!("oob cwd inherit: refresh empty, keep cached startup cd");
                 continue;
             };
+            let Some((dest_ti, dest_pi)) = crate::ui::tab_pane::pane_location_by_token(
+                &self.tabs,
+                &job.dest_session_id,
+                job.dest_pane_token,
+            ) else {
+                log::debug!("oob cwd inherit: dest pane gone or index drifted, drop delivery");
+                continue;
+            };
+            // 再确认仍是登记时的 session（token 已唯一，session_id 双重保险）。
             let Some(dest) = self
                 .tabs
-                .get_mut(job.dest_tab)
-                .and_then(|t| t.panes.get_mut(job.dest_pane))
+                .get_mut(dest_ti)
+                .and_then(|t| t.panes.get_mut(dest_pi))
             else {
                 continue;
             };
-            // 已用缓存 arm 过：用刷新结果覆盖；prompt 就绪后 maybe_send_startup_cd 会发出。
-            // 若缓存与刷新相同，arm 仍幂等（同路径再发一次空操作风险由终端侧 #445 处理）。
-            log::debug!("oob cwd inherit: deliver refreshed cwd to dest pane: {cwd}");
-            dest.terminal.arm_startup_directory(&cwd);
-            need_repaint = true;
+            if dest.session_id != job.dest_session_id || dest.pane_token != job.dest_pane_token {
+                log::debug!("oob cwd inherit: dest identity mismatch, drop delivery");
+                continue;
+            }
+            if !job.same_session && job.origin.is_none() {
+                log::debug!("oob cwd inherit: cross-session without origin, skip");
+                continue;
+            }
+            // 只更新尚未发出的 pending，保留 Match / Unconditional；已发出则不重新 arm。
+            if dest.terminal.update_pending_startup_directory(&cwd) {
+                log::debug!("oob cwd inherit: update pending startup cd: {cwd}");
+                need_repaint = true;
+            } else {
+                log::debug!(
+                    "oob cwd inherit: pending already sent or never armed, keep as-is"
+                );
+            }
         }
         self.pending_inherit_cwd = keep;
         if need_repaint {

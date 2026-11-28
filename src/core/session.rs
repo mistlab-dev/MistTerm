@@ -696,13 +696,17 @@ impl SessionManager {
     }
 
     fn read_sessions_file_text(&mut self) -> Option<String> {
-        // PermissionDenied / InvalidData：重试无意义。其余（锁、瞬时 IO）指数退避 100/300/900ms。
+        // NotFound：首次/竞态无文件，立刻返回。PermissionDenied / InvalidData：重试无意义。
+        // 其余（锁、瞬时 IO）指数退避 100/300/900ms。
         const BACKOFF_MS: [u64; 3] = [100, 300, 900];
         for (attempt, delay_ms) in BACKOFF_MS.iter().enumerate() {
             match fs::read_to_string(&self.file_path) {
                 Ok(c) => return Some(c),
                 Err(e) => {
                     let kind = e.kind();
+                    if kind == io::ErrorKind::NotFound {
+                        return None;
+                    }
                     let fatal = matches!(
                         kind,
                         io::ErrorKind::PermissionDenied | io::ErrorKind::InvalidData
