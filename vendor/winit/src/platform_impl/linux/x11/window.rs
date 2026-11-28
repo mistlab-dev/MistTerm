@@ -527,8 +527,14 @@ impl UnownedWindow {
             }
 
             // Try to create input context for the window.
+            // MISTTERM (#430 round-6): stock winit hardcodes `with_ime=false` here,
+            // so the initial IC is created in "nothing" style (no preedit callbacks,
+            // IME disengaged). egui-winit's allow_ime debounce then never toggles
+            // (it believes IME is already allowed), so the real `set_ime_allowed(true)`
+            // never fires and composition never starts — keys bypass the IME entirely.
+            // Create with IME enabled; egui-winit can still disable it explicitly.
             if let Some(ime) = event_loop.ime.as_ref() {
-                let result = ime.borrow_mut().create_context(window.xwindow as ffi::Window, false);
+                let result = ime.borrow_mut().create_context(window.xwindow as ffi::Window, true);
                 leap!(result);
             }
 

@@ -5,6 +5,11 @@ Upstream crate: `winit 0.30.13` (eframe/egui 0.37 stack).
 Changed files:
 
 - `src/platform_impl/linux/x11/event_processor.rs` (X11)
+- `src/platform_impl/linux/x11/ime/mod.rs` (X11, #430)
+- `src/platform_impl/linux/x11/ime/context.rs` (X11, #430/#431)
+- `src/platform_impl/linux/x11/ime/input_method.rs` (X11, #431)
+- `src/platform_impl/linux/x11/util/input.rs` (X11, #431 diagnostics)
+- `src/platform_impl/linux/x11/ime/inner.rs` (X11, #430)
 - `src/platform_impl/macos/view.rs` (macOS)
 - `src/platform_impl/ime_bypass.rs` (shared Control-chord policy, used by macOS; unit-tested on every OS)
 - `src/platform_impl/redraw_guard.rs` (shared illegal-size predicate for #188; unit-tested on every OS)
@@ -68,3 +73,100 @@ Lock-screen / Spaces tile-resize can synchronously enter `WinitView::drawRect:` 
 - Switching the runtime renderer to wgpu
 - Wayland-specific Control bypass
 - Deleting this vendor path while the patches above are still required
+
+
+## #430 (2026-11-14): X11 allow-toggle loses IC focus
+
+`Ime::set_ime_allowed(false→true)` destroys and recreates the X11 IC.
+`XSetICFocus` is only applied on XIFocusIn (`xinput2_focused`). An in-place
+toggle — egui-winit does one for every `should_interrupt_composition` while the
+IME area is reported — happens while the window is already focused, so the
+recreated IC never gets `XSetICFocus`. ibus/XIM then treats the IC as unfocused
+and stops filtering keys: every keystroke arrives raw (Key+Text, zero Ime
+events) until the next window refocus. This is the "#430: 组字拉不起来 / 零
+Ime 事件" failure mode.
+
+Fix attempt (round-3/4): mirror `active_window` + re-apply `context.focus()`
+after `create_context(allowed)`. **REVERTED in round-5**: box point-check showed
+the out-of-band `XSetICFocus` breaks composition START on ibus (no preedit, no
+candidates, raw keys) — ibus XIM tracks window focus via real XIFocusIn events
+and desyncs on a lone XSetICFocus. Stock winit behavior (IC focus on next
+XIFocusIn) starts composition correctly; the leftover mirror fields stay but
+are inert.
+
+
+## #430 round 4 (2026-11-14): composition started, commit still lost
+
+After the focus fix, preedit + candidates now appear (grouping works), but the
+commit text still never reached the PTY — only the first Latin letter
+(`n` for 你好, `z` for 中文). Two remaining X11-path defects, both fixed here:
+
+1. `event_processor.rs` raw-key branch (`keycode != 0 && !is_composing`): an
+   in-place allow-toggle recreates the IC mid-composition and the winit Ime
+   drain in `process_event` can deliver the XIM `End` callback (clearing
+   `is_composing`) before the last composition keypress is processed. The
+   raw key then took the early-return KeyboardInput path and the
+   `lookup_utf8` commit-extraction below was skipped — the final
+   `Xutf8LookupString` commit string was never read. Fix: in that branch,
+   when IME is allowed and not a Control bypass, run `lookup_utf8` first and
+   deliver any non-empty result as `Ime::Preedit("")+Ime::Commit` (same shape
+   as the normal path) before falling back to the raw key.
+
+2. `ime/context.rs` `set_spot`: egui-winit re-reports the IME cursor area on
+   every frame carrying any input event (including preedit/commit Ime
+   events), so `XSetICValues(XNSpotLocation)` fires between the last
+   composition key and the commit and can disturb the server-side IC focus
+   on ibus/XIM. Fix: re-apply `XSetICFocus` after `set_spot` so the IC stays
+   focused while it exists.
+
+App-side belt-and-braces (`src/ui/terminal_keys.rs`): on a Commit frame that
+also carries raw Key events, synthetic `Event::Text` is suppressed (it is the
+composition key itself, not the commit); the commit string is written to the
+PTY exclusively by the `Ime::Commit` arm.
+
+## #431 (2026-11-28): XIM commit lookup diagnostics
+
+libX11's `_XimCommitRecv` stores the XIM_COMMIT string on the XIC before it
+queues the synthetic keycode-0 KeyPress. Retrying an empty lookup after that
+event cannot resolve an IC mismatch or a conversion failure, so the 200 ms
+event-loop sleep was removed.
+
+With `MISTTERM_IME_DEBUG=1`, the lookup now logs the XIC pointer, event window
+and serial, Xlib status/count, UTF-8 validity, and returned bytes. Compare the
+XIC/window pair with the `IC created` log to distinguish an IC association
+problem from an empty or invalid conversion result. This diagnostic change
+does not claim to fix the remaining product failure; Linux Xorg +
+ibus-libpinyin verification is still required.
+
+
+## #430 (2026-11-28): harvest XIM_COMMIT before the IME-request drain
+
+Product box (Linux X11 + ibus-libpinyin) could start composition and show
+the ibus candidate panel, but a committed CJK string never became
+`Ime::Commit`. libX11 *does* receive async `XIM_COMMIT`, stores the
+payload on the XIC, and PutBacks a synthetic keycode-0 KeyPress from
+inside `XFilterEvent`. winit then returned from `process_xevent` and
+`process_event` drained `ImeRequest::Position` / `Allow` (egui-winit
+reports the IME cursor area whenever the frame still has events, and may
+toggle `set_ime_allowed`) *before* the put-back KeyPress was read.
+`Xutf8LookupString` on that later event was empty, so no commit reached
+the application. Latin input still worked because it uses a real keycode
+and does not depend on the async commit buffer.
+
+A standalone winit probe with the same vendor code succeeded when it did
+not drive those per-frame IME requests, which matches this window.
+
+Fix:
+
+1. Immediately after `XFilterEvent`, peek a put-back keycode-0 KeyPress
+   (and/or look up on the current event) against every known IC, and emit
+   `Ime::Preedit("")` + `Ime::Commit` before any ImeRequest is applied.
+2. If `Xutf8LookupString` returns no bytes, recover a character from a
+   Unicode / Latin-1 keysym (`XimLookupKeySym` payload).
+3. Before `XDestroyIC`, flush any leftover commit string into a pending
+   queue so an in-place IC teardown cannot drop it.
+
+`MISTTERM_IME_DEBUG=1` logs `[ime-xim] HARVEST` / `COMMIT-EMIT` and the
+existing `[ime-xlib] lookup` status/count/bytes. This does not claim a
+product Pass; Linux X11 + ibus-libpinyin still has to verify that the
+committed CJK string reaches the PTY.

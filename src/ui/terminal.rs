@@ -4156,7 +4156,16 @@ impl TerminalView {
                 match event {
                     egui::Event::Ime(egui::ImeEvent::Commit(text)) => {
                         if let Some(text) = Self::ime_committed_text(text, i.modifiers) {
+                            if std::env::var_os("MISTTERM_IME_DEBUG").is_some() {
+                                eprintln!(
+                                    "[ime-debug] OFFLINE-COMMIT-WRITE {:?} bytes={}",
+                                    text,
+                                    text.as_bytes().len()
+                                );
+                            }
                             self.append_offline_bytes(text.as_bytes());
+                        } else if std::env::var_os("MISTTERM_IME_DEBUG").is_some() {
+                            eprintln!("[ime-debug] OFFLINE-COMMIT dropped by modifier gate");
                         }
                     }
                     egui::Event::Text(text) => {
@@ -4506,10 +4515,19 @@ impl TerminalView {
                 match event {
                     egui::Event::Ime(egui::ImeEvent::Commit(text)) => {
                         if let Some(text) = Self::ime_committed_text(text, i.modifiers) {
+                            if std::env::var_os("MISTTERM_IME_DEBUG").is_some() {
+                                eprintln!(
+                                    "[ime-debug] COMMIT-WRITE {:?} bytes={}",
+                                    text,
+                                    text.as_bytes().len()
+                                );
+                            }
                             self.track_typed_text(text);
                             if let Err(e) = self.send_pty_input(text.as_bytes()) {
                                 log::error!("PTY write (ime): {}", e);
                             }
+                        } else if std::env::var_os("MISTTERM_IME_DEBUG").is_some() {
+                            eprintln!("[ime-debug] COMMIT dropped by modifier gate");
                         }
                     }
                     egui::Event::Text(text) => {
