@@ -45,6 +45,22 @@ pub struct Fetcher {
     allow_loopback_http: bool,
 }
 
+pub(super) enum SmallFetchError {
+    HttpStatus { status: u16, host: String },
+    Other(UpdateError),
+}
+
+impl SmallFetchError {
+    pub(super) fn into_update_error(self) -> UpdateError {
+        match self {
+            Self::HttpStatus { status, host } => {
+                UpdateError::Network(format!("HTTP {status} from {host}"))
+            }
+            Self::Other(error) => error,
+        }
+    }
+}
+
 impl Fetcher {
     /// 清单请求：每个地址 10 秒连接超时、20 秒总超时。
     pub fn for_manifest() -> Result<Self, UpdateError> {
@@ -89,31 +105,50 @@ impl Fetcher {
 
     /// 下载小文件（清单、签名）。非 2xx、HTML 页面或超过 `max_bytes` 都算失败。
     pub fn get_small(&self, url: &str, max_bytes: usize) -> Result<Vec<u8>, UpdateError> {
-        check_url_allowed(url, self.allow_loopback_http).map_err(UpdateError::Network)?;
-        let resp = self
-            .client
-            .get(url)
-            .send()
-            .map_err(|e| UpdateError::Network(short_reqwest_error(&e)))?;
+        self.get_small_with_status(url, max_bytes)
+            .map_err(SmallFetchError::into_update_error)
+    }
+
+    pub(super) fn get_small_with_status(
+        &self,
+        url: &str,
+        max_bytes: usize,
+    ) -> Result<Vec<u8>, SmallFetchError> {
+        check_url_allowed(url, self.allow_loopback_http)
+            .map_err(|e| SmallFetchError::Other(UpdateError::Network(e)))?;
+        let resp =
+            self.client.get(url).send().map_err(|e| {
+                SmallFetchError::Other(UpdateError::Network(short_reqwest_error(&e)))
+            })?;
         let status = resp.status();
         if !status.is_success() {
-            return Err(UpdateError::Network(format!("HTTP {} from {}", status.as_u16(), host_of(url))));
+            return Err(SmallFetchError::HttpStatus {
+                status: status.as_u16(),
+                host: host_of(url),
+            });
         }
         // mistlab.dev 对不存在的路径会返回首页 HTML（200）：直接判失败，不必读完整页面。
         if let Some(ct) = resp.headers().get(reqwest::header::CONTENT_TYPE) {
             if ct.to_str().unwrap_or("").to_ascii_lowercase().contains("text/html") {
-                return Err(UpdateError::InvalidManifest(format!("{} returned an HTML page", host_of(url))));
+                return Err(SmallFetchError::Other(UpdateError::InvalidManifest(format!(
+                    "{} returned an HTML page",
+                    host_of(url)
+                ))));
             }
         }
         if resp.content_length().is_some_and(|n| n > max_bytes as u64) {
-            return Err(UpdateError::InvalidManifest("response too large".into()));
+            return Err(SmallFetchError::Other(UpdateError::InvalidManifest(
+                "response too large".into(),
+            )));
         }
         let mut body = Vec::new();
         resp.take(max_bytes as u64 + 1)
             .read_to_end(&mut body)
-            .map_err(|e| UpdateError::Network(e.to_string()))?;
+            .map_err(|e| SmallFetchError::Other(UpdateError::Network(e.to_string())))?;
         if body.len() > max_bytes {
-            return Err(UpdateError::InvalidManifest("response too large".into()));
+            return Err(SmallFetchError::Other(UpdateError::InvalidManifest(
+                "response too large".into(),
+            )));
         }
         Ok(body)
     }
@@ -212,5 +247,18 @@ mod tests {
         assert!(check_url_allowed("file:///etc/passwd", true).is_err());
         assert!(check_url_allowed("ftp://mistlab.dev/x", false).is_err());
         assert!(check_url_allowed("not a url", false).is_err());
+    }
+
+    #[test]
+    fn small_fetch_http_status_keeps_the_existing_network_error_shape() {
+        let error = SmallFetchError::HttpStatus {
+            status: 404,
+            host: "github.com".into(),
+        }
+        .into_update_error();
+        assert!(matches!(
+            error,
+            UpdateError::Network(detail) if detail == "HTTP 404 from github.com"
+        ));
     }
 }

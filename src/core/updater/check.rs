@@ -204,14 +204,22 @@ pub fn fetch_verified_manifest(
     let fetcher = Fetcher::for_manifest()?;
     let mut last_err: Option<UpdateError> = None;
     let mut saw_stale = false;
+    let mut missing_manifest_sources = 0;
     // #417 架构锁定 1：有边界的多源选取——遍历全部源验签，在有效（验签过且
     // 非 stale）结果里取版本最高（同版本比 pub_date），不再第一个通过就返回。
     // 修复回归：官网镜像重放已接受的 V 时，GitHub 已有 V+1 也能被发现。
     let mut best: Option<(Manifest, String)> = None;
     for url in &opts.manifest_urls {
         let sig_url = format!("{url}.minisig");
+        let body = fetcher.get_small_with_status(url, MAX_MANIFEST_BYTES);
+        if matches!(
+            &body,
+            Err(super::fetch::SmallFetchError::HttpStatus { status: 404, .. })
+        ) {
+            missing_manifest_sources += 1;
+        }
         let attempt = (|| {
-            let body = fetcher.get_small(url, MAX_MANIFEST_BYTES)?;
+            let body = body.map_err(super::fetch::SmallFetchError::into_update_error)?;
             let sig = fetcher.get_small(&sig_url, 4096)?;
             verify::verify_manifest(&body, &sig, &opts.keys, opts.channel.as_str(), opts.allow_loopback_http)
         })();
@@ -260,10 +268,27 @@ pub fn fetch_verified_manifest(
     if let Some((m, url)) = best {
         return Ok((m, url));
     }
+    if preview_manifest_unavailable(
+        opts.channel,
+        opts.manifest_urls.len(),
+        missing_manifest_sources,
+    ) {
+        return Err(UpdateError::PreviewUnavailable);
+    }
     if saw_stale {
         return Err(UpdateError::StaleManifest);
     }
     Err(last_err.unwrap_or_else(|| UpdateError::Network("no update source configured".into())))
+}
+
+fn preview_manifest_unavailable(
+    channel: UpdateChannel,
+    source_count: usize,
+    missing_manifest_sources: usize,
+) -> bool {
+    channel == UpdateChannel::Preview
+        && source_count > 0
+        && missing_manifest_sources == source_count
 }
 
 /// 完整的一次检查。成功时更新 `state` 里的检查时间和见过的最高版本（调用方负责保存）。
@@ -542,5 +567,13 @@ mod multi_source_tests {
         let lost = UpdateState::default();
         assert!(lost.is_stale(&semver::Version::parse("1.1.9").unwrap(), Some(d), Some(&cur), false));
         assert!(!lost.is_stale(&cur, Some(d), Some(&cur), false));
+    }
+
+    #[test]
+    fn only_all_preview_manifest_404s_are_reported_as_unavailable() {
+        assert!(preview_manifest_unavailable(UpdateChannel::Preview, 2, 2));
+        assert!(!preview_manifest_unavailable(UpdateChannel::Preview, 2, 1));
+        assert!(!preview_manifest_unavailable(UpdateChannel::Preview, 0, 0));
+        assert!(!preview_manifest_unavailable(UpdateChannel::Stable, 2, 2));
     }
 }
