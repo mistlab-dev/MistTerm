@@ -145,6 +145,24 @@ impl TerminalVisualLayoutCache {
     }
 }
 
+/// 图集已为可绘字形分配 UV / 顶点时为 true。
+/// 仅有行、且 `size().y > 1`（行高等于字号）不够：`apply_theme`→`set_style`
+/// 与 `layout_job` 同帧时，图集可能尚未就绪，会排出「有行无字形」的空 galley。
+fn galley_has_visible_glyphs(galley: &egui::Galley) -> bool {
+    galley.rows.iter().any(|row| {
+        !row.visuals.glyph_vertex_range.is_empty()
+            || row
+                .glyphs
+                .iter()
+                .any(|glyph| !glyph.uv_rect.is_nothing())
+    })
+}
+
+/// 有可打印内容却尚未排出可见字形时不要写入 visual cache，并继续请求重绘。
+fn should_cache_terminal_galley(has_printable: bool, has_visible_glyphs: bool) -> bool {
+    !has_printable || has_visible_glyphs
+}
+
 /// Host 侧可点区间，来自 `ModuleAction::DecorateLink`。渲染与点击都认它，模块不碰 egui。
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct DisplaySpan {
@@ -2702,17 +2720,19 @@ impl TerminalView {
                         } else {
                             let g = ui.ctx().fonts_mut(|f| f.layout_job(layout_job.clone()));
                             // `apply_theme`→`set_style` 与本帧 `layout_job` 同帧时，字体图集可能尚未
-                            // 就绪，会排出「有字符、无字形」的空 galley。若写进缓存，之后一直命中
-                            // 空白，直到 content_epoch 变化（表现为主题切换后整屏空白，点一下输入才恢复）。
-                            // 有可打印内容却得不到有效行时不缓存 galley，让后续帧在字体就绪后重排。
+                            // 就绪，会排出「有行、有行高、无字形」的空 galley。不能用 `rows` /
+                            // `size().y > 1` 当成就绪：那种空 galley 一旦进缓存，就会一直空白，
+                            // 直到点击迫使重排。有可打印内容却没有可见字形时不缓存，并继续
+                            // 请求重绘，直到图集就绪后排出带字形的 galley。
                             let has_printable =
                                 display_owned.chars().any(|ch| !ch.is_whitespace());
-                            let layout_ready = !g.rows.is_empty() && g.size().y > 1.0;
+                            let layout_ready = galley_has_visible_glyphs(&g);
                             if let Some(c) = self.visual_layout_cache.as_mut() {
-                                if !has_printable || layout_ready {
+                                if should_cache_terminal_galley(has_printable, layout_ready) {
                                     c.galley = Some(g.clone());
                                 } else {
                                     ui.ctx().request_repaint();
+                                    ui.ctx().request_repaint_after(Duration::from_millis(16));
                                 }
                             }
                             g
@@ -8036,5 +8056,58 @@ mod tab_title_focus_tests {
         view.release_keyboard_for_overlay();
         assert!(!view.terminal_wants_keyboard);
         assert!(!view.pending_focus_terminal, "释放焦点必须连 pending 一起清，否则下一帧终端把焦点抢回");
+    }
+}
+
+#[cfg(test)]
+mod terminal_galley_cache_tests {
+    use super::*;
+
+    #[test]
+    fn whitespace_only_may_be_cached_without_glyphs() {
+        assert!(
+            should_cache_terminal_galley(false, false),
+            "纯空白没有可绘字形，也应允许缓存，避免每帧空排"
+        );
+    }
+
+    #[test]
+    fn printable_glyphless_galley_is_not_cached() {
+        assert!(
+            !should_cache_terminal_galley(true, false),
+            "有可打印内容但无可见字形时不得缓存，否则主题切换后会整屏卡空白"
+        );
+    }
+
+    #[test]
+    fn printable_glyph_ready_galley_is_cached() {
+        assert!(should_cache_terminal_galley(true, true));
+    }
+
+    #[test]
+    fn laid_out_printable_text_has_visible_glyphs() {
+        let ctx = egui::Context::default();
+        let mut out = ctx.run_pass(egui::RawInput::default(), |ctx| {
+            let galley = ctx.fonts_mut(|fonts| {
+                fonts.layout_no_wrap(
+                    "ok505b".to_owned(),
+                    egui::FontId::monospace(14.0),
+                    egui::Color32::WHITE,
+                )
+            });
+            // 正向路径：图集就绪后，有行、有高度，且确实排出了字形。
+            assert!(!galley.rows.is_empty());
+            assert!(galley.size().y > 1.0);
+            assert!(
+                galley_has_visible_glyphs(&galley),
+                "就绪图集排出的可打印文本必须带 glyph 顶点 / 非空 UV"
+            );
+            assert!(should_cache_terminal_galley(
+                true,
+                galley_has_visible_glyphs(&galley)
+            ));
+        });
+        // fonts 排版会写入图集增量；测试不实际上屏，必须清掉以免 drop 时 panic。
+        out.textures_delta.clear();
     }
 }
