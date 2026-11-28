@@ -274,6 +274,25 @@ enum ActiveRightDock {
     Postmortem,
 }
 
+/// 开新标签/分屏时：源 pane 带外 cwd 刷新尚未完成，先用缓存建窗，结果到了再补路径。
+///
+/// 用 `session_id` + `pane_token` 作稳定身份，不用 tab/pane 下标——约 1.2s 窗口内
+/// 关左侧标签会导致下标漂移，分屏尤其可能把 `cd` 注入错误会话。
+struct PendingInheritCwd {
+    source_session_id: String,
+    source_pane_token: u64,
+    dest_session_id: String,
+    dest_pane_token: u64,
+    /// 登记时同会话 → 迟到投递只更新路径；跨会话带 `origin`（未知则根本不登记）。
+    same_session: bool,
+    origin: Option<crate::terminal::shell_integration::RemoteIdentity>,
+    started: Instant,
+}
+
+/// 无输入且无焦点/遮挡边沿时的兜底重绘。主路径靠 viewport focused/occluded 边沿
+/// `request_repaint`；本间隔只防平台不报那些事件。**不是**帧率目标。
+const IDLE_SELF_HEAL_REPAINT: Duration = Duration::from_secs(5);
+
 /// 主应用程序
 pub struct MistTermApp {
     /// 全局应用动作总线
@@ -322,10 +341,14 @@ pub struct MistTermApp {
     cmd_audit_personal_rules: crate::core::cmd_audit_personal::CmdAuditPersonalStore,
     /// #201：上一帧窗口焦点（viewport focused 边沿检测）。
     prev_viewport_focused: bool,
+    /// 上一帧是否遮挡；false→true 边沿不做事，true→false / 获焦边沿立刻重绘。
+    prev_viewport_occluded: bool,
     /// #201：标签切换记录的前台重连待检项（下一帧统一处理）。
     pending_foreground_reconnect: Option<usize>,
     /// #392：新开标签待继承的目录（open_new_tab 时记下，push_tab_connecting 消费）。
     pending_new_tab_cwd: Option<String>,
+    /// 继承 cwd：源会话带外刷新异步进行中，结果回来再投递到目标 pane（勿在 UI 线程 sleep）。
+    pending_inherit_cwd: Vec<PendingInheritCwd>,
     rule_manager_dialog: crate::ui::rule_manager_dialog::RuleManagerDialog,
 
     /// 是否显示新建会话对话框
@@ -1191,8 +1214,10 @@ impl MistTermApp {
             display_link_rules: display_link_rules.clone(),
             cmd_audit_personal_rules,
             prev_viewport_focused: true,
+            prev_viewport_occluded: false,
             pending_foreground_reconnect: None,
             pending_new_tab_cwd: None,
+            pending_inherit_cwd: Vec::new(),
             crash_notice: crate::core::crash_reporter::take_startup_notice(),
             update_ui: update::UpdateUi::new(app_settings.update.channel),
             pref_vault_token_draft: String::new(),
@@ -3674,7 +3699,28 @@ impl MistTermApp {
         }
     }
 
+    /// 焦点/遮挡边沿：画面从不可见回到可见时立刻重绘（替代「每秒硬醒」当主路径）。
+    fn poll_viewport_visibility_repaint(&mut self, ctx: &egui::Context) {
+        let (focused, occluded) = ctx.input(|i| {
+            let v = i.viewport();
+            (
+                i.focused || v.focused.unwrap_or(false),
+                v.occluded.unwrap_or(false),
+            )
+        });
+        let focus_rose = focused && !self.prev_viewport_focused;
+        let uncover = self.prev_viewport_occluded && !occluded;
+        self.prev_viewport_focused = focused;
+        self.prev_viewport_occluded = occluded;
+        if focus_rose || uncover {
+            ctx.request_repaint();
+        }
+    }
+
     /// #201：窗口焦点回归（focused false→true 边沿）扫全表 + 消费标签切换待检项。
+    ///
+    /// 须在同帧 `poll_viewport_visibility_repaint` **之前**调用，才能读到上一帧的
+    /// `prev_viewport_focused`；visibility 末尾会把 prev 写成当前值。
     fn poll_foreground_reconnect(&mut self, ctx: &egui::Context) {
         if !self.app_settings.reconnect_on_foreground {
             self.pending_foreground_reconnect = None;
@@ -3684,10 +3730,9 @@ impl MistTermApp {
         if let Some(idx) = self.pending_foreground_reconnect.take() {
             self.try_foreground_reconnect_tab(ctx, idx);
         }
-        // 触发点 A：focused false→true 边沿扫全表。
+        // 触发点 A：focused false→true 边沿扫全表（prev 由 visibility 轮询在帧末更新）。
         let focused = ctx.input(|i| i.focused);
         let rose = focused && !self.prev_viewport_focused;
-        self.prev_viewport_focused = focused;
         if !rose {
             return;
         }
@@ -5720,7 +5765,7 @@ impl MistTermApp {
         let active = self.tabs[idx]
             .active_pane
             .min(self.tabs[idx].panes.len().saturating_sub(1));
-        // A+B：与 ⌘T 同一读点 + 分屏前先刷新带外 cwd（同 #419 点查跟进）。
+        // 先用缓存 cwd 建窗；源会话带外刷新异步完成后由 poll_inherit_cwd_deliveries 补投递。
         let inherit_cwd = self.refresh_source_cwd_for_inherit(ctx, idx, active);
         if self.tabs[idx].panes[active].terminal.is_local_shell() {
             crate::local_shell::set_repaint_context(ctx);
@@ -5776,6 +5821,8 @@ impl MistTermApp {
         pane2.ssh_temp_key = temp_key;
         let tab = &mut self.tabs[idx];
         tab.add_pane_with_layout(pane2, layout);
+        let dest_pane = tab.panes.len().saturating_sub(1);
+        self.track_inherit_cwd_delivery(idx, active, idx, dest_pane);
         self.ensure_tab_log_writer(idx);
         self.notify_auto(crate::i18n::tr(ctx, "Split terminal pane", "已分屏").to_string());
     }
@@ -5950,45 +5997,153 @@ impl MistTermApp {
         Some(tab.active_pane.min(tab.panes.len().saturating_sub(1)))
     }
 
-    /// #419 点查跟进：继承前对源会话做一次带外刷新查询，并等到结果（或超时）。
+    /// 继承前对源会话发起带外 cwd 刷新；**立即**返回缓存目录，不阻塞 UI 线程。
     ///
-    /// B 方案主路径：登录时那一次查询通常只拿到 home，之后用户 `cd` 就旧了。
-    /// 这里在用户动作的当帧发起短超时刷新（`OOB_REFRESH_TIMEOUT_MS`），
-    /// `request_repaint_after` 唤醒本轮帧循环继续轮询；完成后返回刷新到的目录，
-    /// 失败/超时/本机 shell 退回 `fallback`（统一继承源缓存）。
-    fn refresh_source_cwd_for_inherit(&mut self, ctx: &egui::Context, tab_idx: usize, pane_idx: usize) -> Option<String> {
+    /// 调用方先用返回值 `arm_startup_directory` 建窗；再用
+    /// [`Self::track_inherit_cwd_delivery`] 登记目标 pane，
+    /// [`Self::poll_inherit_cwd_deliveries`] 在刷新完成后补发/更新启动 cd。
+    fn refresh_source_cwd_for_inherit(
+        &mut self,
+        _ctx: &egui::Context,
+        tab_idx: usize,
+        pane_idx: usize,
+    ) -> Option<String> {
         let fallback = self.pane_inherit_cwd_at(tab_idx, pane_idx);
-        let Some(pane) = self.tabs.get_mut(tab_idx).and_then(|t| t.panes.get_mut(pane_idx)) else {
+        let Some(pane) = self.tabs.get_mut(tab_idx).and_then(|t| t.panes.get_mut(pane_idx))
+        else {
             return fallback;
         };
         if pane.terminal.is_local_shell() {
-            // 本机 shell 没有 /proc 通道（Windows/ConPTY），缓存就是实时的（cwd 由 spawn 决定）。
+            // 本机 shell 没有 /proc 通道（Windows/ConPTY），缓存就是实时的。
             return fallback;
         }
         pane.terminal.start_oob_cwd_refresh();
-        let deadline = Instant::now() + Duration::from_millis(crate::terminal::oob_cwd::OOB_REFRESH_TIMEOUT_MS as u64 + 200);
-        loop {
-            pane.terminal.poll_oob_cwd_query();
-            if pane.terminal.oob_refresh_finished() {
-                break;
-            }
-            if Instant::now() >= deadline {
-                log::debug!("oob cwd refresh: deadline hit, fall back to cached cwd");
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(25));
+        fallback
+    }
+
+    /// 登记「源刷新完成后投递到目标 pane」。目标须已创建并（通常）已用缓存 cwd arm 过。
+    fn track_inherit_cwd_delivery(
+        &mut self,
+        source_tab: usize,
+        source_pane: usize,
+        dest_tab: usize,
+        dest_pane: usize,
+    ) {
+        let Some(src) = self.tabs.get(source_tab).and_then(|t| t.panes.get(source_pane)) else {
+            return;
+        };
+        if src.terminal.is_local_shell() {
+            return;
         }
-        let refreshed = pane.terminal.take_oob_refresh_cwd();
-        // 让 egui 在循环后重绘一次，避免状态残留到下一帧。
-        ctx.request_repaint();
-        match refreshed {
-            Some(cwd) => {
-                log::debug!("oob cwd refresh: inherited from /proc: {cwd}");
-                Some(cwd)
+        let Some(dest) = self.tabs.get(dest_tab).and_then(|t| t.panes.get(dest_pane)) else {
+            return;
+        };
+        let same_session = src.session_id == dest.session_id;
+        let origin = if same_session {
+            None
+        } else {
+            src.terminal.remote_identity()
+        };
+        // 跨会话且源身份未知：初始 arm 已放弃；迟到刷新也不得发明继承。
+        if !same_session && origin.is_none() {
+            log::debug!("oob cwd inherit: skip track, cross-session source identity unknown");
+            return;
+        }
+        self.pending_inherit_cwd.push(PendingInheritCwd {
+            source_session_id: src.session_id.clone(),
+            source_pane_token: src.pane_token,
+            dest_session_id: dest.session_id.clone(),
+            dest_pane_token: dest.pane_token,
+            same_session,
+            origin,
+            started: Instant::now(),
+        });
+    }
+
+    /// 轮询源会话带外刷新；完成后只更新目标「尚未发出」的启动 cd 路径，保留原 policy。
+    fn poll_inherit_cwd_deliveries(&mut self, ctx: &egui::Context) {
+        if self.pending_inherit_cwd.is_empty() {
+            return;
+        }
+        let budget = Duration::from_millis(
+            crate::terminal::oob_cwd::OOB_REFRESH_TIMEOUT_MS as u64 + 200,
+        );
+        let mut keep = Vec::with_capacity(self.pending_inherit_cwd.len());
+        let mut need_repaint = false;
+        for job in std::mem::take(&mut self.pending_inherit_cwd) {
+            if Instant::now().saturating_duration_since(job.started) > budget {
+                log::debug!(
+                    "oob cwd inherit: abandon after {:?}, keep cached startup cd",
+                    budget
+                );
+                continue;
             }
-            None => {
-                log::debug!("oob cwd refresh: no result, fall back to cached cwd ({:?})", fallback);
-                fallback
+            let Some((src_ti, src_pi)) = crate::ui::tab_pane::pane_location_by_token(
+                &self.tabs,
+                &job.source_session_id,
+                job.source_pane_token,
+            ) else {
+                log::debug!("oob cwd inherit: source pane gone, drop delivery");
+                continue;
+            };
+            let Some(src) = self
+                .tabs
+                .get_mut(src_ti)
+                .and_then(|t| t.panes.get_mut(src_pi))
+            else {
+                continue;
+            };
+            src.terminal.poll_oob_cwd_query();
+            if !src.terminal.oob_refresh_finished() {
+                keep.push(job);
+                need_repaint = true;
+                continue;
+            }
+            let refreshed = src.terminal.take_oob_refresh_cwd();
+            let Some(cwd) = refreshed.filter(|c| !c.trim().is_empty()) else {
+                log::debug!("oob cwd inherit: refresh empty, keep cached startup cd");
+                continue;
+            };
+            let Some((dest_ti, dest_pi)) = crate::ui::tab_pane::pane_location_by_token(
+                &self.tabs,
+                &job.dest_session_id,
+                job.dest_pane_token,
+            ) else {
+                log::debug!("oob cwd inherit: dest pane gone or index drifted, drop delivery");
+                continue;
+            };
+            // 再确认仍是登记时的 session（token 已唯一，session_id 双重保险）。
+            let Some(dest) = self
+                .tabs
+                .get_mut(dest_ti)
+                .and_then(|t| t.panes.get_mut(dest_pi))
+            else {
+                continue;
+            };
+            if dest.session_id != job.dest_session_id || dest.pane_token != job.dest_pane_token {
+                log::debug!("oob cwd inherit: dest identity mismatch, drop delivery");
+                continue;
+            }
+            if !job.same_session && job.origin.is_none() {
+                log::debug!("oob cwd inherit: cross-session without origin, skip");
+                continue;
+            }
+            // 只更新尚未发出的 pending，保留 Match / Unconditional；已发出则不重新 arm。
+            if dest.terminal.update_pending_startup_directory(&cwd) {
+                log::debug!("oob cwd inherit: update pending startup cd: {cwd}");
+                need_repaint = true;
+            } else {
+                log::debug!(
+                    "oob cwd inherit: pending already sent or never armed, keep as-is"
+                );
+            }
+        }
+        self.pending_inherit_cwd = keep;
+        if need_repaint {
+            if self.pending_inherit_cwd.is_empty() {
+                ctx.request_repaint();
+            } else {
+                ctx.request_repaint_after(Duration::from_millis(50));
             }
         }
     }
@@ -6013,17 +6168,23 @@ impl MistTermApp {
             );
             return;
         };
-        // #392：继承当前活动 pane 的 shell 汇报目录；#419 点查跟进：先做一次
-        // 带外刷新查询拿当前真实 cwd（zsh 不发 OSC 7，缓存可能是登录时的 home），
-        // 失败/超时退回统一继承源缓存。A+B：读点统一走 pane_inherit_cwd_at。
-        let inherited_cwd = self
+        // #392 / #419：先用缓存 cwd 建窗；源带外刷新异步完成后投递真实目录。
+        let source = self
             .active_tab
-            .and_then(|i| self.active_pane_idx(i).map(|p| (i, p)))
-            .and_then(|(i, p)| self.refresh_source_cwd_for_inherit(ctx, i, p));
+            .and_then(|i| self.active_pane_idx(i).map(|p| (i, p)));
+        let inherited_cwd =
+            source.and_then(|(i, p)| self.refresh_source_cwd_for_inherit(ctx, i, p));
         self.open_new_tab_for_session_with_cwd(ctx, &session, inherited_cwd);
+        if let Some((si, sp)) = source {
+            let dest_tab = self.tabs.len().saturating_sub(1);
+            self.track_inherit_cwd_delivery(si, sp, dest_tab, 0);
+        }
     }
 
     /// #392：同 [`Self::open_new_tab_for_session`]，可带继承目录。
+    ///
+    /// 若调用方已发起源会话带外刷新，应在本函数返回后
+    /// [`Self::track_inherit_cwd_delivery`]（见 ⌘T / 侧栏复制等入口）。
     pub(crate) fn open_new_tab_for_session_with_cwd(
         &mut self,
         ctx: &egui::Context,
@@ -6962,7 +7123,9 @@ impl MistTermApp {
                     "command_preview": command_preview(&command, 120),
                 })),
         );
-        self.ai_panel.mark_agent_executing();
+        self.ai_panel.mark_agent_awaiting_approval(
+            crate::core::controlplane::CP_APPROVAL_BUDGET_SECS,
+        );
 
         let req = CreatePlanRequest {
             intent: if intent.trim().is_empty() {
@@ -6990,7 +7153,7 @@ impl MistTermApp {
                     &req,
                     &labels,
                     auto_approve,
-                    300,
+                    crate::core::controlplane::CP_APPROVAL_BUDGET_SECS,
                 )
             })();
             match result {
@@ -9692,6 +9855,7 @@ impl eframe::App for MistTermApp {
         self.release_terminal_keyboard_if_ui_typing(ctx);
         self.poll_market_catalog_refresh(ctx);
         self.poll_market_catalog_debounce();
+        self.poll_inherit_cwd_deliveries(ctx);
         self.update_tick(ctx);
         self.update_handle_close(ctx);
 
@@ -10554,11 +10718,9 @@ impl eframe::App for MistTermApp {
         // 须在所有 UI(含终端 IME 框)画完之后。
         self.finish_terminal_copy_shortcut(ctx);
 
-        // 低频兜底重绘：eframe 响应式模式空闲时不重绘，遇到系统截图/窗口遮挡/外接屏
-        // 切换等「不产生输入事件」的场景会停在旧帧看似「卡死」，同时也会触发卡顿看门狗
-        // 误报。每秒至少醒一次即可自愈（空闲开销可忽略）；真正的主线程 hang（update 被
-        // 阻塞 >3s）依然会被 hang_reporter 正常检出。
-        ctx.request_repaint_after(Duration::from_secs(1));
+        // 事件优先：获焦 / 解除遮挡立刻重绘；平台不报这些事件时才靠长间隔兜底。
+        self.poll_viewport_visibility_repaint(ctx);
+        ctx.request_repaint_after(IDLE_SELF_HEAL_REPAINT);
     }
 }
 

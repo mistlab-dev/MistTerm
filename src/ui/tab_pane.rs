@@ -104,8 +104,13 @@ impl SplitNode {
 
 }
 
+/// 每个 pane 实例唯一；标签关合导致下标漂移后仍可对上「就是这一扇窗」。
+static NEXT_PANE_TOKEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
 pub struct TerminalPane {
     pub session_id: String,
+    /// 本 pane 实例令牌（与 `session_id` 一起作稳定身份，不用 tab/pane 下标）。
+    pub pane_token: u64,
     pub title: String,
     pub terminal: TerminalView,
     /// #390：该窗格最近一次 OSC 7501 程序状态（Agent 红绿灯）。
@@ -142,6 +147,7 @@ impl TerminalPane {
     pub fn new(session_id: String, title: String, terminal: TerminalView) -> Self {
         Self {
             session_id,
+            pane_token: NEXT_PANE_TOKEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             title,
             terminal,
             agent_status: None,
@@ -156,6 +162,22 @@ impl TerminalPane {
             last_term_rect: egui::Rect::NOTHING,
         }
     }
+}
+
+/// 按 `session_id` + `pane_token` 定位 pane；关左侧标签导致下标漂移时仍能对上原窗格。
+pub fn pane_location_by_token(
+    tabs: &[TerminalTab],
+    session_id: &str,
+    pane_token: u64,
+) -> Option<(usize, usize)> {
+    for (ti, tab) in tabs.iter().enumerate() {
+        for (pi, pane) in tab.panes.iter().enumerate() {
+            if pane.session_id == session_id && pane.pane_token == pane_token {
+                return Some((ti, pi));
+            }
+        }
+    }
+    None
 }
 
 pub struct TerminalTab {
@@ -871,4 +893,45 @@ fn render_one_pane(
             }
     }
     });
+}
+
+#[cfg(test)]
+mod pane_token_tests {
+    use super::*;
+    use crate::ui::terminal::TerminalView;
+
+    /// 场景（PR #506 审查）：关左侧标签后下标前移，但 token 仍能找到原来的分屏目标，
+    /// 旧下标会落到别人的会话——投递必须按 token，不能按下标。
+    #[test]
+    fn closing_left_tab_shifts_index_but_token_still_finds_dest() {
+        let left = TerminalPane::new("sess-left".into(), "L".into(), TerminalView::new());
+        let mut right = TerminalPane::new("sess-right".into(), "R".into(), TerminalView::new());
+        let dest_token = right.pane_token;
+        right.terminal.arm_startup_directory("/cached");
+        let mut tabs = vec![
+            TerminalTab::single(left),
+            TerminalTab::single(right),
+        ];
+        // 登记时 dest 在 tab 1；关掉左侧后它变成 tab 0。
+        assert_eq!(
+            pane_location_by_token(&tabs, "sess-right", dest_token),
+            Some((1, 0))
+        );
+        tabs.remove(0);
+        assert_eq!(
+            pane_location_by_token(&tabs, "sess-right", dest_token),
+            Some((0, 0)),
+            "下标漂移后仍须靠 token 找到原 pane"
+        );
+        // 错误 session / 错误 token → 找不到，避免投到别人。
+        assert!(pane_location_by_token(&tabs, "sess-left", dest_token).is_none());
+        assert!(pane_location_by_token(&tabs, "sess-right", dest_token + 999).is_none());
+    }
+
+    #[test]
+    fn pane_tokens_are_unique() {
+        let a = TerminalPane::new("s".into(), "a".into(), TerminalView::new());
+        let b = TerminalPane::new("s".into(), "b".into(), TerminalView::new());
+        assert_ne!(a.pane_token, b.pane_token);
+    }
 }
