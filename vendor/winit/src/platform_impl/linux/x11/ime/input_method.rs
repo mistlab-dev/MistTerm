@@ -63,11 +63,17 @@ impl InputMethod {
             std::slice::from_raw_parts((*styles).supported_styles, (*styles).count_styles as _)
                 .iter()
                 .for_each(|style| match *style {
-                    XIM_PREEDIT_STYLE => {
-                        preedit_style = Some(Style::Preedit(*style));
+                    // IBus XIM delivers commits through XIM_COMMIT and lookup
+                    // independently of the preedit style. Prefer Nothing over
+                    // PreeditCallbacks when available: ibus-libpinyin displays
+                    // its own candidate/preedit UI, while its callback Draw
+                    // updates may contain no usable text. This style choice
+                    // does not guarantee that the commit lookup succeeds.
+                    XIM_NOTHING_STYLE => {
+                        preedit_style = Some(Style::Nothing(*style));
                     },
-                    XIM_NOTHING_STYLE if preedit_style.is_none() => {
-                        preedit_style = Some(Style::Nothing(*style))
+                    XIM_PREEDIT_STYLE if preedit_style.is_none() => {
+                        preedit_style = Some(Style::Preedit(*style));
                     },
                     XIM_NONE_STYLE => none_style = Some(Style::None(*style)),
                     _ => (),

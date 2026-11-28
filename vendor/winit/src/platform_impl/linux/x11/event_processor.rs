@@ -135,12 +135,159 @@ impl EventProcessor {
     #[must_use]
     fn filter_event(&mut self, xev: &mut XEvent) -> bool {
         let wt = Self::window_target(&self.target);
+        // MISTTERM (#431/#430): probe which events the IME consumes. ibus/XIM
+        // swallows composition keys (Space / candidate digits) here and is
+        // expected to deliver the commit via a synthetic keycode-0 KeyPress
+        // plus preedit callbacks; logging this boundary distinguishes "key
+        // eaten, commit never sent" from "commit sent but dropped later".
+        let probe = std::env::var_os("MISTTERM_IME_DEBUG").is_some();
+        if probe {
+            let event_type = xev.get_type();
+            if event_type == xlib::KeyPress || event_type == xlib::KeyRelease {
+                let kev: &XKeyEvent = xev.as_ref();
+                eprintln!(
+                    "[ime-xim] FILTER t={} keycode={} state={:#x} win={:#x}",
+                    if event_type == xlib::KeyPress { "press" } else { "release" },
+                    kev.keycode,
+                    kev.state,
+                    kev.window
+                );
+            }
+        }
         unsafe {
             (wt.xconn.xlib.XFilterEvent)(xev, {
                 let xev: &XAnyEvent = xev.as_ref();
                 xev.window
             }) == xlib::True
         }
+    }
+
+    fn ime_debug() -> bool {
+        std::env::var_os("MISTTERM_IME_DEBUG").is_some()
+    }
+
+    /// Pull a just-committed XIM string out of every known IC.
+    ///
+    /// Tries the event window first, then the active window, then any other
+    /// IC. `lookup_utf8` consumes libX11's commit buffer, so this must run
+    /// once per payload.
+    fn lookup_commit_on_all_ics(&self, kev: &mut XKeyEvent) -> Option<String> {
+        let wt = Self::window_target(&self.target);
+        let ime = match wt.ime.as_ref() {
+            Some(ime) => ime,
+            None => return None,
+        };
+        let ime = ime.borrow();
+
+        let mut windows = Vec::new();
+        if kev.window != 0 {
+            windows.push(kev.window);
+        }
+        if let Some(window) = self.active_window {
+            let window = window as XWindow;
+            if !windows.contains(&window) {
+                windows.push(window);
+            }
+        }
+        for (window, _) in ime.all_ics() {
+            if !windows.contains(&window) {
+                windows.push(window);
+            }
+        }
+
+        for window in windows {
+            if let Some(ic) = ime.get_context(window) {
+                let text = wt.xconn.lookup_utf8(ic, kev);
+                if !text.is_empty() {
+                    if Self::ime_debug() {
+                        eprintln!(
+                            "[ime-xim] HARVEST window={:#x} ic={:p} serial={} -> {:?}",
+                            window, ic, kev.serial, text
+                        );
+                    }
+                    return Some(text);
+                }
+            }
+        }
+        None
+    }
+
+    /// Collect commit strings that XFilterEvent just made available, plus any
+    /// strings flushed from an IC that was about to be destroyed.
+    fn harvest_xim_commits(&mut self, current: &mut XEvent) -> Vec<String> {
+        let mut commits = Vec::new();
+
+        if current.get_type() == xlib::KeyPress {
+            let kev: &mut XKeyEvent = current.as_mut();
+            if kev.keycode == 0 {
+                if let Some(text) = self.lookup_commit_on_all_ics(kev) {
+                    commits.push(text);
+                }
+            }
+        }
+
+        let wt = Self::window_target(&self.target);
+        let mut peeked = None;
+        unsafe {
+            if (wt.xconn.xlib.XPending)(wt.xconn.display) != 0 {
+                let mut ev: XEvent = std::mem::zeroed();
+                (wt.xconn.xlib.XPeekEvent)(wt.xconn.display, &mut ev);
+                if ev.get_type() == xlib::KeyPress {
+                    let kev: &mut XKeyEvent = ev.as_mut();
+                    if kev.keycode == 0 {
+                        peeked = Some(ev);
+                    }
+                }
+            }
+        }
+        if let Some(ref mut ev) = peeked {
+            let kev: &mut XKeyEvent = ev.as_mut();
+            if let Some(text) = self.lookup_commit_on_all_ics(kev) {
+                commits.push(text);
+            }
+        }
+
+        if let Some(ime) = wt.ime.as_ref() {
+            let mut ime = ime.borrow_mut();
+            while let Some(text) = ime.take_pending_commit() {
+                commits.push(text);
+            }
+        }
+
+        commits
+    }
+
+    fn emit_ime_commit<T: 'static, F>(&mut self, written: String, callback: &mut F)
+    where
+        F: FnMut(&RootAEL, Event<T>),
+    {
+        let window = match self.active_window {
+            Some(window) => window,
+            None => {
+                if Self::ime_debug() {
+                    eprintln!(
+                        "[ime-xim] COMMIT-EMIT dropped (no active window): {:?}",
+                        written
+                    );
+                }
+                return;
+            },
+        };
+        let window_id = mkwid(window);
+        if Self::ime_debug() {
+            eprintln!("[ime-xim] COMMIT-EMIT {:?}", written);
+        }
+
+        let event = Event::WindowEvent {
+            window_id,
+            event: WindowEvent::Ime(Ime::Preedit(String::new(), None)),
+        };
+        callback(&self.target, event);
+
+        self.is_composing = false;
+        let event =
+            Event::WindowEvent { window_id, event: WindowEvent::Ime(Ime::Commit(written)) };
+        callback(&self.target, event);
     }
 
     fn process_xevent<T: 'static, F>(&mut self, xev: &mut XEvent, mut callback: F)
@@ -185,6 +332,16 @@ impl EventProcessor {
         } else {
             self.filter_event(xev)
         };
+
+        // MISTTERM (#430): libX11 stores the XIM_COMMIT string on the IC and
+        // PutBacks a keycode-0 KeyPress *during* XFilterEvent. process_event
+        // then drains ImeRequest::Position/Allow before the next X event is
+        // read, and that can clear or desync the IC commit buffer so a later
+        // Xutf8LookupString returns empty. Harvest (and emit) immediately,
+        // while the payload is still in the IC.
+        for written in self.harvest_xim_commits(xev) {
+            self.emit_ime_commit(written, &mut callback);
+        }
 
         // Don't process event if it was filtered.
         if filtered {
@@ -985,8 +1142,73 @@ impl EventProcessor {
             &self.xmodmap,
         );
 
+        // MISTTERM (#431/#430): the XIM synthetic commit path. ibus/XIM
+        // delivers the composed string as a keycode-0 KeyPress AFTER having
+        // filtered the real key; if this probe is silent while the real key
+        // was filtered, the server never sent the commit on THIS IC — that is
+        // the "committed text never reaches the app" signature.
+        let ime_probe = std::env::var_os("MISTTERM_IME_DEBUG").is_some();
+        if ime_probe {
+            eprintln!(
+                "[ime-xim] KEY-IN t={} keycode={} state={:#x} composing={}",
+                if event_type == xlib::KeyPress { "press" } else { "release" },
+                xev.keycode,
+                xev.state,
+                self.is_composing
+            );
+        }
+
         // MistTerm: still emit KeyboardInput for Control chords during preedit.
         if keycode != 0 && (!self.is_composing || bypass_ime) {
+            // MISTTERM (#430): when an in-place allow-toggle (egui-winit
+            // interrupt_ime → set_ime_allowed(false→true)) recreated the IC
+            // mid-composition, winit's own Ime drain (see process_event) may have
+            // already delivered the XIM `End` callback — clearing `is_composing`
+            // — BEFORE the raw keys of the same composition were processed.
+            // With `is_composing == false` the guard above let those keys through
+            // as plain KeyboardInput, and the commit extraction below was
+            // skipped, so the final `Xutf8LookupString` commit (“你好”/“中文”)
+            // never reached the app: the user saw only the first Latin letter
+            // (“n”/“z”) in the PTY. Try to extract the commit text first and
+            // deliver it as an Ime::Commit so apps that write only Ime commits
+            // to the PTY keep the full composed string. When the IME is not
+            // allowed (or there is no IC) `lookup_utf8` cannot run — deliver the
+            // raw key as before.
+            let mut ime_commit: Option<String> = None;
+            if !bypass_ime {
+                let wt = Self::window_target(&self.target);
+                if let Some(ic) = wt
+                    .ime
+                    .as_ref()
+                    .and_then(|ime| ime.borrow().get_context(window as XWindow))
+                {
+                    let written = wt.xconn.lookup_utf8(ic, xev);
+                    if ime_probe {
+                        eprintln!(
+                            "[ime-xim] LOOKUP(raw-branch) keycode={} -> {:?}",
+                            xev.keycode, written
+                        );
+                    }
+                    if !written.is_empty() {
+                        ime_commit = Some(written);
+                    }
+                }
+            }
+            if let Some(written) = ime_commit {
+                let event = Event::WindowEvent {
+                    window_id,
+                    event: WindowEvent::Ime(Ime::Preedit(String::new(), None)),
+                };
+                callback(&self.target, event);
+
+                let event =
+                    Event::WindowEvent { window_id, event: WindowEvent::Ime(Ime::Commit(written)) };
+
+                self.is_composing = false;
+                callback(&self.target, event);
+                return;
+            }
+
             // Don't alter the modifiers state from replaying.
             if replay {
                 self.send_synthic_modifier_from_core(window_id, xev.state as u16, &mut callback);
@@ -1018,10 +1240,34 @@ impl EventProcessor {
             return;
         }
 
+        // Commits rescued at IC destruction (or harvested earlier in this
+        // event) are already emitted from process_xevent. Still accept a
+        // leftover pending string here if emit could not run (no callback).
+        let pending = wt.ime.as_ref().and_then(|ime| ime.borrow_mut().take_pending_commit());
+        if let Some(written) = pending {
+            if ime_probe {
+                eprintln!("[ime-xim] KEY-IN pending-commit -> {:?}", written);
+            }
+            self.emit_ime_commit(written, &mut callback);
+            return;
+        }
+
         if let Some(ic) =
             wt.ime.as_ref().and_then(|ime| ime.borrow().get_context(window as XWindow))
         {
+            // libX11 queues a keycode-0 event only after receiving XIM_COMMIT
+            // and registering its text against the matching XIC. Repeating an
+            // empty lookup cannot make a late commit appear and may block the
+            // event loop while losing the diagnostic state.
             let written = wt.xconn.lookup_utf8(ic, xev);
+            if ime_probe {
+                eprintln!(
+                    "[ime-xim] LOOKUP keycode={} -> {:?} (bytes={})",
+                    xev.keycode,
+                    written,
+                    written.len()
+                );
+            }
             if !written.is_empty() {
                 let event = Event::WindowEvent {
                     window_id,
@@ -1293,6 +1539,10 @@ impl EventProcessor {
         }
 
         self.active_window = Some(window);
+        // MISTTERM (#430): keep the IME mirror in sync (see ime/mod.rs).
+        if let Some(ime) = wt.ime.as_ref() {
+            ime.borrow_mut().set_active_window(Some(window as xproto::Window));
+        }
 
         wt.update_listen_device_events(true);
 
@@ -1352,6 +1602,10 @@ impl EventProcessor {
         }
 
         if self.active_window.take() == Some(window) {
+            // MISTTERM (#430): mirror cleared on focus-out.
+            if let Some(ime) = wt.ime.as_ref() {
+                ime.borrow_mut().set_active_window(None);
+            }
             let window_id = mkwid(window);
 
             wt.update_listen_device_events(false);
