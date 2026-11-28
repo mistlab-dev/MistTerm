@@ -34,8 +34,9 @@ struct ZmodemRxSession {
     residue: Vec<u8>,
     /// 接收结束时刻（`SessionComplete`）；作为残尾窗口的起点。
     ended_at: Option<Instant>,
-    /// 窗口内单独到达、证据还不够的字面 `00`。先按住：既不进 VTE，也不算已确认残尾。
-    /// 后续分片若补齐 bracketed-paste / 提示符则丢弃；若是着色或普通正文则放回显示路径。
+    /// 单独到达、证据还不够的字面 `00`。先按住：既不进 VTE，也不算已确认残尾。
+    /// 后续分片若是 ESC 序列（bracketed-paste / OSC 标题 / 着色 CSI）或提示符则丢弃；
+    /// 只有普通正文才放回显示路径。
     uncertain_hold: Vec<u8>,
 }
 
@@ -152,15 +153,27 @@ fn leftover_ascii_zero_prefix(data: &[u8]) -> usize {
     }
     n
 }
-/// 完整的 bracketed-paste CSI（bash 在命令结束后常重开）。不含着色 CSI / OSC。
+/// 完整的 bracketed-paste CSI（bash 在命令结束后常重开）。
 fn starts_with_bracketed_paste_csi(data: &[u8]) -> bool {
     data.starts_with(b"\x1b[?2004h") || data.starts_with(b"\x1b[?2004l")
 }
 
-/// 同包里足以把前面的 `00` 判成残尾、而不是「00 + 着色/正文」的证据。
-/// 不把不完整的 `ESC[` 当证据：那也可能是 `\x1b[32m` 的开头。
+/// 同包或下一分片里足以把前面的 `00` 判成残尾的证据。
+///
+/// 只认 `ESC[?2004h` 不够：Linux bash 恢复提示符时，残尾 `00` 后面经常先到
+/// OSC 标题（`ESC]0;…`）或着色 CSI（`ESC[01;32m`），2004 与 `$ ` 不一定
+/// 和 `00` 在同一分片。把任意 ESC 前缀都当成终端恢复，而不是普通正文。
+/// 行首孤立的 CR 会先跳过（bash 在 2004l 后常先发 CR），LF 不跳过，以免
+/// 把真正的 `00\r\n` 行误判成残尾。
 fn rest_has_shell_restore_evidence(rest: &[u8]) -> bool {
-    starts_with_bracketed_paste_csi(rest) || prompt_fragment_pos(rest).is_some()
+    if prompt_fragment_pos(rest).is_some() {
+        return true;
+    }
+    let mut cur = rest;
+    while cur.first() == Some(&b'\r') {
+        cur = &cur[1..];
+    }
+    starts_with_bracketed_paste_csi(cur) || cur.first() == Some(&0x1b)
 }
 
 /// 已确认吞下的残尾里是否已有充分协议证据（`**` / ZDLE / ZFIN ZHEX）。
@@ -279,13 +292,13 @@ fn classify_rx_residue_prefix(
             if zero_n > 0 {
                 let after_zeros = &data[start + zero_n..];
                 if rest_has_shell_restore_evidence(after_zeros) {
-                    // 只吞字面 `0`/`00`，CSI/OSC/提示符留给 VTE。
+                    // 只吞字面 `0`/`00`，ESC/提示符留给 VTE。
                     return ResiduePrefix::Commit(start + zero_n);
                 }
                 if after_zeros.is_empty() && fill == 0 && start == 0 {
                     return ResiduePrefix::HoldZeros(zero_n);
                 }
-                // `00\r\n`、`00` + 着色 CSI / OSC / 其它 hex 正文：一律不吞。
+                // `00\r\n`、其它 hex 正文：不是残尾。
                 return ResiduePrefix::None;
             }
             // 其它 hex 正文：不是残尾。
@@ -989,10 +1002,10 @@ impl LrzszTransfer {
                         let had_held = !session.uncertain_hold.is_empty();
                         let mut out = std::mem::take(&mut session.uncertain_hold);
                         if restore {
-                            // 下一分片是 2004 / 提示符：先前按住的 `00` 是残尾，丢弃。
+                            // 下一分片是 ESC 序列 / 提示符：先前按住的 `00` 是残尾，丢弃。
                             out.clear();
                         }
-                        // 下一分片是着色或普通正文：把按住的 `00` 放回显示，不得误吞。
+                        // 下一分片是普通正文：把按住的 `00` 放回显示，不得误吞。
                         out.extend_from_slice(&combined);
                         // 普通输出已开始（或提示符已恢复）：停止再扫残尾。
                         let clear = !restore || prompt_fragment_pos(&combined).is_some();
@@ -1364,6 +1377,22 @@ mod tests {
         v
     }
 
+    /// QA bash（ mist410 ）命令结束后的可见提示符：绿用户名、蓝目录、`$ `。
+    fn color_prompt() -> Vec<u8> {
+        let mut v = b"\x1b[01;32m".to_vec();
+        v.extend_from_slice(b"mist410@host");
+        v.extend_from_slice(b"\x1b[00m:\x1b[01;34m~\x1b[00m$ ");
+        v
+    }
+
+    /// 实际恢复序列：2004h + OSC 标题 + 着色提示符（与 41022 bash 一致）。
+    fn bash_restore_prompt() -> Vec<u8> {
+        let mut v = CSI_BRACKETED_PASTE_ON.to_vec();
+        v.extend_from_slice(b"\x1b]0;mist410@host: ~\x07");
+        v.extend_from_slice(&color_prompt());
+        v
+    }
+
     fn transfer_after_session_complete() -> LrzszTransfer {
         transfer_after_session_complete_ended_ago(Duration::from_millis(0))
     }
@@ -1645,19 +1674,33 @@ mod tests {
     }
 
     #[test]
-    fn test_rx_residue_prefix_does_not_swallow_color_osc_or_hex_body() {
+    fn test_rx_residue_prefix_eats_00_before_osc_or_color_csi() {
         let color = color_line();
-        assert_eq!(rx_residue_prefix_len(&color, RX_TAIL_RESIDUE_CAP), 0);
+        assert_eq!(rx_residue_prefix_len(&color, RX_TAIL_RESIDUE_CAP), 2);
         assert_eq!(
             rx_residue_prefix_len_at(&color, RX_TAIL_RESIDUE_CAP, false, false),
-            0,
-            "after the window, color output still must not be swallowed"
+            2,
+            "after the window, 00 before color CSI is still residue"
         );
 
         let mut osc = b"00".to_vec();
         osc.extend_from_slice(OSC_TITLE);
-        assert_eq!(rx_residue_prefix_len(&osc, RX_TAIL_RESIDUE_CAP), 0);
+        assert_eq!(rx_residue_prefix_len(&osc, RX_TAIL_RESIDUE_CAP), 2);
 
+        let mut glued_color_prompt = b"00".to_vec();
+        glued_color_prompt.extend_from_slice(&color_prompt());
+        assert_eq!(rx_residue_prefix_len(&glued_color_prompt, RX_TAIL_RESIDUE_CAP), 2);
+
+        // 不完整的 ESC[ 也是终端序列开头，应吞掉 00、保留 ESC。
+        assert_eq!(rx_residue_prefix_len(b"00\x1b[?200", RX_TAIL_RESIDUE_CAP), 2);
+        assert_eq!(rx_residue_prefix_len(b"00\r\x1b[?2004h", RX_TAIL_RESIDUE_CAP), 2);
+    }
+
+    #[test]
+    fn test_rx_residue_prefix_does_not_swallow_color_osc_or_hex_body() {
+        // 没有字面 00 前缀时，着色 / OSC / hex 正文本身不是残尾。
+        assert_eq!(rx_residue_prefix_len(COLOR_GREEN, RX_TAIL_RESIDUE_CAP), 0);
+        assert_eq!(rx_residue_prefix_len(OSC_TITLE, RX_TAIL_RESIDUE_CAP), 0);
         assert_eq!(
             rx_residue_prefix_len(b"ff\x1b[32mred\x1b[0m", RX_TAIL_RESIDUE_CAP),
             0
@@ -1677,26 +1720,26 @@ mod tests {
         assert_eq!(rx_residue_prefix_len(b"\r\n", RX_TAIL_RESIDUE_CAP), 0);
         let with_nl = b"\r\nuser@host:~$ ";
         assert_eq!(rx_residue_prefix_len(with_nl, RX_TAIL_RESIDUE_CAP), 0);
-        // 不完整的 ESC[?200 不能当 2004 证据（也可能是着色 CSI 的开头）。
-        assert_eq!(rx_residue_prefix_len(b"00\x1b[?200", RX_TAIL_RESIDUE_CAP), 0);
     }
 
     #[test]
-    fn test_feed_receive_passes_00_plus_ansi_color_and_crlf() {
+    fn test_feed_receive_strips_00_plus_ansi_color_and_keeps_text() {
         let lrzsz = transfer_after_session_complete();
         let color = color_line();
         match lrzsz.feed_receive(&color) {
-            ReceiveFeed::Stripped { rest } | ReceiveFeed::Passthrough { data: rest } => {
-                assert_eq!(rest, color, "00 + color CSI + CR/LF must stay intact");
+            ReceiveFeed::Stripped { rest } => {
+                assert_eq!(&rest, &color[2..], "00 before color CSI must be dropped");
+                assert_eq!(rest.first().copied(), Some(0x1b));
             }
-            other => panic!("expected color line passthrough, got {other:?}"),
+            other => panic!("expected stripped color line, got {other:?}"),
         }
-        assert!(!lrzsz.has_rx_tail_pending());
+        // 还没有 `$ ` 提示符，窗口保持，以免再漏下一段残尾。
+        assert!(lrzsz.has_rx_tail_pending());
     }
 
     #[test]
-    fn test_feed_receive_releases_held_00_when_next_chunk_is_color() {
-        // 窗口内先到单独 `00`（按住），下一分片是着色正文：必须放回 `00`，不得丢掉。
+    fn test_feed_receive_drops_held_00_when_next_chunk_is_color() {
+        // 先到单独 `00`（按住），下一分片是着色 CSI：00 是残尾，必须丢掉。
         let lrzsz = transfer_after_session_complete();
         assert_eq!(lrzsz.feed_receive(b"00"), ReceiveFeed::Consumed);
         assert!(lrzsz.has_rx_tail_pending());
@@ -1705,15 +1748,14 @@ mod tests {
         second.extend_from_slice(COLOR_RESET);
         second.extend_from_slice(b"\r\n");
         match lrzsz.feed_receive(&second) {
-            ReceiveFeed::Stripped { rest } | ReceiveFeed::Passthrough { data: rest } => {
-                let mut expected = b"00".to_vec();
-                expected.extend_from_slice(&second);
-                assert_eq!(rest, expected);
-                assert!(rest.ends_with(b"\r\n"));
+            ReceiveFeed::Stripped { rest } => {
+                assert_eq!(rest, second);
+                assert_eq!(rest.first().copied(), Some(0x1b));
+                assert!(!rest.starts_with(b"00"));
             }
-            other => panic!("expected released 00 + color, got {other:?}"),
+            other => panic!("expected color without leftover 00, got {other:?}"),
         }
-        assert!(!lrzsz.has_rx_tail_pending());
+        assert!(lrzsz.has_rx_tail_pending());
     }
 
     #[test]
@@ -1757,19 +1799,18 @@ mod tests {
     }
 
     #[test]
-    fn test_feed_receive_00_plus_osc_without_prompt_is_kept() {
+    fn test_feed_receive_00_plus_osc_without_prompt_drops_zeros() {
         let lrzsz = transfer_after_session_complete();
         let mut data = b"00".to_vec();
         data.extend_from_slice(OSC_TITLE);
         match lrzsz.feed_receive(&data) {
-            ReceiveFeed::Stripped { rest } | ReceiveFeed::Passthrough { data: rest } => {
-                assert_eq!(
-                    rest, data,
-                    "00 + OSC title must not be stripped without prompt evidence"
-                );
+            ReceiveFeed::Stripped { rest } => {
+                assert_eq!(rest, OSC_TITLE, "00 before OSC title is residue");
+                assert_eq!(rest.first().copied(), Some(0x1b));
             }
-            other => panic!("expected OSC kept, got {other:?}"),
+            other => panic!("expected OSC without leftover 00, got {other:?}"),
         }
+        assert!(lrzsz.has_rx_tail_pending());
     }
 
     #[test]
@@ -1915,13 +1956,83 @@ mod tests {
     }
 
     #[test]
-    fn test_rx_residue_prefix_does_not_swallow_lone_0_plus_color_or_digits() {
-        // 与既有 `00` + 着色 / 正文安全边界一致：没有提示符或 2004 证据时不吞。
+    fn test_rx_residue_prefix_does_not_swallow_lone_0_plus_digits() {
+        // `0123` 是普通数字正文，不能因为开头是 `0` 就吞。
         assert_eq!(rx_residue_prefix_len(b"0123", RX_TAIL_RESIDUE_CAP), 0);
         let mut colored = b"0".to_vec();
         colored.extend_from_slice(COLOR_GREEN);
         colored.extend_from_slice(b"red");
         colored.extend_from_slice(COLOR_RESET);
-        assert_eq!(rx_residue_prefix_len(&colored, RX_TAIL_RESIDUE_CAP), 0);
+        // 单独 `0` 后紧跟着色 CSI，与 `00` 同样视为残尾。
+        assert_eq!(rx_residue_prefix_len(&colored, RX_TAIL_RESIDUE_CAP), 1);
+    }
+
+    /// 产品 898cfaf 失败形态：迟到的 `00` 与着色提示符同包，中间没有 2004。
+    /// `00` 是默认色，随后的用户名是绿色，正好是 VTE 先画残尾再画 PS1。
+    #[test]
+    fn test_feed_receive_late_00_glued_to_color_prompt_without_2004() {
+        let lrzsz = transfer_after_session_complete_ended_ago(
+            RX_TAIL_WINDOW + Duration::from_millis(500),
+        );
+        let mut data = b"00".to_vec();
+        data.extend_from_slice(&color_prompt());
+        match lrzsz.feed_receive(&data) {
+            ReceiveFeed::Stripped { rest } => {
+                assert_eq!(rest, color_prompt());
+                assert_eq!(rest.first().copied(), Some(0x1b));
+                assert!(!rest.starts_with(b"00"));
+            }
+            other => panic!("expected color prompt without 00, got {other:?}"),
+        }
+        assert!(!lrzsz.has_rx_tail_pending());
+    }
+
+    /// 实际 bash 恢复常把 OSC 标题与着色提示符拆成相邻分片；10s 后到达也一样。
+    #[test]
+    fn test_feed_receive_late_split_00_then_osc_then_color_prompt() {
+        let lrzsz = transfer_after_session_complete_ended_ago(
+            RX_TAIL_WINDOW + Duration::from_millis(500),
+        );
+        assert_eq!(lrzsz.feed_receive(b"00"), ReceiveFeed::Consumed);
+        assert!(lrzsz.has_rx_tail_pending());
+
+        match lrzsz.feed_receive(OSC_TITLE) {
+            ReceiveFeed::Stripped { rest } => {
+                assert_eq!(rest, OSC_TITLE);
+                assert!(!rest.starts_with(b"00"));
+            }
+            other => panic!("late 00 must be dropped before OSC, got {other:?}"),
+        }
+        assert!(
+            lrzsz.has_rx_tail_pending(),
+            "OSC title alone must not end the residue window"
+        );
+
+        match lrzsz.feed_receive(&color_prompt()) {
+            ReceiveFeed::Stripped { rest } | ReceiveFeed::Passthrough { data: rest } => {
+                assert_eq!(rest, color_prompt());
+                assert!(!rest.starts_with(b"00"));
+            }
+            other => panic!("expected clean color prompt, got {other:?}"),
+        }
+        assert!(!lrzsz.has_rx_tail_pending());
+    }
+
+    #[test]
+    fn test_feed_receive_late_00_glued_to_bash_restore_prompt() {
+        let lrzsz = transfer_after_session_complete_ended_ago(
+            RX_TAIL_WINDOW + Duration::from_millis(500),
+        );
+        let mut data = b"00".to_vec();
+        data.extend_from_slice(&bash_restore_prompt());
+        match lrzsz.feed_receive(&data) {
+            ReceiveFeed::Stripped { rest } => {
+                assert_eq!(rest, bash_restore_prompt());
+                assert_eq!(rest.first().copied(), Some(0x1b));
+                assert!(!rest.starts_with(b"00"));
+            }
+            other => panic!("expected bash restore prompt without 00, got {other:?}"),
+        }
+        assert!(!lrzsz.has_rx_tail_pending());
     }
 }
