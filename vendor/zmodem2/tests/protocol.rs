@@ -39,6 +39,23 @@ pub fn test_header_read(
 }
 
 #[test]
+fn test_receiver_zrinit_advertises_streaming_window() {
+    let receiver = Receiver::new().unwrap();
+    let wire = receiver.drain_outgoing().to_vec();
+    let text = String::from_utf8_lossy(&wire);
+    assert!(
+        text.contains("0100000063"),
+        "ZRINIT should advertise bufsize=0 and CANOVIO/CANFC32/ESCCTL: {:02x?}",
+        wire
+    );
+    assert!(
+        !text.contains("0104000061"),
+        "legacy 1024-byte stop-and-wait ZRINIT must not be emitted: {:02x?}",
+        wire
+    );
+}
+
+#[test]
 fn test_receive_malformed_header() {
     let mut receiver = Receiver::new().unwrap();
     receiver.advance_outgoing(receiver.drain_outgoing().len());
