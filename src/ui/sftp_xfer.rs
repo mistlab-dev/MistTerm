@@ -404,6 +404,7 @@ pub(super) fn paint_xfer_strip(
     remote_cwd: &str,
     local_cwd: &str,
     details_open: &mut bool,
+    remote_error: bool,
 ) -> XferStripAction {
     if theme.uses_modern_palette() {
         return paint_flux_xfer_strip(
@@ -415,9 +416,10 @@ pub(super) fn paint_xfer_strip(
             remote_cwd,
             local_cwd,
             details_open,
+            remote_error,
         );
     }
-    let _ = (host_line, remote_cwd, local_cwd, details_open);
+    let _ = (host_line, remote_cwd, local_cwd, details_open, remote_error);
     let mut action = XferStripAction::None;
     let running = queue
         .items
@@ -607,6 +609,7 @@ fn paint_flux_xfer_strip(
     remote_cwd: &str,
     local_cwd: &str,
     details_open: &mut bool,
+    remote_error: bool,
 ) -> XferStripAction {
     let mut action = XferStripAction::None;
     let running = queue
@@ -806,7 +809,7 @@ fn paint_flux_xfer_strip(
     });
 
     ui.horizontal(|ui| {
-        let dot = if failed > 0 {
+        let dot = if remote_error || failed > 0 {
             theme.red_color()
         } else if running.is_some() || !queued.is_empty() {
             theme.amber_color()
@@ -815,17 +818,31 @@ fn paint_flux_xfer_strip(
         };
         let (dot_rect, _) = ui.allocate_exact_size(egui::vec2(8.0, 8.0), egui::Sense::hover());
         ui.painter().circle_filled(dot_rect.center(), 3.5, dot);
-        let host = if host_line.is_empty() {
+        let host = if remote_error {
+            if host_line.is_empty() {
+                crate::i18n::tr(ctx, "SFTP unavailable", "SFTP 不可用").to_string()
+            } else {
+                format!(
+                    "{}  ·  {host_line}",
+                    crate::i18n::tr(ctx, "SFTP unavailable", "SFTP 不可用")
+                )
+            }
+        } else if host_line.is_empty() {
             crate::i18n::tr(ctx, "SFTP", "SFTP").to_string()
         } else {
             format!("SFTP  ·  {host_line}")
+        };
+        let host_color = if remote_error {
+            theme.red_color()
+        } else {
+            theme.text_tertiary()
         };
         if ui
             .add(
                 egui::Label::new(
                     RichText::new(host)
                         .font(egui::FontId::monospace(theme.font_size_caption()))
-                        .color(theme.text_tertiary()),
+                        .color(host_color),
                 )
                 .sense(egui::Sense::click()),
             )

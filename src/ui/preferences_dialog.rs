@@ -497,7 +497,7 @@ impl MistTermApp {
                     if crate::ui::chrome::menu_theme_item(ui, theme, selected, &label).clicked() {
                         self.theme_manager.set_theme_index(i);
                         self.theme_manager.save();
-                        ctx.request_repaint();
+                        self.invalidate_terminals_after_theme_change(ctx);
                     }
                 }
             },

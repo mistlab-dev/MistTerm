@@ -5160,6 +5160,7 @@ impl SftpPanel {
             &self.cwd.display().to_string(),
             &self.local_cwd.display().to_string(),
             &mut self.flux_details_open,
+            self.list_err.is_some(),
         );
         self.handle_xfer_strip_action(strip_action, &handle, ctx);
 
@@ -5192,9 +5193,10 @@ impl SftpPanel {
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing.x = theme.spacing_panel_gap();
             ui.spacing_mut().item_spacing.y = 2.0;
-            let can_upload = self.has_local_upload_selection();
-            let can_download = self.has_remote_download_selection();
-            let can_compare = !self.busy;
+            let remote_ready = self.list_err.is_none();
+            let can_upload = remote_ready && self.has_local_upload_selection();
+            let can_download = remote_ready && self.has_remote_download_selection();
+            let can_compare = remote_ready && !self.busy;
             let upload_resp = crate::ui::chrome::panel_action_button_with_icon_ex(
                 ui,
                 theme,
@@ -5209,15 +5211,20 @@ impl SftpPanel {
                     "把所选本机项上传到远端目录",
                 ))
             } else {
-                crate::ui::chrome::disabled_action_with_reason(
-                    upload_resp,
-                    false,
+                let reason = if !remote_ready {
+                    crate::i18n::tr(
+                        ctx,
+                        "Remote SFTP unavailable — fix the error above first",
+                        "远端 SFTP 不可用，请先处理上方错误",
+                    )
+                } else {
                     crate::i18n::tr(
                         ctx,
                         "Select local file(s) to upload first",
                         "先在本机列表勾选要上传的文件",
-                    ),
-                )
+                    )
+                };
+                crate::ui::chrome::disabled_action_with_reason(upload_resp, false, reason)
             };
             if upload_resp.clicked() && can_upload {
                 self.upload_selected_local(handle, ctx);
@@ -5236,15 +5243,20 @@ impl SftpPanel {
                     "把所选远端项下载到本机目录",
                 ))
             } else {
-                crate::ui::chrome::disabled_action_with_reason(
-                    download_resp,
-                    false,
+                let reason = if !remote_ready {
+                    crate::i18n::tr(
+                        ctx,
+                        "Remote SFTP unavailable — fix the error above first",
+                        "远端 SFTP 不可用，请先处理上方错误",
+                    )
+                } else {
                     crate::i18n::tr(
                         ctx,
                         "Select remote file(s) to download first",
                         "先在远端列表勾选要下载的文件",
-                    ),
-                )
+                    )
+                };
+                crate::ui::chrome::disabled_action_with_reason(download_resp, false, reason)
             };
             if download_resp.clicked() && can_download {
                 self.download_selected_remote(handle, ctx);
@@ -5916,6 +5928,35 @@ impl SftpPanel {
         if let Some(p) = jump_remote.take() {
             self.spawn_list(handle, p, ctx);
         }
+        // 错误态占位块放在表头上方，窄栏也不被表头裁切。
+        if let Some(err) = self.list_err.clone() {
+            let msg = Self::localize_list_error(ctx, &err);
+            egui::Frame::NONE
+                .fill(theme.color_subtle_inset_fill())
+                .stroke(egui::Stroke::new(1.0, theme.red_a128()))
+                .corner_radius(theme.radius_list_item())
+                .inner_margin(egui::Margin::symmetric(
+                    theme.spacing_search_input_x() as i8,
+                    theme.spacing_search_input_y() as i8,
+                ))
+                .show(ui, |ui| {
+                    Self::paint_list_error_label(ui, theme, &msg, false);
+                    ui.horizontal(|ui| {
+                        if crate::ui::chrome::panel_action_primary_icon_button(
+                            ui,
+                            theme,
+                            crate::ui::icons::IconId::Refresh,
+                            crate::i18n::tr(ui.ctx(), "Retry", "重试"),
+                        )
+                        .clicked()
+                        {
+                            self.list_err = None;
+                            self.spawn_list(handle, self.cwd.clone(), ctx);
+                        }
+                    });
+                });
+            ui.add_space(theme.spacing_xs());
+        }
         let cols_w = ui.available_width().max(80.0);
         let table_cols = FileTableCols::for_width(cols_w);
         if paint_file_table_header(ui, theme, ctx, table_cols, &mut self.remote_sort, "remote") {
@@ -5948,17 +5989,8 @@ impl SftpPanel {
                     }
                 }
                 ui.set_max_width(table_cols.total);
-                // #437：先报错（人话 + 不只是「空闲」页脚），空目录再给明确空态——
-                // 两者不混同；本机一侧不受影响，不冻结整窗。
-                if let Some(err) = &self.list_err {
-                    Self::paint_list_error_label(
-                        ui,
-                        theme,
-                        &Self::localize_list_error(ctx, err),
-                        true,
-                    );
-                    ui.add_space(theme.spacing_xs());
-                } else if self.entries.is_empty() && !self.busy {
+                // 长错误已在表头上方占位；列表内只保留空目录提示。
+                if self.list_err.is_none() && self.entries.is_empty() && !self.busy {
                     ui.label(
                         egui::RichText::new(crate::i18n::tr(
                             ctx,
@@ -6017,23 +6049,6 @@ impl SftpPanel {
             });
         if let Some(d) = enter_remote {
             self.spawn_list(handle, d, ctx);
-        }
-        if let Some(err) = self.list_err.clone() {
-            ui.horizontal(|ui| {
-                Self::paint_list_error_label(
-                    ui,
-                    theme,
-                    &Self::localize_list_error(ctx, &err),
-                    true,
-                );
-                if ui
-                    .small_button(crate::i18n::tr(ctx, "Retry", "重试"))
-                    .clicked()
-                {
-                    self.list_err = None;
-                    self.spawn_list(handle, self.cwd.clone(), ctx);
-                }
-            });
         }
         if self.tree_busy {
             ui.label(

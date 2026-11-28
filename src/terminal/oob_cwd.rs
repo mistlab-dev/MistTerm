@@ -39,6 +39,13 @@
 
 use super::shell_integration::RemoteIdentity;
 
+/// 登录后首次带外 cwd 查询超时（毫秒）。
+///
+/// 泵线程处理 `ExecRemote` 期间会暂停 PTY 读写；Windows OpenSSH 等无 `/proc`/
+/// 无 `sh` 的环境上，libssh2 可能卡到满超时才返回，终端会长时间全黑。
+/// 登录首查失败只是降级（无 cwd 缓存），必须短超时，不能用满 15s。
+pub const OOB_INITIAL_TIMEOUT_MS: u32 = 1500;
+
 /// 继承刷新查询的超时（毫秒）。开新标签/分屏前对源会话再查一次 `/proc` cwd，
 /// 必须在用户可感知的时间内结束：泵线程处理 exec 期间 PTY 读写暂停，
 /// 不能用满 [`crate::ssh::PUMP_EXEC_TIMEOUT_MS`] 的 15s 上限。

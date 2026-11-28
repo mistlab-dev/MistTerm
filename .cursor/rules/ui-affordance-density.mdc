@@ -1,45 +1,86 @@
 ---
-description: MistTerm UI affordance, font rhythm, and control density (dark-theme first)
+description: MistTerm UI 可辨识度、交互反馈与密度（全局模式，暗夜优先）
 globs: src/ui/**/*.rs
 alwaysApply: false
 ---
 
-# UI 可辨识度与密度（暗夜优先）
+# UI 可辨识度 · 交互反馈 · 密度（全局）
 
-改 `src/ui` 时遵守；不大换肤，但**文本 ≠ 按钮**，字号/行高要齐。
+改 `src/ui` 时遵守。**按同类模式全仓适用**，不要只修试用清单/工单里点名的那一处；出现一类问题先找 chrome / theme 共用入口，再扫同构调用点。
 
-## 按钮：一眼能点
+产品细则见 `docs/product/UI-GUIDELINES.md` §10。本规则是代理改代码时的硬约束。
+
+## 0. 改法优先级（先全局，后点位）
+
+1. **Theme / chrome 入口**：能关开关、改 token、改助手函数就不要复制粘贴修 30 个调用点。
+2. **同构扫描**：修完入口后，用搜索确认同类面板（连接 / 片段 / SFTP / 监控 / AI / 弹窗）行为一致。
+3. **最后才点修**：确认没有共用入口时，再改单个面板，并在注释里写清「为何不能进 chrome」。
+
+禁止：只给报 bug 的那一行加 `selectable(false)` / toast，而旁边同结构列表仍可点穿。
+
+## 1. 按钮：一眼能点
 
 - **禁止**暗夜下「纯文字幽灵按钮」：常态透明底 + 无描边 + 发灰字。
-- **两档统一**：主操作实心 Primary（`panel_action_primary_*` / `panel_header_new_button*`）；工具栏次要一律 Secondary（`panel_action_*` / `panel_outlined_*`）。
+- **两档统一**：主操作实心 Primary（`panel_action_primary_*` / `panel_header_new_button*` / `panel_solid_primary_*`）；工具栏次要一律 Secondary（`panel_action_*` / `panel_outlined_*`）。
 - 不要再为 SFTP/AI 单独画一套更灰的幽灵样式。
 - 不要手写 `Button::new(...).fill(TRANSPARENT).stroke(NONE)`；不要裸 `ui.small_button` / 裸 accent 文字当工具栏按钮。
 - 筛选芯片 / 分段控件可以弱样式；**工具栏动作**必须有底有边。
 
-## 表单：统一字号与内边距
+## 2. 表单 / 输入：统一「框」形态
 
-- 单行/多行输入：只用 `form_singleline_field` / `form_multiline_field`（`font_size_control_input` = 12px + frame 内边距）。
-- 数字：`form_drag_value_field`，禁止裸 `DragValue` 贴在小标签旁。
-- 标签：`form_field_label`（12px）；说明/错误：`font_size_caption`（更小），勿混用。
-- 禁止裸 `TextEdit::singleline/multiline` 无 `.font()`、无 frame（字会顶满框高）。
+- 单行/多行：**只用** `form_singleline_field*` / `form_multiline_field*`（禁止裸 `TextEdit` 无 frame、无字号）。
+- **现代主题统一实心底框**（`uses_underline_inputs() == false`）。禁止再把暗夜主路径改回「几乎看不见的下划线」。
+- 数字：`form_drag_value_field` / `form_*_stepper`，禁止裸 `DragValue` 贴在小标签旁。
+- 标签：`form_field_label`；说明/错误：`font_size_caption`。
+- 可聚焦字段 Id 用稳定盐（`Id::unique(("panel", "field"))`）。egui 0.37 里 `Id::unique(salt)` 是确定性哈希；`Id::new` 已废弃别名。
 
-## 同行控件：同高、对齐
+## 3. 可点行：整行可点，子控件不抢事件
+
+- 列表行用 `Sense::click()` / `allocate_*` 收口时，行内展示用 `Label` **必须** `.selectable(false)`（egui 0.37 默认可选会吃掉 pointer）。
+- 行内若只需展示，勿给 Label 再加 `.sense(click())` 除非该 Label 有独立语义（并处理好与行点击的优先级）。
+- 外层 `Sense::hover()` 画底框时，**不得**盖住内部按钮 / TextEdit 的 hit 区；弹窗主按钮与输入框焦点遵循 `chrome/modals` + 稳定 Id。
+
+## 4. 操作反馈：禁止静默失败
+
+- 用户点了主操作（发送 / 连接 / 上传 / 刷新 / 用到终端 等）若不能执行：**必须**有可见原因（输入区 status、面板内错误条、或 Toast），禁止灰掉且无悬停说明、或点了完全没反应。
+- `add_enabled_ui(false)` / 禁用按钮时，用 `disabled_action_with_reason` 或等价 hover 文案说明「差哪一步」。
+- 异步采集 / 列表加载：成功但数据全空、或子系统不可用，要当成错误态展示，不能假装「正常 0」或绿灯空闲。
+
+## 5. 状态一致性
+
+- 底栏 / 页脚 / 状态点颜色与**真实能力**一致：远端 SFTP 报错时不得仍显示绿色「已连接 · 空闲」。
+- 活动栏高亮与「当前激活表面」**一对一**：右侧 dock 互斥打开（已有 `open_right_dock_panel`）；连接侧栏与右侧 dock 同时开时，高亮以当前操作目标为准，不要 6 个图标全蓝。
+- 错误文案放在独立占位块（可重试），不要挤进表头裁切区。
+
+## 6. 主题 / 字体切换
+
+- 切换主题或终端字体后，**必须**丢弃终端 `visual_layout_cache`（经 `apply_current_theme` / `invalidate_terminals_after_theme_change` 统一入口），禁止只在某一个菜单分支里清缓存。
+- 勿在 `apply_theme` 里无条件 `request_repaint`（会打满帧）；由调用方或「样式确实重写」路径触发重绘。
+
+## 7. 快捷键与文案
+
+- 手册 / 菜单写明的应用快捷键（如 Ctrl+F 查找、Ctrl+N 新建），终端聚焦时也要在进 PTY 前 `consume`；其它 TextEdit 聚焦时让位。
+- 展示文案统一走 `platform::accel` / `accel_shift`（字母大写：`Ctrl + F`），不要手写 `Ctrl+f`。
+- 标签栏 / 确认框标题：分屏不拼接多窗格长名；过长路径用短标题 + 次行/悬停全文。
+
+## 8. 同行控件：同高、对齐
 
 - 快捷 chip / 工具条按钮：固定高度（如 `size_panel_filter_chip_h`），**不要**按单条文案 `galley.size().y` 撑高。
-- 同行文字垂直居中到同一 chip 高，保证基线/中线齐。
-- 全角标点（「？」、`（）`）易抬高行盒 → 更要用固定高；**产品自带的用户可见中文文案**优先半角 `()` / `?`，尤其是中英混排或同行多段文字。
-- **不要**把上述文案规范套到用户输入：AI 草稿、终端、表单等必须同时接受半角与全角（含 `，。`），禁止强制半角或吞掉全角 IME。
+- 产品自带中文文案优先半角 `()` / `?`；**不要**把规范套到用户输入（AI 草稿、终端、表单须接受全角 IME）。
 
-## Theme token（勿回退）
+## 9. Theme token（勿回退）
 
 - `color_control_secondary_fill_idle`：暗夜约白 28α，**禁止**再改回接近透明。
 - `color_control_secondary_stroke`：暗夜保留可见描边，**禁止** `Stroke::NONE`。
 - 次要按钮 idle 字色用 `text_primary`，勿过度 `gamma_multiply` 成说明灰。
 - `panel_action_primary_*` 必须是实心 accent，勿再映射成灰次要按钮。
+- 输入 idle 对比度：禁止再用 `divider` 的 ~4% 白当唯一输入提示。
 
 ## 自检
 
-- [ ] 暗夜下未悬停也能看出哪里可点
-- [ ] 输入框内文字上下有余量，不顶满
-- [ ] 同排 chip/按钮同高，文字在一条横线上
+- [ ] 暗夜下未悬停也能看出哪里可点、哪里可输入
+- [ ] 同构列表/面板已一起改，不是只改报 bug 的那一处
+- [ ] 主操作失败有 status / Toast / 错误条之一
+- [ ] 状态色与错误态不矛盾
+- [ ] 主题切换后终端无残影；快捷键展示大小写统一
 - [ ] 新面板复用 chrome 助手，不复制一套幽灵样式

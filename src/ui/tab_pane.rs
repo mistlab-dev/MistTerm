@@ -217,21 +217,24 @@ impl TerminalTab {
         if self.panes.is_empty() {
             return "Terminal".into();
         }
-        if self.panes.len() == 1 {
-            return self.panes[0].display_name().to_string();
-        }
-        let head: Vec<_> = self
+        // 分屏标签只显示当前焦点窗格名，避免「主机 \ 主机」重复拼接撑爆标签栏。
+        let primary = self
             .panes
-            .iter()
-            .take(2)
+            .get(self.active_pane)
+            .or_else(|| self.panes.first())
             .map(|p| p.display_name())
-            .collect();
-        let base = head.join(" | ");
-        if self.panes.len() > 2 {
-            format!("{base} +{}", self.panes.len() - 2)
+            .unwrap_or("Terminal");
+        if self.panes.len() == 1 {
+            primary.to_string()
         } else {
-            base
+            format!("{primary} · {}", self.panes.len())
         }
+    }
+
+    /// 关闭确认等弹窗用的短标题：去掉过长路径，只留别名 / 文件名。
+    pub fn short_display_title(&self) -> String {
+        let raw = self.display_title();
+        shorten_tab_title(&raw)
     }
 
     pub fn primary_session_id(&self) -> String {
@@ -515,6 +518,49 @@ mod title_display_tests {
         pane.title_pinned = true;
         let tab = TerminalTab::single(pane);
         assert_eq!(tab.display_title(), "Pinned");
+    }
+
+    #[test]
+    fn split_tab_title_shows_active_pane_and_count() {
+        let mut tab = TerminalTab::single(dummy_pane("Host A"));
+        tab.add_pane_with_layout(dummy_pane("Host B"), TabLayout::SplitHorizontal);
+        assert_eq!(tab.display_title(), "Host B · 2");
+        tab.focus_pane(0);
+        assert_eq!(tab.display_title(), "Host A · 2");
+    }
+
+    #[test]
+    fn short_display_title_keeps_alias_drops_path() {
+        let pane = TerminalPane::new(
+            "s".into(),
+            r"管理员: C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe".into(),
+            crate::ui::terminal::TerminalView::new(),
+        );
+        let tab = TerminalTab::single(pane);
+        assert_eq!(tab.short_display_title(), "管理员: powershell.exe");
+    }
+}
+
+/// 标签 / 确认框短标题：`前缀: 长路径` → `前缀: 文件名`；纯路径只留末段。
+fn shorten_tab_title(raw: &str) -> String {
+    let (prefix, path) = match raw.split_once(':') {
+        Some((p, rest)) if !p.trim().is_empty() && rest.trim().contains(['/', '\\']) => {
+            (Some(p.trim()), rest.trim())
+        }
+        _ => (None, raw.trim()),
+    };
+    let leaf = path
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(path)
+        .trim();
+    if leaf.is_empty() {
+        return raw.to_string();
+    }
+    match prefix {
+        Some(p) if leaf != path => format!("{p}: {leaf}"),
+        _ if leaf != path => leaf.to_string(),
+        _ => raw.to_string(),
     }
 }
 
@@ -809,15 +855,6 @@ fn render_one_pane(
                     egui::FontId::proportional(theme.font_size_caption()),
                     color,
                 );
-                if broadcast {
-                    ui.painter().text(
-                        header_rect.right_center() + egui::vec2(-26.0, 0.0),
-                        egui::Align2::RIGHT_CENTER,
-                        i18n::tr(ui.ctx(), "Broadcast Input", "广播输入"),
-                        egui::FontId::proportional(theme.font_size_caption()),
-                        theme.accent_color(),
-                    );
-                }
                 let close_rect = egui::Rect::from_min_size(
                     header_rect.right_top() + egui::vec2(-22.0, 2.0),
                     egui::vec2(20.0, header_h - 4.0),
@@ -852,6 +889,51 @@ fn render_one_pane(
                 if header_resp.clicked() {
                     tab.focus_pane(pane_idx);
                 }
+            }
+            // 广播状态用独立横幅 +「关闭广播」文字按钮，避免与窗格 × 挤在一起误触。
+            if show_chrome && broadcast {
+                let banner_h = theme.font_size_caption() + 10.0;
+                let (banner_rect, _) =
+                    ui.allocate_exact_size(egui::vec2(w, banner_h), egui::Sense::hover());
+                ui.painter().rect_filled(
+                    banner_rect,
+                    0.0,
+                    theme.accent_alpha(28),
+                );
+                ui.scope_builder(egui::UiBuilder::new().max_rect(banner_rect), |ui| {
+                    ui.horizontal(|ui| {
+                        ui.add_space(6.0);
+                        ui.label(
+                            egui::RichText::new(i18n::tr(
+                                ui.ctx(),
+                                "Broadcasting input to all panes",
+                                "广播输入中：键入会发到每个窗格",
+                            ))
+                            .size(theme.font_size_caption())
+                            .color(theme.accent_color()),
+                        );
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.add_space(4.0);
+                            if ui
+                                .add(
+                                    egui::Button::new(
+                                        egui::RichText::new(i18n::tr(
+                                            ui.ctx(),
+                                            "Stop broadcast",
+                                            "关闭广播",
+                                        ))
+                                        .size(theme.font_size_caption())
+                                        .color(theme.text_primary()),
+                                    )
+                                    .frame(false),
+                                )
+                                .clicked()
+                            {
+                                tab.broadcast_input = false;
+                            }
+                        });
+                    });
+                });
             }
             if let Some(pane) = tab.panes.get_mut(pane_idx) {
                 let cap = pane_capture(pane_idx);

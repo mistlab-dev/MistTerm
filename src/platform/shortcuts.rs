@@ -18,14 +18,15 @@ pub fn primary_modifier_label() -> &'static str {
 }
 
 fn display_key(key: &str) -> String {
+    // 菜单 / 关于页统一 `Ctrl+F` 写法，避免 `Ctrl+f` 与 `Ctrl+Shift+I` 大小写混用。
     if key.len() == 1 {
-        key.to_ascii_lowercase()
+        key.to_ascii_uppercase()
     } else {
         key.to_string()
     }
 }
 
-/// 如 `⌘ + n` / `Ctrl + n`。
+/// 如 `⌘ + N` / `Ctrl + N`。
 pub fn accel(key: &str) -> String {
     format!("{} + {}", primary_modifier_label(), display_key(key))
 }
@@ -35,7 +36,7 @@ pub fn accel_literal(suffix: &str) -> String {
     format!("{} + {}", primary_modifier_label(), suffix)
 }
 
-/// 如 `⌘ + Shift + j` / `Ctrl + Shift + j`。
+/// 如 `⌘ + Shift + J` / `Ctrl + Shift + J`。
 pub fn accel_shift(key: &str) -> String {
     format!(
         "{} + Shift + {}",
@@ -200,5 +201,12 @@ mod tests {
         assert!(history.to_ascii_lowercase().contains('p'));
         assert!(paste.to_ascii_lowercase().contains('v'));
         assert_eq!(terminal_interrupt_accel(), "Ctrl + C");
+    }
+
+    #[test]
+    fn accel_letters_are_uppercase() {
+        assert!(accel("f").ends_with("F"), "{}", accel("f"));
+        assert!(accel_shift("i").ends_with("I"), "{}", accel_shift("i"));
+        assert!(accel("B").ends_with("B"), "{}", accel("B"));
     }
 }

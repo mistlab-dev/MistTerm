@@ -553,6 +553,12 @@ pub struct TerminalView {
     oob_cwd_rx: Option<std::sync::mpsc::Receiver<Result<String, String>>>,
     /// 本次连接已排过带外查询，避免重连路径重复入队。
     oob_cwd_sent: bool,
+    /// 登录首查等首包 PTY 输出后再 `ExecRemote`，避免 Windows OpenSSH 横幅卡在泵后全黑。
+    oob_cwd_await_first_output: bool,
+    /// 首包到达后再静置一会再查（横幅/清屏常分多包到达；立刻 exec 会堵后续包）。
+    oob_cwd_settle_until: Option<Instant>,
+    /// 若迟迟无首包，到点仍发起登录首查（兜底，须足够长以免踩横幅）。
+    oob_cwd_defer_deadline: Option<Instant>,
     /// 本次带外查询的意图：登录时的初次填充，或开新标签/分屏前的继承刷新。
     oob_cwd_intent: OobCwdIntent,
     /// 继承刷新查询的结果（`None` = 已完成但没查到/失败）。发起方读后即用。
@@ -1191,6 +1197,9 @@ impl TerminalView {
             shell_probe_sent: false,
             oob_cwd_rx: None,
             oob_cwd_sent: false,
+            oob_cwd_await_first_output: false,
+            oob_cwd_settle_until: None,
+            oob_cwd_defer_deadline: None,
             oob_cwd_intent: OobCwdIntent::InitialFill,
             oob_refresh_cwd: None,
             oob_refresh_done: false,
@@ -1906,11 +1915,61 @@ impl TerminalView {
     /// 探测后 `remote_identity` 恒为 `None` 的缺口，让跨会话目录继承的 `Match`
     /// 身份判定重新可用；后者作为 OSC 7 之外的兜底目录来源。
     ///
-    /// 取舍：`enqueue_remote_exec` 期间 PTY 泵暂停（最坏 `PUMP_EXEC_TIMEOUT_MS`
-    /// = 15s）。查询命令是纯 `/proc` 遍历、无网络依赖，正常百毫秒内返回；
-    /// ForceCommand / 受限 shell 下 exec 失败会静默降级，不影响已有功能。
+    /// 取舍：`enqueue_remote_exec` 期间 PTY 泵暂停。登录首查用短超时
+    /// （`OOB_INITIAL_TIMEOUT_MS`），避免 Windows OpenSSH / 无 `sh` 环境卡满 15s
+    /// 导致终端长时间全黑。查询命令是纯 `/proc` 遍历，Linux 上通常百毫秒内返回；
+    /// ForceCommand / 受限 shell / 非 Unix 下失败会静默降级。
+    ///
+    /// 调用方应在**首包 PTY 输出到达后**再排登录首查（见 `oob_cwd_await_first_output`），
+    /// 否则 Windows OpenSSH 横幅会堵在 `ExecRemote` 后面。
     fn start_oob_cwd_query(&mut self) {
-        self.start_oob_cwd_query_impl(OobCwdIntent::InitialFill, None)
+        self.oob_cwd_await_first_output = false;
+        self.oob_cwd_settle_until = None;
+        self.oob_cwd_defer_deadline = None;
+        self.start_oob_cwd_query_impl(
+            OobCwdIntent::InitialFill,
+            Some(crate::terminal::oob_cwd::OOB_INITIAL_TIMEOUT_MS),
+        )
+    }
+
+    /// 登录首查：首包后静置结束，或超长超时兜底，再真正 `enqueue_remote_exec`。
+    fn maybe_fire_deferred_oob_cwd(&mut self) {
+        let settle_due = self
+            .oob_cwd_settle_until
+            .is_some_and(|t| Instant::now() >= t);
+        if settle_due {
+            self.start_oob_cwd_query();
+            return;
+        }
+        if !self.oob_cwd_await_first_output {
+            return;
+        }
+        let due = self
+            .oob_cwd_defer_deadline
+            .is_some_and(|dl| Instant::now() >= dl);
+        if due {
+            self.start_oob_cwd_query();
+        }
+    }
+
+    /// 收到远端交互输出时：记录首包，再静置片刻后发起登录带外 cwd（勿立刻 exec）。
+    fn note_remote_pty_output_for_oob(&mut self, data: &[u8]) {
+        if data.is_empty() {
+            return;
+        }
+        if self.oob_cwd_await_first_output {
+            self.oob_cwd_await_first_output = false;
+            self.oob_cwd_settle_until = Some(Instant::now() + Duration::from_millis(900));
+            self.oob_cwd_defer_deadline = None;
+            return;
+        }
+        // 静置窗口内又来了包：再顺延，让横幅收齐。
+        if let Some(until) = self.oob_cwd_settle_until.as_mut() {
+            let extend = Instant::now() + Duration::from_millis(450);
+            if extend > *until {
+                *until = extend;
+            }
+        }
     }
 
     /// 继承刷新（#419 产品点查 Fail 的主路径修复）：开新标签/分屏前对源会话
@@ -2253,6 +2312,9 @@ impl TerminalView {
                 self.shell_probe_rx = None;
                 self.oob_cwd_sent = false;
                 self.oob_cwd_rx = None;
+                self.oob_cwd_await_first_output = false;
+                self.oob_cwd_settle_until = None;
+                self.oob_cwd_defer_deadline = None;
                 self.pending_shell_hook = None;
                 self.echo_suppressor.reset();
                 self.remote_identity = None;
@@ -2289,6 +2351,9 @@ impl TerminalView {
         self.shell_probe_rx = None;
         self.oob_cwd_sent = false;
         self.oob_cwd_rx = None;
+        self.oob_cwd_await_first_output = false;
+        self.oob_cwd_settle_until = None;
+        self.oob_cwd_defer_deadline = None;
         self.pending_shell_hook = None;
         self.echo_suppressor.reset();
         self.remote_identity = None;
@@ -3605,6 +3670,7 @@ impl TerminalView {
             // #410：空闲帧也要 tick——提示符先到、探测后到且后续无输出时，
             // 不能等下一段输出才注入；超时时把暂存的候选残余冲进 VTE（可见）。
             self.poll_shell_hook_probe();
+            self.maybe_fire_deferred_oob_cwd();
             self.poll_oob_cwd_query();
             self.maybe_send_shell_hook();
             self.maybe_send_startup_cd();
@@ -3631,6 +3697,7 @@ impl TerminalView {
                             }
                             continue;
                         }
+                        self.note_remote_pty_output_for_oob(&data);
                         self.push_zmodem_detect_tail(&data);
                         let detect_buf = self.zmodem_detect_window();
                         // 上传(本机 sz→远端 rz)时，PTY 上的 ZMODEM 帧只能经 SSH 泵线程到达此处；
@@ -3880,9 +3947,16 @@ impl TerminalView {
                                         // #413 后继：每条新交互 shell 都重排一次带外查询，
                                         // 先清掉可能残留的上一次会话回执（断线路径不统一，
                                         // keep_buffer / 意外断开不会走 connect() 的复位块）。
+                                        // 登录首查延后到首包 PTY 输出（或短超时）：Windows OpenSSH
+                                        // 横幅常晚于 shell 就绪；立刻 ExecRemote 会把首屏堵成全黑。
                                         self.oob_cwd_sent = false;
                                         self.oob_cwd_rx = None;
-                                        self.start_oob_cwd_query();
+                                        self.oob_cwd_await_first_output = true;
+                                        self.oob_cwd_settle_until = None;
+                                        // 仅兜底：首包很晚时才强行查；过短会踩 Windows 横幅。
+                                        self.oob_cwd_defer_deadline = Some(
+                                            Instant::now() + Duration::from_millis(8000),
+                                        );
                                     }
                                     Err(e) => {
                                         let msg = format_ssh_connect_error(
@@ -5852,6 +5926,9 @@ impl TerminalView {
         self.shell_probe_sent = false;
         self.oob_cwd_rx = None;
         self.oob_cwd_sent = false;
+        self.oob_cwd_await_first_output = false;
+        self.oob_cwd_settle_until = None;
+        self.oob_cwd_defer_deadline = None;
         self.remote_identity = None;
         self.startup_cd_policy = None;
         self.startup_cd_deadline = None;
@@ -6125,6 +6202,12 @@ impl TerminalView {
 
     pub fn dismiss_agent_audit_banner(&mut self) {
         self.agent_audit_banner_dismissed = true;
+    }
+
+    /// 主题切换后丢弃字形布局缓存，避免残影 / 错色 / 乱码。
+    pub fn invalidate_visual_layout_cache(&mut self) {
+        self.visual_layout_cache = None;
+        self.vt_visual_generation = self.vt_visual_generation.wrapping_add(1);
     }
 
     pub fn take_pending_toast_error(&mut self) -> Option<String> {

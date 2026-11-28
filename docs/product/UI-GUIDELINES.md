@@ -653,15 +653,17 @@ pub struct MonitorPanel {
 
 | 属性 | 值 |
 |------|-----|
-| 实现 | **必须** form_singleline_field / form_multiline_field（禁止裸 TextEdit） |
+| 实现 | **必须** form_singleline_field* / form_multiline_field*（禁止裸 TextEdit） |
 | 字号 | font_size_control_input()（= font_size_ui_control，12px） |
 | 上下内边距 | spacing_search_input_y()（≥6，避免字顶满框高） |
-| 背景 / 描边 | frame_form_text_input / frame_boxed_text_input |
+| 背景 / 描边 | **统一实心底框**（`frame_form_text_input` / `frame_boxed_text_input`）；`uses_underline_inputs()` 固定为 false |
 | Hint | hint_rich + color_form_hint() |
 
-数字字段用 form_drag_value_field（同底同字号），禁止裸 DragValue 贴在小标签旁造成「标签小、数字巨大」。
+数字字段用 form_drag_value_field / form_*_stepper（同底同字号），禁止裸 DragValue 贴在小标签旁造成「标签小、数字巨大」或「看不出能改」。
 
-下拉用 `form_combo`（与 `form_singleline_field_boxed` / `form_multiline_field` 同套底+描边）；禁止裸 `ComboBox`。整数步进用 `form_u32_stepper`（± 为次要方钮，勿再画圆形）。弹窗/偏好主路径单行优先 `form_singleline_field_boxed`。
+下拉用 `form_combo`（与 boxed 单行 / 多行同套底+描边）；禁止裸 `ComboBox`。整数步进用 `form_u32_stepper`（± 为次要方钮，勿再画圆形）。
+
+**全局**：不要只给某一个对话框改成 boxed、其余面板仍留下划线；形态由 Theme 开关统一，调用点复用 chrome 助手。
 
 ### 10.3 表单标签与说明
 
@@ -696,11 +698,24 @@ pub struct MonitorPanel {
 
 ### 10.7 改 UI 自检清单
 
-- [ ] 暗夜未悬停也能看出哪里可点
-- [ ] 输入框文字上下有余量，不顶满
+- [ ] 暗夜未悬停也能看出哪里可点、哪里可输入
+- [ ] **同类面板/列表已一起改**，不是只修报 bug 的那一处（见 `.cursor/rules/ui-affordance-density.mdc` §0）
+- [ ] 输入框文字上下有余量，不顶满；形态为实心底框
+- [ ] 可点行内 Label 已 `selectable(false)`，不抢整行点击
+- [ ] 主操作失败有 status / Toast / 错误条；状态色与错误态不矛盾
+- [ ] 主题切换后终端无残影；快捷键展示走 `platform::accel*`（字母大写）
 - [ ] 同排 chip/按钮同高，文字在一条横线上
 - [ ] 新面板复用 chrome 助手，不复制幽灵样式
 - [ ] 进度条走 `chrome::progress_bar`，百分比在填充色上可读
+
+### 10.9 交互与状态（全局）
+
+- **静默失败禁止**：发送 / 上传 / 刷新 / 用到终端等主操作若不能执行，必须给可见原因。
+- **状态一致**：页脚/状态点颜色反映真实能力（例如 SFTP 子系统失败时不得绿灯「空闲」）。
+- **活动栏高亮一对一**：与当前激活表面一致；右侧 dock 互斥（`open_right_dock_panel`）。
+- **应用快捷键 vs PTY**：手册写明的全局快捷键在终端聚焦时也要先 `consume`；其它 TextEdit 聚焦时让位。
+- **标题**：分屏标签不拼接多窗格长名；确认框用短标题，全文放次行或悬停。
+- **主题/字体**：样式真正重写时统一丢弃终端 `visual_layout_cache`（经 `apply_current_theme`），勿只在单个菜单分支清缓存。
 
 ### 10.8 进度条
 

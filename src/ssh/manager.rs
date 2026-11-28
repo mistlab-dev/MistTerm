@@ -1547,6 +1547,22 @@ mod shell_pump {
                 }
             }
             ShellPumpCommand::ExecRemote { cmd, reply, timeout_ms } => {
+                // 阻塞 exec 前先排空已到的 PTY 输出，避免登录横幅卡在套接字里、
+                // 终端在超时窗口内表现为全黑（Windows OpenSSH + 带外 cwd 尤甚）。
+                let __s = std::time::Instant::now();
+                if SshManager::pump_channel_reads(
+                    &mut *ch,
+                    read_buffer,
+                    message_tx,
+                    session_id,
+                    upload_bypass,
+                    None,
+                )
+                .is_err()
+                {
+                    return false;
+                }
+                __stage_read = __s.elapsed();
                 drop(ch);
                 let res = match timeout_ms {
                     Some(ms) => mgr.exec_remote_with_timeout(session_id, &cmd, ms),
@@ -1555,6 +1571,20 @@ mod shell_pump {
                 let _ = reply.send(res);
             }
             ShellPumpCommand::SessionJob(job) => {
+                let __s = std::time::Instant::now();
+                if SshManager::pump_channel_reads(
+                    &mut *ch,
+                    read_buffer,
+                    message_tx,
+                    session_id,
+                    upload_bypass,
+                    None,
+                )
+                .is_err()
+                {
+                    return false;
+                }
+                __stage_read = __s.elapsed();
                 drop(ch);
                 if let Some(session) = mgr.get_session(session_id) {
                     job(&session);

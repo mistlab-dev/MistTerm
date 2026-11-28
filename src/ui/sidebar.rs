@@ -357,12 +357,14 @@ impl Sidebar {
                         row_ui.new_child(egui::UiBuilder::new().max_rect(text_rect).layout(egui::Layout::top_down(egui::Align::Min)));
                     text_ui.set_clip_rect(text_rect);
                     text_ui.spacing_mut().item_spacing.y = 0.0;
+                    // selectable 默认会给 Label click+drag，盖住整行 Sense::click，导致只能点到左缘色条。
                     text_ui.add(
                         egui::Label::new(
                             egui::RichText::new(local_label)
                                 .size(theme.font_size_connection_name())
                                 .color(theme.text_secondary()),
                         )
+                        .selectable(false)
                         .truncate()
                         .wrap(),
                     );
@@ -377,6 +379,7 @@ impl Sidebar {
                                 .size(theme.font_size_caption())
                                 .color(theme.color_caption_text()),
                         )
+                        .selectable(false)
                         .truncate()
                         .wrap(),
                     );
@@ -458,6 +461,7 @@ impl Sidebar {
                                     .size(theme.font_size_connection_name())
                                     .color(theme.text_secondary()),
                             )
+                            .selectable(false)
                             .truncate()
                             .wrap(),
                         );
@@ -742,12 +746,14 @@ impl Sidebar {
                             } else {
                                 theme.text_secondary()
                             };
+                            // selectable 默认会给 Label click+drag，盖住整行 Sense::click，导致只能点到左缘色条。
                             text_ui.add(
                                 egui::Label::new(
                                     egui::RichText::new(&session.name)
                                         .size(theme.font_size_connection_name())
                                         .color(name_color),
                                 )
+                                .selectable(false)
                                 .truncate()
                                 .wrap(),
                             );
@@ -781,6 +787,7 @@ impl Sidebar {
                                         .size(status_px)
                                         .color(status_text_color),
                                 )
+                                .selectable(false)
                                 .truncate(),
                             );
                             

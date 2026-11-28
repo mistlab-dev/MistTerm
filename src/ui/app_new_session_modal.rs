@@ -11,6 +11,8 @@ impl MistTermApp {
         if self.dialog_flags.new_session {
             let mut open = self.dialog_flags.new_session;
             let mut should_close = false;
+            let focus_latch = egui::Id::new("mist_new_session_name_focus");
+            let just_opened = ctx.data(|d| d.get_temp::<bool>(focus_latch)) != Some(true);
             let modal_sz = layout_util::modal_new_session_size(ctx);
             let modal_resp = crate::ui::chrome::modal_window("new_session_modal", theme, ctx)
                 .open(&mut open)
@@ -45,15 +47,21 @@ impl MistTermApp {
                                 theme,
                                 crate::i18n::tr(ctx, "Connection name *", "连接名称 *"),
                             );
-                            Self::ui_form_singleline(
+                            // 表单弹窗显式 LEFT_CENTER（#491）；打开时聚焦名称框，避免首项被标题/标签抢走点击。
+                            let name_id = ui.make_persistent_id("new_session_name");
+                            crate::ui::chrome::form_singleline_field_boxed_with_align(
                                 ui,
                                 theme,
-                                "new_session_name",
+                                name_id,
                                 &mut self.new_session_form.name,
                                 crate::i18n::tr(ctx, "e.g. prod-server-01", "例：生产服务器-01"),
                                 form_w,
                                 false,
+                                egui::Align2::LEFT_CENTER,
                             );
+                            if just_opened {
+                                ui.memory_mut(|m| m.request_focus(name_id));
+                            }
 
                             ui.horizontal(|ui| {
                                 ui.spacing_mut().item_spacing.x = 10.0;
@@ -256,8 +264,14 @@ impl MistTermApp {
             }
             if should_close {
                 self.dialog_flags.new_session = false;
+                ctx.data_mut(|d| d.insert_temp(focus_latch, false));
             } else {
                 self.dialog_flags.new_session = open;
+                if open {
+                    ctx.data_mut(|d| d.insert_temp(focus_latch, true));
+                } else {
+                    ctx.data_mut(|d| d.insert_temp(focus_latch, false));
+                }
             }
         }
     }

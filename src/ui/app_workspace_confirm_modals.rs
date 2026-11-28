@@ -465,7 +465,8 @@ impl MistTermApp {
             if pending_idx >= self.tabs.len() {
                 self.close_tab_confirm_idx = None;
             } else {
-                let tab_title = self.tabs[pending_idx].display_title();
+                let tab_title = self.tabs[pending_idx].short_display_title();
+                let full_title = self.tabs[pending_idx].display_title();
                 let mut open = true;
                 let mut should_close = false;
                 let mut confirmed = false;
@@ -496,13 +497,20 @@ impl MistTermApp {
                                 .size(theme.font_size_normal())
                                 .color(theme.color_body_text_muted()),
                             );
+                            if full_title != tab_title {
+                                ui.label(
+                                    egui::RichText::new(&full_title)
+                                        .size(theme.font_size_small())
+                                        .color(theme.color_form_hint()),
+                                );
+                            }
                             ui.add_space(theme.spacing_lg());
                             crate::ui::chrome::modal_footer_actions(ui, theme, |ui, th| {
                                 if crate::ui::chrome::modal_primary_button_with_icon(
                                     ui,
                                     th,
                                     crate::ui::icons::IconId::Check,
-                                    crate::i18n::tr(ctx, "Close anyway", "仍要关闭"),
+                                    crate::i18n::tr(ctx, "Close", "关闭"),
                                 )
                                     .clicked() {
                                     confirmed = true;
@@ -545,7 +553,10 @@ impl MistTermApp {
                 let mut open = true;
                 let mut should_close = false;
                 let mut do_rename = false;
-                let rename_id = egui::Id::unique("tab_rename_modal_name");
+                // 稳定 Id：勿用 Id::unique（每帧新 Id 会导致焦点/点击对不上）。
+                let rename_id = egui::Id::new("tab_rename_modal_name");
+                let focus_latch = egui::Id::new("mist_tab_rename_focus");
+                let just_opened = ctx.data(|d| d.get_temp::<bool>(focus_latch)) != Some(true);
                 let can_rename = !self.tab_rename_draft.trim().is_empty();
                 let modal_sz = layout_util::modal_confirm_size(ctx);
                 let rename_hint = crate::i18n::tr(ctx, "Tab name", "标签名称");
@@ -603,7 +614,10 @@ impl MistTermApp {
                 if let Some(inner) = resp {
                     crate::ui::chrome::raise_window_response(ctx, &inner.response);
                 }
-                ctx.memory_mut(|m| m.request_focus(rename_id));
+                // 只在刚打开时聚焦输入框；每帧 request_focus 会抢走主按钮鼠标点击。
+                if just_opened {
+                    ctx.memory_mut(|m| m.request_focus(rename_id));
+                }
                 if do_rename {
                     let name = self.tab_rename_draft.trim().to_string();
                     if !name.is_empty() {
@@ -621,6 +635,9 @@ impl MistTermApp {
                 if !open || should_close {
                     self.pending_tab_rename = None;
                     self.tab_rename_draft.clear();
+                    ctx.data_mut(|d| d.insert_temp(focus_latch, false));
+                } else {
+                    ctx.data_mut(|d| d.insert_temp(focus_latch, true));
                 }
             }
         }

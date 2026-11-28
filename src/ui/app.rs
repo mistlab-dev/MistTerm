@@ -991,9 +991,20 @@ impl MistTermApp {
     const RESP_LAYOUT_NARROW_LT_PX: f32 = 800.0;
 
     /// 片段变量类弹窗：正文 / 单行输入 / 按钮统一字号(egui 默认 Body 往往偏大)
-    /// 应用当前主题(由 ThemeManager 统一管理；同主题重复调用为 no-op)
+    /// 应用当前主题(由 ThemeManager 统一管理；同主题重复调用为 no-op)。
+    /// 样式真正重写时统一丢弃终端布局缓存，避免主题切换残影。
     fn apply_current_theme(&mut self, ctx: &egui::Context) {
-        self.theme_manager.apply_theme(ctx);
+        if self.theme_manager.apply_theme(ctx) {
+            self.clear_terminal_visual_layout_caches();
+        }
+    }
+
+    fn clear_terminal_visual_layout_caches(&mut self) {
+        for tab in &mut self.tabs {
+            for pane in &mut tab.panes {
+                pane.terminal.invalidate_visual_layout_cache();
+            }
+        }
     }
 
     fn apply_terminal_font_size_to_all_terminals(&mut self) {
@@ -1023,7 +1034,9 @@ impl MistTermApp {
     fn apply_terminal_font_preferences(&mut self, ctx: &egui::Context) {
         crate::platform::configure_terminal_font(ctx, &self.terminal_font_selection());
         // 字体族变更后重刷 TextStyle，确保界面比例字体仍指向统一 CJK 族。
-        self.theme_manager.invalidate_and_apply(ctx);
+        if self.theme_manager.invalidate_and_apply(ctx) {
+            self.clear_terminal_visual_layout_caches();
+        }
         self.apply_terminal_font_size_to_all_terminals();
         ctx.request_repaint();
     }
@@ -6260,6 +6273,13 @@ impl MistTermApp {
         }
     }
 
+    /// 主题切换后：立刻清终端布局缓存并重绘。
+    /// 下一帧 `apply_current_theme` 仍会再清一次（幂等），保证任何切换入口都不漏。
+    pub(crate) fn invalidate_terminals_after_theme_change(&mut self, ctx: &egui::Context) {
+        self.clear_terminal_visual_layout_caches();
+        ctx.request_repaint();
+    }
+
     /// Win/Linux 沉浸式关掉系统标题栏，退出时恢复；macOS 保持系统边框。
     pub(crate) fn sync_window_decorations_for_immersive(
         &mut self,
@@ -9171,18 +9191,33 @@ impl MistTermApp {
                 ui.vertical_centered(|ui| {
                     ui.add_space(8.0);
                     ui.spacing_mut().item_spacing.y = 6.0;
+                    // 高亮与「当前激活 dock」一对一：右侧任一面板打开时，连接不抢蓝。
+                    let right_dock_open = self.fragment_state.show_fragment_panel
+                        || self.show_sftp_panel
+                        || self.show_port_forward_panel
+                        || self.show_monitor_panel
+                        || self.show_ai_panel
+                        || self.credential_panel.open
+                        || self.cloud_sync_panel.open;
+                    let connections_selected = !self.sidebar_collapsed && !right_dock_open;
                     if crate::ui::chrome::activity_rail_button(
                         ui,
                         theme,
                         crate::ui::icons::IconId::Server,
-                        !self.sidebar_collapsed,
+                        connections_selected,
                         &tip(menu.connections, None),
                         crate::i18n::tr(ctx, "Hosts", "连接"),
                     )
                     .clicked()
                     {
-                        self.sidebar_collapsed = !self.sidebar_collapsed;
-                        self.sidebar_user_dismissed_responsive = self.sidebar_collapsed;
+                        if right_dock_open {
+                            self.close_all_right_dock_panels();
+                            self.sidebar_collapsed = false;
+                            self.sidebar_user_dismissed_responsive = false;
+                        } else {
+                            self.sidebar_collapsed = !self.sidebar_collapsed;
+                            self.sidebar_user_dismissed_responsive = self.sidebar_collapsed;
+                        }
                     }
 
                     if crate::ui::chrome::activity_rail_button(
@@ -9435,7 +9470,7 @@ impl MistTermApp {
                 if i < self.theme_manager.list_themes().len() {
                     self.theme_manager.set_theme_index(i);
                     self.theme_manager.save();
-                    ctx.request_repaint();
+                    self.invalidate_terminals_after_theme_change(ctx);
                 }
             }
             MacMenuAction::FragmentLibrary => self.open_snippet_library_dialog(),
@@ -9720,15 +9755,15 @@ impl eframe::App for MistTermApp {
         {
             self.fragment_state.quick_selector.open = true;
         }
-        if self.terminal_search.open {
-            if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::F))
-                || ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::F))
-            {
-                self.toggle_terminal_search();
-            }
-        } else if ctx.input(|i| self.app_shortcut_overrides_terminal(i)) {
-            if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::F))
-                || ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::F))
+        // Ctrl/⌘+F：手册写明「终端内查找」。终端聚焦时也要拦截，不能进 PTY 变成 ^F。
+        // 其它 TextEdit（AI 草稿、表单）聚焦时让位。
+        {
+            let take_find = self.terminal_search.open
+                || self.active_terminal_has_keyboard_focus()
+                || !ctx.egui_wants_keyboard_input();
+            if take_find
+                && (ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::F))
+                    || ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::F)))
             {
                 self.toggle_terminal_search();
             }
@@ -10234,6 +10269,14 @@ impl eframe::App for MistTermApp {
             }) {
                 self.toggle_sftp_panel(ctx);
             }
+            // Ctrl+Shift+Y：强制打开命令片段侧栏（勿用 Ctrl+Shift+U：上下分屏；勿带 Alt：易被系统吞）
+            if ctx.input_mut(|i| {
+                i.consume_key(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, egui::Key::Y)
+            }) {
+                if self.ensure_right_dock_allowed_or_warn(ctx) {
+                    self.open_right_dock_panel(ActiveRightDock::Fragment);
+                }
+            }
             if ctx.input_mut(|i| {
                 i.consume_key(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, egui::Key::F7)
             }) {
@@ -10284,11 +10327,14 @@ impl eframe::App for MistTermApp {
         }
 
         if self.app_global_shortcuts_enabled() {
-            if ctx.input(|i| {
-                self.app_shortcut_overrides_terminal(i)
-                    && Self::input_primary_mod(i)
-                    && i.key_pressed(egui::Key::N)
-            }) {
+            // Ctrl/⌘+N：新建连接（手册 / ARCHITECTURE）。终端聚焦时也要拦截，不能进 PTY 变成 ^N。
+            // 其它 TextEdit 聚焦时让位；弹窗已开时 global_shortcuts_blocked 会挡住整段。
+            let take_new = self.active_terminal_has_keyboard_focus()
+                || !ctx.egui_wants_keyboard_input();
+            if take_new
+                && (ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::N))
+                    || ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::N)))
+            {
                 self.dialog_flags.new_session = true;
             }
             if ctx.input(|i| {

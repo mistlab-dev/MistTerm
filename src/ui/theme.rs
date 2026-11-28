@@ -985,7 +985,7 @@ impl Theme {
         }
     }
 
-    /// 输入框 Frame(圆角、内边距；modern 为透明底 + 下划线，由 [`form_singleline_field`] 绘制)
+    /// 输入框 Frame(圆角、内边距；当前统一实心底框，underline 路径保留可开关)
     pub fn frame_form_text_input(&self, focused: bool) -> egui::Frame {
         if self.uses_underline_inputs() {
             let _ = focused;
@@ -1198,10 +1198,24 @@ impl Theme {
         }
     }
 
-    /// 表单下划线输入：idle 线色
+    /// 表单下划线输入：idle 线色（约 40% 白；勿用 divider 的 4% 白，几乎看不见）。
     #[inline]
     pub fn color_input_underline_idle(&self) -> Color32 {
-        self.divider_stroke_color()
+        if self.uses_modern_palette() {
+            Color32::from_rgba_unmultiplied(255, 255, 255, 102)
+        } else {
+            self.divider_stroke_color()
+        }
+    }
+
+    /// 表单下划线输入：悬停线色（比 idle 更亮，提示可编辑）。
+    #[inline]
+    pub fn color_input_underline_hover(&self) -> Color32 {
+        if self.uses_modern_palette() {
+            Color32::from_rgba_unmultiplied(255, 255, 255, 160)
+        } else {
+            self.color_input_underline_idle()
+        }
     }
 
     /// 表单下划线输入：focus 线色
@@ -1249,10 +1263,13 @@ impl Theme {
             .inner_margin(egui::Margin::symmetric(self.spacing_body_pad() as i8, self.spacing_body_pad() as i8))
     }
 
-    /// modern 主题是否使用下划线输入样式
+    /// modern 主题是否使用下划线输入样式。
+    ///
+    /// 2026-11-28 试用：暗夜下划线 idle 对比度接近 1:1，字段认不出来；
+    /// UI-GUIDELINES §10.2 也写弹窗/偏好主路径优先 boxed。统一走实心底框。
     #[inline]
     pub fn uses_underline_inputs(&self) -> bool {
-        self.uses_modern_palette()
+        false
     }
 
     /// egui 裸控件悬停底(暗夜中性灰，非 accent 紫)
