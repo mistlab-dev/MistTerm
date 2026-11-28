@@ -237,6 +237,9 @@ pub struct FragmentVariableDialog {
     pub command_edit: String,
     /// 点「插入/执行」时若 `{{ … }}` 展开失败，在弹窗内展示(避免用户以为按钮失灵)。
     pub last_finalize_error: Option<String>,
+    /// #488：弹窗刚打开时为 true，首个输入框本帧 `request_focus` 后即清零，
+    /// 让用户打开弹窗就能直接输入，无需先点输入框。
+    pub focus_first_input: bool,
 }
 
 /// 「填写片段变量」弹窗关闭后的动作(插入终端 vs ⌘J 直接发送)
@@ -304,6 +307,10 @@ pub struct MistTermApp {
     /// 终端标签页
     tabs: Vec<TerminalTab>,
     active_tab: Option<usize>,
+    /// #454：标签栏水平滚动偏移（内容坐标，像素）。
+    tab_strip_scroll_x: f32,
+    /// 最近一次已滚入可视区的活动标签；与 `active_tab` 不同则下一帧滚入。
+    tab_strip_synced_active: Option<usize>,
 
     /// 状态栏信息
     status_message: String,
@@ -1174,6 +1181,8 @@ impl MistTermApp {
             last_responsive_layout_band: None,
             tabs: Vec::new(),
             active_tab: None,
+            tab_strip_scroll_x: 0.0,
+            tab_strip_synced_active: None,
             action_bus: crate::ui::action::ActionBus::new(),
             status_message: String::new(),
             module_registry,
@@ -7921,8 +7930,11 @@ impl MistTermApp {
             self.edit_session_form.port = session.port;
             self.edit_session_form.port_str = session.port.to_string();
             self.edit_session_form.username = session.username;
-            // FUNCTIONAL_SPEC §1.3.3：不将真实密码填入 UI
-            self.edit_session_form.password = "****".to_string();
+            // FUNCTIONAL_SPEC §1.3.3：不将真实密码填入 UI。
+            // 仅当确实存有非空密码时才预填掩码哨兵；密钥 / Agent / vault
+            // 等无密码会话留空，配合「可留空」占位提示，避免看起来像已设密码。
+            self.edit_session_form.password =
+                crate::ui::session_form::edit_password_field_initial(&session.password);
             self.edit_session_form.group = session.group;
             self.edit_session_form.private_key_path = session.private_key_path;
             self.edit_session_form.use_ssh_agent = session.use_ssh_agent;
@@ -8002,12 +8014,12 @@ impl MistTermApp {
                 .any(|p| p.session_id == session_id && p.terminal.is_connected())
         });
 
-        let trimmed = self.edit_session_form.password.trim();
-        let password_to_store = if trimmed.is_empty() || trimmed == "****" {
-            old_password
-        } else {
-            self.edit_session_form.password.clone()
-        };
+        // 空或掩码哨兵 = 沿用旧密码（从未设过密码的会话保存后仍为空，
+        // 不会把 "****" 写成真实密码）；其它输入 = 替换为新密码。
+        let password_to_store = crate::ui::session_form::edit_password_to_store(
+            &self.edit_session_form.password,
+            &old_password,
+        );
 
         let updated = self.session_manager.update_session(
             &session_id,
@@ -8970,6 +8982,7 @@ impl MistTermApp {
             self.fragment_state.variable_dialog.command_edit =
                 self.build_fragment_command_preview(fragment, &self.fragment_state.variable_dialog.values);
             self.fragment_state.variable_dialog.paste_after_fill = true;
+            self.fragment_state.variable_dialog.focus_first_input = true;
             self.fragment_state.variable_dialog.last_finalize_error = None;
             return;
         }
@@ -9005,6 +9018,8 @@ impl MistTermApp {
                 needs_user.into_iter().map(|k| (k, String::new())).collect();
             self.sync_pending_fragment_command_edit();
             self.fragment_state.fragment_vars_completion = FragmentVarsCompletion::PasteInsertStats;
+            // #493：弹窗刚打开即聚焦第一个变量输入框（与 #488 / #491 一致）。
+            self.fragment_state.pending_fragment_vars_focus_first = true;
             self.fragment_state.show_fragment_vars_dialog = true;
         }
     }
@@ -10581,6 +10596,7 @@ impl MistTermApp {
             self.fragment_state.variable_dialog.command_edit =
                 self.build_fragment_command_preview(fragment, &self.fragment_state.variable_dialog.values);
             self.fragment_state.variable_dialog.paste_after_fill = false;
+            self.fragment_state.variable_dialog.focus_first_input = true;
             self.fragment_state.variable_dialog.last_finalize_error = None;
             return;
         }
@@ -10664,6 +10680,8 @@ impl MistTermApp {
         self.fragment_state.pending_fragment_vars = needs.into_iter().map(|k| (k, String::new())).collect();
         self.sync_pending_fragment_command_edit();
         self.fragment_state.fragment_vars_completion = FragmentVarsCompletion::QuickExecuteSend;
+        // #493：弹窗刚打开即聚焦第一个变量输入框（与 #488 / #491 一致）。
+        self.fragment_state.pending_fragment_vars_focus_first = true;
         self.fragment_state.show_fragment_vars_dialog = true;
     }
 

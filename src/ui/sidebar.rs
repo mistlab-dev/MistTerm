@@ -7,8 +7,8 @@ use std::collections::{HashMap, HashSet};
 use std::time::{SystemTime, UNIX_EPOCH};
 use crate::core::session::SessionManager;
 use crate::core::session_list::{
-    connection_status_label, dedupe_sessions_for_connection_list, session_group_key,
-    sort_sessions_keeping_groups,
+    connection_status_label, dedupe_sessions_for_connection_list,
+    session_matches_connection_search, session_group_key, sort_sessions_keeping_groups,
 };
 use crate::core::team::TeamServer;
 use crate::core::session_sort::SessionSortBy;
@@ -431,15 +431,13 @@ impl Sidebar {
                         let endpoint =
                             format!("{}@{}:{}", server.username, server.host, server.port);
                         let meta_px = theme.font_size_connection_meta();
-                        let measured_endpoint_w = row_ui.ctx().fonts_mut(|f| {
-                            f.layout_no_wrap(
-                                endpoint.clone(),
-                                egui::FontId::proportional(meta_px),
-                                theme.text_tertiary(),
-                            )
-                            .size()
-                            .x
-                        });
+                        // 视觉回退 #476：endpoint 宽度按普通字体 galley 量取。
+                        let measured_endpoint_w = crate::ui::chrome::measure_readable_host_width(
+                            row_ui.ctx(),
+                            &endpoint,
+                            meta_px,
+                            theme.text_tertiary(),
+                        );
                         let gap = theme.spacing_sm().max(6.0);
                         let avail = row_ui.available_width();
                         let row_h = row_ui.available_height();
@@ -472,14 +470,12 @@ impl Sidebar {
                             end_rect).layout(egui::Layout::right_to_left(egui::Align::Center)),
                         );
                         end_ui.set_clip_rect(end_rect);
-                        end_ui.add(
-                            egui::Label::new(
-                                egui::RichText::new(endpoint)
-                                    .size(meta_px)
-                                    .color(theme.text_tertiary()),
-                            )
-                            .truncate()
-                            .wrap(),
+                        // 视觉回退 #476：endpoint 用普通字体句点绘制；字符串本身不变。
+                        crate::ui::chrome::readable_host_line(
+                            &mut end_ui,
+                            &endpoint,
+                            meta_px,
+                            theme.text_tertiary(),
                         );
                         if response.clicked() {
                             connect_team_server_key = Some(server.list_key());
@@ -506,11 +502,10 @@ impl Sidebar {
                             if search_query.trim().is_empty() {
                                 return true;
                             }
-                            let query = search_query.to_lowercase();
-                            s.name.to_lowercase().contains(&query)
-                                || s.host.to_lowercase().contains(&query)
-                                || s.username.to_lowercase().contains(&query)
-                                || s.group.to_lowercase().contains(&query)
+                            // #486：除名称/host/用户名/分组外，还要匹配列表行实际显示的
+                            // `host:port` 里的端口（非 22 端口显示 `host:port`；22 仍按
+                            // 真实端口命中）。逻辑收口在 session_matches_connection_search。
+                            session_matches_connection_search(s, search_query)
                         })
                         .cloned()
                         .collect();
@@ -761,14 +756,12 @@ impl Sidebar {
                             } else {
                                 session.host.clone()
                             };
-                            text_ui.add(
-                                egui::Label::new(
-                                    egui::RichText::new(host_line)
-                                        .size(theme.font_size_caption())
-                                        .color(theme.color_caption_text()),
-                                )
-                                .truncate()
-                                .wrap(),
+                            // 视觉回退 #476：连接列表 host 行用普通字体句点绘制；host 字符串本身不变。
+                            crate::ui::chrome::readable_host_line(
+                                &mut text_ui,
+                                &host_line,
+                                theme.font_size_caption(),
+                                theme.color_caption_text(),
                             );
                             row_ui.add_space(gap);
                             let (status_rect, _) = row_ui.allocate_exact_size(

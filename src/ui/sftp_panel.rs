@@ -2780,6 +2780,23 @@ impl SftpPanel {
         s
     }
 
+    /// #469：人话错误按词组预折行，避免「请换路径」等从字中间拆开。
+    /// 不改 localize_* 返回值，只在绘制时插入换行。
+    fn paint_list_error_label(ui: &mut egui::Ui, theme: &Theme, msg: &str, small: bool) {
+        let wrapped = crate::ui::cloud_sync_panel::cjk_wrap_lines(
+            ui,
+            theme,
+            msg,
+            crate::ui::cloud_sync_panel::SFTP_LIST_ERROR_ZH_PHRASES,
+            ui.available_width(),
+        );
+        let mut rt = egui::RichText::new(wrapped).color(theme.red_color());
+        if small {
+            rt = rt.small();
+        }
+        ui.label(rt);
+    }
+
     fn localize_local_list_error(ctx: &egui::Context, msg: &str) -> String {
         // #440 点查：实机错误为 `[SFTP3] permission denied`（小写 p、含前缀），
         // 大小写敏感 contains 对不上——改用小写化匹配。
@@ -4010,7 +4027,7 @@ impl SftpPanel {
                 .corner_radius(theme.radius_list_item())
                 .inner_margin(egui::Margin::symmetric(theme.spacing_search_input_x() as i8, theme.spacing_search_input_y() as i8))
                 .show(ui, |ui| {
-                    ui.label(egui::RichText::new(msg).color(theme.red_color()));
+                    Self::paint_list_error_label(ui, theme, &msg, false);
                     ui.horizontal(|ui| {
                         if crate::ui::chrome::panel_action_primary_icon_button(
                             ui,
@@ -4329,7 +4346,7 @@ impl SftpPanel {
             }
             if let Some(err) = &self.local_list_err {
                 let msg = Self::localize_local_list_error(ctx, err);
-                ui.label(egui::RichText::new(msg).small().color(theme.red_color()));
+                Self::paint_list_error_label(ui, theme, &msg, true);
             }
             let mut enter_local: Option<PathBuf> = None;
             let local_block_h = local_list_h + theme.size_file_list_row_h();
@@ -5169,8 +5186,12 @@ impl SftpPanel {
         content_w: f32,
     ) {
         // #250：顶部明确「上传」「下载」「对比目录」，小白不用猜图标。
-        ui.horizontal(|ui| {
+        // #456：默认宽度（约 320px）下英文「Compare folders」在单行 horizontal 里会被
+        // 面板裁成「Compare fo」。按钮本身按完整标签量宽，不收缩；放不下就换行，
+        // 保留完整可点标签，不改成无说明的纯图标，也不改 #441/#446 四按钮工具栏。
+        ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing.x = theme.spacing_panel_gap();
+            ui.spacing_mut().item_spacing.y = 2.0;
             let can_upload = self.has_local_upload_selection();
             let can_download = self.has_remote_download_selection();
             let can_compare = !self.busy;
@@ -5300,6 +5321,19 @@ impl SftpPanel {
             );
         });
         self.paint_flux_prompts(ui, ctx, theme, handle);
+    }
+
+    /// #456：顶栏三个动作按钮（上传 / 下载 / 对比目录）在 `avail_w` 内能否排成一行。
+    /// 排不下时应换行，而不是裁切第三个按钮的标签。
+    #[cfg(test)]
+    fn flux_action_row_fits_one_line(
+        avail_w: f32,
+        upload_w: f32,
+        download_w: f32,
+        compare_w: f32,
+        gap: f32,
+    ) -> bool {
+        upload_w + gap + download_w + gap + compare_w <= avail_w
     }
 
     /// #462：本机/远端两栏 + 中缝须铺满面板正文宽，右缘不留细竖缝。
@@ -5758,10 +5792,11 @@ impl SftpPanel {
             self.refresh_local_list();
         }
         if let Some(err) = &self.local_list_err {
-            ui.label(
-                egui::RichText::new(Self::localize_local_list_error(ctx, err))
-                    .small()
-                    .color(theme.red_color()),
+            Self::paint_list_error_label(
+                ui,
+                theme,
+                &Self::localize_local_list_error(ctx, err),
+                true,
             );
         }
     }
@@ -5916,10 +5951,11 @@ impl SftpPanel {
                 // #437：先报错（人话 + 不只是「空闲」页脚），空目录再给明确空态——
                 // 两者不混同；本机一侧不受影响，不冻结整窗。
                 if let Some(err) = &self.list_err {
-                    ui.label(
-                        egui::RichText::new(Self::localize_list_error(ctx, err))
-                            .small()
-                            .color(theme.red_color()),
+                    Self::paint_list_error_label(
+                        ui,
+                        theme,
+                        &Self::localize_list_error(ctx, err),
+                        true,
                     );
                     ui.add_space(theme.spacing_xs());
                 } else if self.entries.is_empty() && !self.busy {
@@ -5984,10 +6020,11 @@ impl SftpPanel {
         }
         if let Some(err) = self.list_err.clone() {
             ui.horizontal(|ui| {
-                ui.label(
-                    egui::RichText::new(Self::localize_list_error(ctx, &err))
-                        .small()
-                        .color(theme.red_color()),
+                Self::paint_list_error_label(
+                    ui,
+                    theme,
+                    &Self::localize_list_error(ctx, &err),
+                    true,
                 );
                 if ui
                     .small_button(crate::i18n::tr(ctx, "Retry", "重试"))
@@ -6244,6 +6281,59 @@ mod tests {
         assert!(!SftpPanel::flux_compact_from_widths(widest * 4.0, widest));
         assert!(SftpPanel::flux_compact_from_widths(widest - 1.0, widest));
         assert!(SftpPanel::flux_compact_from_widths(0.0, widest));
+    }
+
+    // #456：默认文件面板宽度下，英文「Compare folders」与上传/下载并排会超宽，
+    // 必须换行；同一宽度下中文「对比目录」仍可一行排下。单个对比按钮本身窄于面板，
+    // 换行后完整标签可见，而不是裁成残字。
+    #[test]
+    fn flux_action_row_english_compare_folders_wraps_at_default_pane_width() {
+        egui::__run_test_ui(|ui| {
+            let theme = Theme::dark();
+            let gap = theme.spacing_panel_gap();
+            let min_w = theme.size_control_btn_min_w();
+            let measure = |label: &str| {
+                crate::ui::chrome::control_button_size(ui, &theme, label, true, min_w).x
+            };
+            let en_upload = measure("Upload");
+            let en_download = measure("Download");
+            let en_compare = measure("Compare folders");
+            let zh_upload = measure("上传");
+            let zh_download = measure("下载");
+            let zh_compare = measure("对比目录");
+
+            // 议题复现宽度，以及去掉两侧常见 dock 边距后的正文宽。
+            let default_pane_w = 320.0_f32;
+            let content_w = (default_pane_w - 16.0).max(280.0);
+            assert!(
+                en_compare <= content_w,
+                "Compare folders button itself must fit the pane so wrapping shows the full label, got {en_compare}"
+            );
+            assert!(
+                !SftpPanel::flux_action_row_fits_one_line(
+                    default_pane_w, en_upload, en_download, en_compare, gap
+                ),
+                "English labels should not fit one line at {default_pane_w}px (upload={en_upload}, download={en_download}, compare={en_compare}, gap={gap})"
+            );
+            assert!(
+                !SftpPanel::flux_action_row_fits_one_line(
+                    content_w, en_upload, en_download, en_compare, gap
+                ),
+                "English labels should not fit one line at content width {content_w}"
+            );
+            assert!(
+                SftpPanel::flux_action_row_fits_one_line(
+                    default_pane_w, zh_upload, zh_download, zh_compare, gap
+                ),
+                "Chinese labels should still fit one line at {default_pane_w}px (upload={zh_upload}, download={zh_download}, compare={zh_compare}, gap={gap})"
+            );
+            assert!(
+                SftpPanel::flux_action_row_fits_one_line(
+                    640.0, en_upload, en_download, en_compare, gap
+                ),
+                "a widened pane should keep English labels on one line"
+            );
+        });
     }
 
     fn local_entry(name: &str) -> LocalEntry {

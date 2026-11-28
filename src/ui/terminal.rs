@@ -962,6 +962,13 @@ impl TerminalView {
         self.pending_focus_terminal = true;
     }
 
+    /// 传输结束或取消后立即恢复可输入状态，避免还要再按一次键（#442）。
+    fn restore_keyboard_after_transfer(&mut self) {
+        self.pending_focus_terminal = true;
+        self.terminal_wants_keyboard = true;
+        self.terminal_focused = true;
+    }
+
     /// 把键盘/IME 让给 UI TextEdit(AI 草稿、偏好等)。
     /// 半角 ASCII 的 `Event::Text` 可被多个监听者看到；全角标点走 IME Composition，只进「当前 IME 目标」。
     /// 若不 surrender 终端 IME 框，全角 `，。` 会进已隐藏的 ime_capture 并被清空，AI 框像「打不出来」。
@@ -3662,8 +3669,10 @@ impl TerminalView {
                                 && !is_rz_upload_handshake
                                 && self.expect_sz_download_active()
                             {
-                                if let Some(pump_tx) =
-                                    self.ssh_handle.as_ref().map(|h| h.shell_pump_tx())
+                                if let Some((pump_tx, pump_poller)) = self
+                                    .ssh_handle
+                                    .as_ref()
+                                    .map(|h| (h.shell_pump_tx(), h.shell_pump_poller()))
                                 {
                                     let resolved = crate::core::local_dir::current();
                                     if let Some(missing) = &resolved.missing {
@@ -3682,7 +3691,7 @@ impl TerminalView {
                                         self.feed_user_warn_line(theme, &warn);
                                     }
                                     self.lrzsz.set_download_dir(resolved.dir);
-                                    match self.lrzsz.start_receive_pump(pump_tx) {
+                                    match self.lrzsz.start_receive_pump(pump_tx, pump_poller) {
                                         Ok(()) => {
                                             if self.lrzsz.feed_receive_data(&data) {
                                                 continue;
@@ -4004,6 +4013,7 @@ impl TerminalView {
                         // rz 上传后远端提示符常紧跟收尾输出；成功行后立即补空行，避免粘在同一行。
                         self.terminal.feed(b"\r\n");
                     }
+                    self.restore_keyboard_after_transfer();
                 }
                 TransferEvent::FileError { filename, error } => {
                     if let Some(ref h) = self.ssh_handle {
@@ -4020,6 +4030,7 @@ impl TerminalView {
                         error
                     ));
                     self.flush_ssh_pty_size_after_transfer();
+                    self.restore_keyboard_after_transfer();
                 }
                 TransferEvent::TransferComplete => {
                     if let Some(ref h) = self.ssh_handle {
@@ -4033,6 +4044,8 @@ impl TerminalView {
                     self.transfer_outgoing = false;
                     // 上传期间可能暂缓了 resize_pty，此处与远端对齐当前 UI 网格
                     self.flush_ssh_pty_size_after_transfer();
+                    self.restore_keyboard_after_transfer();
+                    ctx.request_repaint();
                 }
             }
         }
@@ -4087,9 +4100,15 @@ impl TerminalView {
                 // EventFilter 需上一帧已聚焦才生效；首帧 Tab 仍可能失焦
                 self.pending_focus_terminal = true;
             }
-            if crate::ui::terminal_keys::forward_non_text_keys(i, |bytes| {
-                self.append_offline_bytes(bytes);
-            }) {
+            // #482：断线重发路径与 PTY 路径用同一套字节序列，方向键同样
+            // 按对端 DECCKM 模式编码。
+            if crate::ui::terminal_keys::forward_non_text_keys_with_mode(
+                i,
+                self.terminal.is_application_cursor_mode(),
+                |bytes| {
+                    self.append_offline_bytes(bytes);
+                },
+            ) {
                 self.pending_focus_terminal = true;
             }
             let mut sent_ctrl = [false; 32];
@@ -4137,7 +4156,16 @@ impl TerminalView {
                 match event {
                     egui::Event::Ime(egui::ImeEvent::Commit(text)) => {
                         if let Some(text) = Self::ime_committed_text(text, i.modifiers) {
+                            if std::env::var_os("MISTTERM_IME_DEBUG").is_some() {
+                                eprintln!(
+                                    "[ime-debug] OFFLINE-COMMIT-WRITE {:?} bytes={}",
+                                    text,
+                                    text.as_bytes().len()
+                                );
+                            }
                             self.append_offline_bytes(text.as_bytes());
+                        } else if std::env::var_os("MISTTERM_IME_DEBUG").is_some() {
+                            eprintln!("[ime-debug] OFFLINE-COMMIT dropped by modifier gate");
                         }
                     }
                     egui::Event::Text(text) => {
@@ -4416,9 +4444,15 @@ impl TerminalView {
                 self.pending_focus_terminal = true;
             }
             // Esc / F1–F12 / Insert / 带修饰方向键等(egui 常无 Text 事件)
-            if crate::ui::terminal_keys::forward_non_text_keys(i, |bytes| {
-                let _ = self.send_pty_input(bytes);
-            }) {
+            // #482：方向键按对端 DECCKM 模式编码（vim / top 字段管理等
+            // 发 `CSI ?1h` 后须回 SS3 序列）。
+            if crate::ui::terminal_keys::forward_non_text_keys_with_mode(
+                i,
+                self.terminal.is_application_cursor_mode(),
+                |bytes| {
+                    let _ = self.send_pty_input(bytes);
+                },
+            ) {
                 // EventFilter 生效前的兜底(帧初 Tab/Esc/方向键抢焦点)
                 self.pending_focus_terminal = true;
             }
@@ -4481,10 +4515,19 @@ impl TerminalView {
                 match event {
                     egui::Event::Ime(egui::ImeEvent::Commit(text)) => {
                         if let Some(text) = Self::ime_committed_text(text, i.modifiers) {
+                            if std::env::var_os("MISTTERM_IME_DEBUG").is_some() {
+                                eprintln!(
+                                    "[ime-debug] COMMIT-WRITE {:?} bytes={}",
+                                    text,
+                                    text.as_bytes().len()
+                                );
+                            }
                             self.track_typed_text(text);
                             if let Err(e) = self.send_pty_input(text.as_bytes()) {
                                 log::error!("PTY write (ime): {}", e);
                             }
+                        } else if std::env::var_os("MISTTERM_IME_DEBUG").is_some() {
+                            eprintln!("[ime-debug] COMMIT dropped by modifier gate");
                         }
                     }
                     egui::Event::Text(text) => {
@@ -5143,9 +5186,7 @@ impl TerminalView {
         self.transfer_progress = None;
         self.transfer_outgoing = false;
         self.auto_follow_output = true;
-        self.pending_focus_terminal = true;
-        self.terminal_wants_keyboard = true;
-        self.terminal_focused = true;
+        self.restore_keyboard_after_transfer();
         // ZMODEM 协议态下单个 Ctrl+C 不一定被远端 rz/sz 识别；高优先级发 CAN 序列再补 ETX。
         let cancel = vec![
             0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, // CAN x8
@@ -5179,9 +5220,7 @@ impl TerminalView {
         self.transfer_outgoing = false;
         self.auto_follow_output = true;
         // 文件对话框关闭后主动抢回终端焦点，避免「取消后不能输入」
-        self.pending_focus_terminal = true;
-        self.terminal_wants_keyboard = true;
-        self.terminal_focused = true;
+        self.restore_keyboard_after_transfer();
         if self.lrzsz.is_active() {
             self.lrzsz.cancel_active_transfer();
         }
@@ -5212,13 +5251,14 @@ impl TerminalView {
             .as_ref()
             .ok_or_else(|| loc.tr("PTY not ready", "PTY 未就绪").to_string())?;
         let pump_tx = handle.shell_pump_tx();
+        let pump_poller = handle.shell_pump_poller();
         self.rz_control_mode_until = Some(Instant::now() + Duration::from_secs(90));
         log::info!(
             "start_rz_upload: path={} session_id={:?}",
             path.display(),
             handle.session_id
         );
-        match self.lrzsz.start_send(path_str, pump_tx) {
+        match self.lrzsz.start_send(path_str, pump_tx, pump_poller) {
             Ok(()) => Ok(()),
             Err(e) => {
                 self.lrzsz.end_rz_handshake_capture();
@@ -7925,5 +7965,127 @@ mod tab_title_focus_tests {
         view.release_keyboard_for_overlay();
         assert!(!view.terminal_wants_keyboard);
         assert!(!view.pending_focus_terminal, "释放焦点必须连 pending 一起清，否则下一帧终端把焦点抢回");
+    }
+}
+
+#[cfg(test)]
+mod post_transfer_focus_tests {
+    use super::*;
+    use std::sync::{Arc, Mutex};
+
+    fn unfocused_view() -> TerminalView {
+        let mut view = TerminalView::new();
+        view.pending_focus_terminal = false;
+        view.terminal_wants_keyboard = false;
+        view.terminal_focused = false;
+        view
+    }
+
+    fn process(view: &mut TerminalView, event: TransferEvent) -> Option<Duration> {
+        let ctx = egui::Context::default();
+        let theme = Theme::dark();
+        let got = Arc::new(Mutex::new(None::<Duration>));
+        {
+            let got = got.clone();
+            ctx.set_repaint_observer(move |info: egui::RequestRepaintInfo| {
+                let mut g = got.lock().unwrap();
+                *g = Some(match *g {
+                    Some(prev) => prev.min(info.delay),
+                    None => info.delay,
+                });
+            });
+        }
+        view.lrzsz.push_event_for_test(event);
+        view.process_transfer_events(&theme, &ctx);
+        let delay = *got.lock().unwrap();
+        delay
+    }
+
+    fn assert_focus_restored(view: &TerminalView, label: &str) {
+        assert!(
+            view.pending_focus_terminal,
+            "{label}: pending_focus_terminal must be set so the next frame reclaims keyboard after any_click"
+        );
+        assert!(
+            view.terminal_wants_keyboard,
+            "{label}: terminal_wants_keyboard must be set so typing is accepted without an extra keypress"
+        );
+        assert!(
+            view.terminal_focused,
+            "{label}: terminal_focused must be set, matching the cancel-transfer path"
+        );
+    }
+
+    #[test]
+    fn file_complete_restores_keyboard_focus() {
+        let mut view = unfocused_view();
+        let _ = process(
+            &mut view,
+            TransferEvent::FileComplete {
+                filename: "a.txt".into(),
+                path: PathBuf::from("/tmp/a.txt"),
+            },
+        );
+        assert_focus_restored(&view, "FileComplete");
+    }
+
+    #[test]
+    fn file_error_restores_keyboard_focus() {
+        let mut view = unfocused_view();
+        let _ = process(
+            &mut view,
+            TransferEvent::FileError {
+                filename: "a.txt".into(),
+                error: "boom".into(),
+            },
+        );
+        assert_focus_restored(&view, "FileError");
+    }
+
+    #[test]
+    fn transfer_complete_restores_keyboard_focus_and_requests_repaint() {
+        let mut view = unfocused_view();
+        let delay = process(&mut view, TransferEvent::TransferComplete);
+        assert_focus_restored(&view, "TransferComplete");
+        assert!(
+            delay.is_some(),
+            "TransferComplete must request a repaint so the typable state is shown without a keypress"
+        );
+        assert_eq!(
+            delay.unwrap(),
+            Duration::ZERO,
+            "TransferComplete should request an immediate repaint, got {delay:?}"
+        );
+    }
+
+    #[test]
+    fn file_progress_does_not_restore_focus_but_still_repaints() {
+        let mut view = unfocused_view();
+        view.transfer_progress = Some(("a.txt".into(), 0, 100));
+        let delay = process(
+            &mut view,
+            TransferEvent::FileProgress {
+                filename: "a.txt".into(),
+                received: 50,
+                total: 100,
+            },
+        );
+        assert!(
+            !view.pending_focus_terminal
+                && !view.terminal_wants_keyboard
+                && !view.terminal_focused,
+            "Progress must not steal focus back mid-transfer"
+        );
+        assert!(
+            delay.is_some(),
+            "Progress must still request a repaint so the mid-transfer UI stays awake"
+        );
+    }
+
+    #[test]
+    fn cancel_rz_upload_selection_restores_keyboard_focus() {
+        let mut view = unfocused_view();
+        view.cancel_rz_upload_selection();
+        assert_focus_restored(&view, "cancel_rz_upload_selection");
     }
 }

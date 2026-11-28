@@ -317,4 +317,44 @@ mod tests {
             vec!["宿主机IP".to_string()]
         );
     }
+
+    // -------------------------------------------------------------- #488 变量弹窗不变式
+    // 「填写变量」弹窗（#488 改了输入框样式/占位/初始焦点）不得改变替换语义。
+
+    /// 打开弹窗即预填变量默认值（variable_defaults），预览随之展开；
+    /// 用户改填新值后预览同步，finalize（插入终端/执行）与预览一致。
+    #[test]
+    fn variable_dialog_defaults_then_user_value_flows_through_preview_and_finalize() {
+        let mut f = make_fragment("ping -c 3 <host_ip>", &["host_ip"]);
+        f.variables[0].default_value = Some("10.0.0.9".into());
+        assert!(f.has_variables());
+
+        // 1) 打开弹窗：values = variable_defaults()
+        let values = f.variable_defaults();
+        let preview = build_fragment_command_preview(&f, None, &values);
+        assert_eq!(preview, "ping -c 3 10.0.0.9", "默认值应立即出现在预览里");
+
+        // 2) 用户把 host_ip 改成别的值，预览同步替换
+        let mut edited = values.clone();
+        edited.insert("host_ip".into(), "192.168.1.1".into());
+        let edited_preview = build_fragment_command_preview(&f, None, &edited);
+        assert_eq!(edited_preview, "ping -c 3 192.168.1.1");
+
+        // 3) 最终发送（插入终端 / 执行）与预览一致
+        let final_text =
+            finalize_fragment_command_text(&edited_preview, None, &edited).unwrap();
+        assert_eq!(final_text, "ping -c 3 192.168.1.1");
+    }
+
+    /// 未填值的变量保持字面占位符（不静默吞掉），已填值的正常替换。
+    #[test]
+    fn variable_dialog_unfilled_variable_stays_literal_in_send_text() {
+        let f = make_fragment("traceroute <host_ip> count <count>", &["host_ip", "count"]);
+        let mut values = f.variable_defaults();
+        values.insert("host_ip".into(), "10.0.0.9".into()); // 只填了 host_ip
+        let preview = build_fragment_command_preview(&f, None, &values);
+        assert_eq!(preview, "traceroute 10.0.0.9 count <count>");
+        let sent = finalize_fragment_command_text(&preview, None, &values).unwrap();
+        assert_eq!(sent, preview, "插入终端的文本必须和预览完全一致");
+    }
 }

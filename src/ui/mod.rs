@@ -64,6 +64,7 @@ pub mod fragment_state;
 pub mod terminal_search;
 pub mod vault_form;
 pub mod help_docs_dialog;
+pub mod update_prefs_stack;
 
 pub use app::MistTermApp;
 pub use help_docs_dialog::{HelpDocsDialog, HelpPage};

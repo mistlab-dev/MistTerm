@@ -127,6 +127,9 @@ pub(crate) fn paint_vscode_tab_bottom_indicator(
 }
 
 
+/// 会话标签芯片最小宽度，与 [`session_tab_chip`] 布局一致。
+pub(crate) const SESSION_TAB_CHIP_MIN_WIDTH: f32 = 72.0;
+
 /// 终端区会话 Tab：整块底色(圆点 + 标题 + 关闭)，对齐 proto `.tab`。
 pub struct SessionTabChipResult {
     pub response: Response,
@@ -177,6 +180,28 @@ pub(crate) fn progress_ring_center_x(inner_min_x: f32) -> f32 {
 }
 
 
+/// 与 [`session_tab_chip`] 相同的期望宽度，供标签栏溢出布局在绘制前先量宽。
+pub fn session_tab_chip_desired_width(
+    ctx: &egui::Context,
+    theme: &Theme,
+    label: &str,
+    has_progress: bool,
+) -> f32 {
+    let close_slot = theme.size_tab_bar_icon_btn();
+    let pad_x = theme.spacing_tab_x();
+    let gap_dot = theme.spacing_tab_dot_text();
+    let gap_close = theme.spacing_tab_icon_gap();
+    let label_layout = super::layout_readable_host(
+        ctx,
+        label,
+        &egui::FontId::proportional(theme.font_size_tab_label()),
+        Color32::WHITE,
+    );
+    let slot_w = status_slot_width(has_progress);
+    let content_w = slot_w + gap_dot + label_layout.size.x + gap_close + close_slot;
+    (content_w + pad_x * 2.0).max(SESSION_TAB_CHIP_MIN_WIDTH)
+}
+
 /// `needs_attention`：#93 未聚焦标签有 BEL / SessionEnded 时画 accent 圆点。
 pub fn session_tab_chip(
     ui: &mut Ui,
@@ -203,17 +228,17 @@ pub fn session_tab_chip(
     } else {
         theme.text_tertiary()
     };
-    let label_galley = ui.ctx().fonts_mut(|f| {
-        f.layout_no_wrap(
-            label.to_owned(),
-            egui::FontId::proportional(theme.font_size_tab_label()),
-            label_color,
-        )
-    });
+    // 视觉回退 #476：标签标题按普通字体 galley 排版（IPv4 分隔点即字体句点）。
+    let label_layout = super::layout_readable_host(
+        ui.ctx(),
+        label,
+        &egui::FontId::proportional(theme.font_size_tab_label()),
+        label_color,
+    );
     // 宽度随内容：状态槽位（圆点，有进度时再加一个独立的进度环）+ 标题 + 间距 + ×。
     let slot_w = status_slot_width(progress.is_some());
-    let content_w = slot_w + gap_dot + label_galley.size().x + gap_close + close_slot;
-    let tab_w = (content_w + pad_x * 2.0).max(72.0);
+    let content_w = slot_w + gap_dot + label_layout.size.x + gap_close + close_slot;
+    let tab_w = (content_w + pad_x * 2.0).max(SESSION_TAB_CHIP_MIN_WIDTH);
     let size = egui::vec2(tab_w, theme.size_tab_min_h());
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
     let inner = rect.shrink2(egui::vec2(pad_x, pad_y));
@@ -346,18 +371,12 @@ pub fn session_tab_chip(
             }
         }
     }
-    let ink = label_galley
-        .rows
-        .first()
-        .map(|r| r.visuals.mesh_bounds)
-        .filter(|b| b.is_positive())
-        .unwrap_or_else(|| egui::Rect::from_min_size(egui::Pos2::ZERO, label_galley.size()));
     let label_x = inner.min.x + slot_w + gap_dot;
-    let label_w = label_galley.size().x;
-    ui.painter().galley(
-        egui::pos2(label_x, cy - ink.center().y),
-        label_galley,
-        egui::Color32::WHITE,
+    let label_w = label_layout.size.x;
+    super::paint_readable_host(
+        ui.painter(),
+        egui::pos2(label_x, cy - label_layout.ink_center_y),
+        &label_layout,
     );
     // × 紧跟标题；始终占位，仅切换绘制，避免显隐导致 hover 闪烁。
     let close_visible = show_close || active || tab_hot;

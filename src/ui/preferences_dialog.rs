@@ -106,9 +106,22 @@ impl MistTermApp {
                 });
             });
         if let Some(inner) = &modal_resp {
-            crate::ui::chrome::raise_window_response(ctx, &inner.response);
+            // Keep the dock raise when Software Update is closed. While Update
+            // is open, do not raise Preferences: both would want the top and
+            // egui would keep the stored relative order (Update behind).
+            if crate::ui::update_prefs_stack::preferences_raises_above_dock(
+                self.update_ui.dialog_open(),
+            ) {
+                crate::ui::chrome::raise_window_response(ctx, &inner.response);
+            }
         }
-        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+        // #452: Escape must not dismiss still-open Preferences while Software
+        // Update is in front. Close-button / click handling of this window is
+        // otherwise unchanged (prefs-vs-dock raise above is preserved).
+        if crate::ui::update_prefs_stack::escape_closes_preferences(
+            crate::ui::update_prefs_stack::front_dialog(self.update_ui.dialog_open(), true),
+        ) && ctx.input(|i| i.key_pressed(egui::Key::Escape))
+        {
             should_close = true;
         }
         if self.rule_manager_dialog.take_close_preferences() {
@@ -1340,10 +1353,16 @@ impl MistTermApp {
             |ui| {
                 // #279：术语补白话说明。
                 ui.label(
-                    RichText::new(crate::i18n::tr(
-                        ctx,
-                        "Audit log: keeps a local record of what was run and when, so you can trace things afterwards. It only records events — it does not block your actions.",
-                        "操作审计：把执行过什么、什么时候执行的记录下来，便于事后追查。它只记录事件，不会拦截你的操作。",
+                    RichText::new(crate::ui::cloud_sync_panel::cjk_wrap_lines(
+                        ui,
+                        theme,
+                        crate::i18n::tr(
+                            ctx,
+                            "Audit log: keeps a local record of what was run and when, so you can trace things afterwards. It only records events — it does not block your actions.",
+                            "操作审计：把执行过什么、什么时候执行的记录下来，便于事后追查。它只记录事件，不会拦截你的操作。",
+                        ),
+                        crate::ui::cloud_sync_panel::AUDIT_ZH_PHRASES,
+                        ui.available_width(),
                     ))
                     .size(theme.font_size_small())
                     .color(text_low),
@@ -1511,10 +1530,16 @@ impl MistTermApp {
                     }
                 });
                 ui.label(
-                    RichText::new(format!(
-                        "{}{}",
-                        crate::i18n::tr(ctx, "Audit directory: ", "审计目录："),
-                        self.app_settings.audit.file_dir.display(),
+                    RichText::new(crate::ui::cloud_sync_panel::cjk_wrap_lines(
+                        ui,
+                        theme,
+                        &format!(
+                            "{}{}",
+                            crate::i18n::tr(ctx, "Audit directory: ", "审计目录："),
+                            self.app_settings.audit.file_dir.display(),
+                        ),
+                        crate::ui::cloud_sync_panel::AUDIT_ZH_PHRASES,
+                        ui.available_width(),
                     ))
                     .size(theme.font_size_small())
                     .color(text_low),
@@ -1689,10 +1714,14 @@ impl MistTermApp {
                             "尝鲜预览构建；不承诺按日发版",
                         ),
                     ] {
-                        if ui
-                            .radio(cur == ch, crate::i18n::tr(ctx, en, zh))
-                            .on_hover_text(crate::i18n::tr(ctx, tip_en, tip_zh))
-                            .clicked()
+                        if crate::ui::chrome::form_radio(
+                            ui,
+                            theme,
+                            cur == ch,
+                            crate::i18n::tr(ctx, en, zh),
+                        )
+                        .on_hover_text(crate::i18n::tr(ctx, tip_en, tip_zh))
+                        .clicked()
                             && cur != ch
                         {
                             changed = Some(ch);
@@ -1713,6 +1742,9 @@ impl MistTermApp {
                     if let Err(e) = self.app_settings.save() {
                         log::warn!("save update channel failed: {e}");
                     }
+                    // #453: immediately show this channel's last-check, without a restart.
+                    // Does not rewrite the other channel's state file.
+                    self.update_on_channel_changed();
                 }
                 Self::preferences_row_divider(ui, theme);
                 ui.label(

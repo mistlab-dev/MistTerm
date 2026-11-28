@@ -52,6 +52,12 @@ pub(crate) struct FragmentState {
     pub(crate) pending_fragment_command: String,
     pub(crate) pending_fragment_command_edit: String,
     pub(crate) pending_fragment_vars: Vec<(String, String)>,
+    /// #493：「填写片段变量」弹窗刚打开时为 true，首个输入框本帧 `request_focus`
+    /// 后即清零（与 #488 的 `FragmentVariableDialog::focus_first_input` 同协议）。
+    pub(crate) pending_fragment_vars_focus_first: bool,
+    /// #493：点「插入终端/发送命令」时若 `{{ … }}` 展开失败，在弹窗内展示
+    /// （避免用户以为按钮失灵），修改任一输入框时清空（与 #491 同款兜底）。
+    pub(crate) last_fragment_vars_finalize_error: Option<String>,
     pub(crate) show_fragment_vars_dialog: bool,
     pub(crate) fragment_filter_category: String,
     pub(crate) fragment_filter_status: String,
@@ -105,6 +111,8 @@ impl FragmentState {
             pending_fragment_command: String::new(),
             pending_fragment_command_edit: String::new(),
             pending_fragment_vars: Vec::new(),
+            pending_fragment_vars_focus_first: false,
+            last_fragment_vars_finalize_error: None,
             show_fragment_vars_dialog: false,
             fragment_filter_category: "all".to_string(),
             fragment_filter_status: "all".to_string(),

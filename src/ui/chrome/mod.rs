@@ -7,8 +7,10 @@
 mod buttons;
 mod dock;
 mod forms;
+mod host_text;
 mod modals;
 mod panels;
+mod tab_strip_overflow;
 mod tabs;
 
 // ---- re-export：保持原 `chrome::符号` 路径不变 ----
@@ -19,8 +21,12 @@ pub use dock::*;
 
 pub use forms::*;
 
+pub use host_text::*;
+
 pub use modals::*;
 
 pub use panels::*;
+
+pub use tab_strip_overflow::*;
 
 pub use tabs::*;
