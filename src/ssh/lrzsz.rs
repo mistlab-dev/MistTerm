@@ -140,11 +140,18 @@ fn looks_like_zfin_zhex_hex(hex: &[u8]) -> bool {
     hex.windows(3).any(|w| w.eq_ignore_ascii_case(b"B08"))
 }
 
-/// 点查与议题里的字面残尾就是两个 ASCII `0`，不是任意 hex 正文。
-fn is_exact_leftover_zeros(hex: &[u8]) -> bool {
-    hex == b"00"
+/// 点查与议题里的字面残尾是一或两个 ASCII `0`，不是任意 hex 正文。
+///
+/// 只认精确 `00` 不够：单独到达的 `0` 会走 `None` 并清掉 `recv_side`，
+/// 随后提示符不再走残尾分支。用户名若以 hex 字母开头（如 GUI 点查的
+/// `mist410`），贪心 hex 扫描还会把 `0mist` 吃成 `0mi`，把可见 `0` 贴在提示符前。
+fn leftover_ascii_zero_prefix(data: &[u8]) -> usize {
+    let mut n = 0usize;
+    while n < data.len() && n < 2 && data[n] == b'0' {
+        n += 1;
+    }
+    n
 }
-
 /// 完整的 bracketed-paste CSI（bash 在命令结束后常重开）。不含着色 CSI / OSC。
 fn starts_with_bracketed_paste_csi(data: &[u8]) -> bool {
     data.starts_with(b"\x1b[?2004h") || data.starts_with(b"\x1b[?2004l")
@@ -168,7 +175,7 @@ fn residue_has_protocol_evidence(residue: &[u8]) -> bool {
 enum ResiduePrefix {
     /// 有充分协议或同包 shell 恢复证据，这些前缀不得进 VTE。
     Commit(usize),
-    /// 窗口内单独到达的 `00`：先按住，等下一分片再决定。
+    /// 窗口内单独到达的 `0`/`00`：先按住，等下一分片再决定。
     HoldZeros(usize),
     /// 不是残尾；整段按普通输出处理（含 CR/LF、着色 CSI、OSC、hex 正文）。
     None,
@@ -251,7 +258,6 @@ fn classify_rx_residue_prefix(
             }
             let hex = &data[start..i];
             let zfin_hex = looks_like_zfin_zhex_hex(hex);
-            let rest = &data[i..];
             if zfin_hex {
                 while i < cap && (rx_line_fill_byte(data[i]) || data[i] == zmodem::XON) {
                     i += 1;
@@ -268,19 +274,25 @@ fn classify_rx_residue_prefix(
                 saw_protocol = true;
                 continue;
             }
-            if is_exact_leftover_zeros(hex) && rest_has_shell_restore_evidence(rest) {
-                // 只吞 `00`，CSI/OSC/提示符留给 VTE。前导 CR/LF 若紧贴残尾则随行一起剥掉。
-                return ResiduePrefix::Commit(i);
+            // 先按「一或两个字面 0」切开，避免把后面的 hex 用户名（`mist410`）并进残尾。
+            let zero_n = leftover_ascii_zero_prefix(&data[start..]);
+            if zero_n > 0 {
+                let after_zeros = &data[start + zero_n..];
+                if rest_has_shell_restore_evidence(after_zeros) {
+                    // 只吞字面 `0`/`00`，CSI/OSC/提示符留给 VTE。
+                    return ResiduePrefix::Commit(start + zero_n);
+                }
+                if after_zeros.is_empty()
+                    && within_window
+                    && fill == 0
+                    && start == 0
+                {
+                    return ResiduePrefix::HoldZeros(zero_n);
+                }
+                // `00\r\n`、`00` + 着色 CSI / OSC / 其它 hex 正文：一律不吞。
+                return ResiduePrefix::None;
             }
-            if is_exact_leftover_zeros(hex)
-                && rest.is_empty()
-                && within_window
-                && fill == 0
-                && start == 0
-            {
-                return ResiduePrefix::HoldZeros(2);
-            }
-            // `00\r\n`、`00` + 着色 CSI / OSC / 其它 hex 正文：一律不吞。
+            // 其它 hex 正文：不是残尾。
             return ResiduePrefix::None;
         }
         // ESC / 可见文本：交给显示路径。
@@ -591,6 +603,11 @@ impl LrzszTransfer {
     /// 获取接收事件
     pub fn try_recv_event(&self) -> Option<TransferEvent> {
         self.rx.lock().ok()?.try_recv().ok()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn push_event_for_test(&self, event: TransferEvent) {
+        self.tx.send(event).expect("transfer event test channel");
     }
 
     /// 检测终端输出中是否包含 rz 命令触发序列
@@ -1793,5 +1810,96 @@ mod tests {
             assert_eq!(session.last_save_path.as_deref(), Some(path.as_path()));
         }
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// PR #503 Linux GUI 点查失败形态：接收结束后提示符是
+    /// `0mist410@grok-bot-vm-307649871:~$`（单个可见 ASCII `0`，不是 NUL，也不是整段 `**B08`）。
+    /// 用户名以 hex 字母 `mi` 开头时，贪心 hex 扫描会把 `0mist` 吃成 `0mi`，无法再认精确 `00`。
+    const HEX_USER_PROMPT: &[u8] = b"mist410@grok-bot-vm-307649871:~$ ";
+
+    fn assert_clean_hex_user_prompt(rest: &[u8]) {
+        assert_eq!(
+            rest, HEX_USER_PROMPT,
+            "display path must be the restored prompt only, without a leftover 0"
+        );
+        assert!(
+            !rest.starts_with(b"0"),
+            "a visible ASCII 0 must not prefix the prompt"
+        );
+    }
+
+    #[test]
+    fn test_rx_residue_prefix_absorbs_single_0_glued_to_hex_username_prompt() {
+        assert_eq!(
+            rx_residue_prefix_len(b"0", RX_TAIL_RESIDUE_CAP),
+            1,
+            "a lone ASCII 0 in the tail window must be held, like 00"
+        );
+
+        let glued = [b"0".as_slice(), HEX_USER_PROMPT].concat();
+        let eaten = rx_residue_prefix_len(&glued, RX_TAIL_RESIDUE_CAP);
+        assert_eq!(eaten, 1, "only the leftover 0 is residue, not the mist410 prefix");
+        assert_clean_hex_user_prompt(&glued[eaten..]);
+
+        let glued_00 = [b"00".as_slice(), HEX_USER_PROMPT].concat();
+        let eaten_00 = rx_residue_prefix_len(&glued_00, RX_TAIL_RESIDUE_CAP);
+        assert_eq!(eaten_00, 2);
+        assert_clean_hex_user_prompt(&glued_00[eaten_00..]);
+    }
+
+    #[test]
+    fn test_feed_receive_after_session_complete_strips_single_0_before_hex_username_prompt() {
+        let lrzsz = transfer_after_session_complete();
+        let glued = [b"0".as_slice(), HEX_USER_PROMPT].concat();
+        match lrzsz.feed_receive(&glued) {
+            ReceiveFeed::Stripped { rest } => assert_clean_hex_user_prompt(&rest),
+            other => panic!("expected Stripped clean prompt, got {other:?}"),
+        }
+        assert!(
+            !lrzsz.has_rx_tail_pending(),
+            "prompt restored: residue window should end"
+        );
+    }
+
+    #[test]
+    fn test_feed_receive_holds_lone_0_then_drops_it_on_hex_username_prompt() {
+        // 复现 #503 紧重绘可能把 `00`/残尾拆成先到的单个 `0`：不得因此清掉 recv_side。
+        let lrzsz = transfer_after_session_complete();
+        assert_eq!(lrzsz.feed_receive(b"0"), ReceiveFeed::Consumed);
+        assert!(
+            lrzsz.has_rx_tail_pending(),
+            "a lone 0 must not end the #458 residue window"
+        );
+        match lrzsz.feed_receive(HEX_USER_PROMPT) {
+            ReceiveFeed::Stripped { rest } | ReceiveFeed::Passthrough { data: rest } => {
+                assert_clean_hex_user_prompt(&rest);
+            }
+            other => panic!("expected prompt without leftover 0, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_feed_receive_split_0_then_0_plus_hex_username_prompt() {
+        let lrzsz = transfer_after_session_complete();
+        assert_eq!(lrzsz.feed_receive(b"0"), ReceiveFeed::Consumed);
+        assert!(lrzsz.has_rx_tail_pending());
+        let second = [b"0".as_slice(), HEX_USER_PROMPT].concat();
+        match lrzsz.feed_receive(&second) {
+            ReceiveFeed::Stripped { rest } | ReceiveFeed::Passthrough { data: rest } => {
+                assert_clean_hex_user_prompt(&rest);
+            }
+            other => panic!("expected prompt without leftover 0, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_rx_residue_prefix_does_not_swallow_lone_0_plus_color_or_digits() {
+        // 与既有 `00` + 着色 / 正文安全边界一致：没有提示符或 2004 证据时不吞。
+        assert_eq!(rx_residue_prefix_len(b"0123", RX_TAIL_RESIDUE_CAP), 0);
+        let mut colored = b"0".to_vec();
+        colored.extend_from_slice(COLOR_GREEN);
+        colored.extend_from_slice(b"red");
+        colored.extend_from_slice(COLOR_RESET);
+        assert_eq!(rx_residue_prefix_len(&colored, RX_TAIL_RESIDUE_CAP), 0);
     }
 }
