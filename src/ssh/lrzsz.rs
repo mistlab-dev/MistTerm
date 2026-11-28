@@ -282,11 +282,7 @@ fn classify_rx_residue_prefix(
                     // 只吞字面 `0`/`00`，CSI/OSC/提示符留给 VTE。
                     return ResiduePrefix::Commit(start + zero_n);
                 }
-                if after_zeros.is_empty()
-                    && within_window
-                    && fill == 0
-                    && start == 0
-                {
+                if after_zeros.is_empty() && fill == 0 && start == 0 {
                     return ResiduePrefix::HoldZeros(zero_n);
                 }
                 // `00\r\n`、`00` + 着色 CSI / OSC / 其它 hex 正文：一律不吞。
@@ -1725,11 +1721,37 @@ mod tests {
         let lrzsz = transfer_after_session_complete_ended_ago(
             RX_TAIL_WINDOW + Duration::from_millis(500),
         );
-        match lrzsz.feed_receive(b"00") {
+        assert_eq!(lrzsz.feed_receive(b"00"), ReceiveFeed::Consumed);
+        assert!(lrzsz.has_rx_tail_pending());
+
+        match lrzsz.feed_receive(b"ordinary output\r\n") {
             ReceiveFeed::Stripped { rest } | ReceiveFeed::Passthrough { data: rest } => {
-                assert_eq!(rest, b"00");
+                assert_eq!(rest, b"00ordinary output\r\n");
             }
-            other => panic!("lone 00 after the window must be shown, got {other:?}"),
+            other => panic!("ordinary output after lone 00 must be restored, got {other:?}"),
+        }
+        assert!(!lrzsz.has_rx_tail_pending());
+    }
+
+    #[test]
+    fn test_feed_receive_late_split_00_then_csi_prompt() {
+        let lrzsz = transfer_after_session_complete_ended_ago(
+            RX_TAIL_WINDOW + Duration::from_millis(500),
+        );
+        assert_eq!(lrzsz.feed_receive(b"00"), ReceiveFeed::Consumed);
+        assert!(lrzsz.has_rx_tail_pending());
+
+        match lrzsz.feed_receive(CSI_BRACKETED_PASTE_ON) {
+            ReceiveFeed::Stripped { rest } => assert_eq!(rest, CSI_BRACKETED_PASTE_ON),
+            other => panic!("late 00 must be dropped before CSI, got {other:?}"),
+        }
+        assert!(lrzsz.has_rx_tail_pending());
+
+        match lrzsz.feed_receive(PROMPT) {
+            ReceiveFeed::Stripped { rest } | ReceiveFeed::Passthrough { data: rest } => {
+                assert_eq!(rest, PROMPT);
+            }
+            other => panic!("late residual must restore only the prompt, got {other:?}"),
         }
         assert!(!lrzsz.has_rx_tail_pending());
     }
