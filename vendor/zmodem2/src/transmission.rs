@@ -1655,10 +1655,11 @@ fn write_zrinit_sender_reply<P>(port: &mut P, _peer_caps: u8) -> Result<Option<(
 where
     P: Write + ?Sized,
 {
-    let zrinit = Zrinit::CANFDX | Zrinit::CANFC32 | Zrinit::ESCCTL;
-    let buffer_size = u16::try_from(SUBPACKET_MAX_SIZE)
-        .map_err(|_| Error::Unsupported)?
-        .to_le_bytes();
+    // `bufsize=0 + CANOVIO` advertises receiver-side streaming rather than a
+    // 1 KiB stop-and-wait window. The sender already pipelines 32 subpackets
+    // per ACK in this mode, which avoids one ACK round trip per KiB over SSH.
+    let zrinit = Zrinit::CANFDX | Zrinit::CANOVIO | Zrinit::CANFC32 | Zrinit::ESCCTL;
+    let buffer_size = [0u8; 2];
     Header::new(
         Encoding::ZHEX,
         Frame::ZRINIT,
