@@ -486,6 +486,9 @@ pub struct TerminalView {
     /// 整屏替换 VTE 或清屏时递增，与 [`VtTerminal::content_epoch`] 一并参与布局缓存键(FUNCTIONAL_SPEC §2.3.1)。
     vt_visual_generation: u64,
     visual_layout_cache: Option<TerminalVisualLayoutCache>,
+    /// 主题切换等「底色已换、字符串未变」场景：强制自绘 galley 一帧。
+    /// egui TextEdit 在 `&str` 缓冲未变时可能跳过重绘，只铺新 `terminal_bg` 会整屏空白。
+    force_galley_repaint: bool,
     /// 诊断：最早一条未绘制输出的到达时刻（µs，见 ssh::manager::probe_now_us）。
     repaint_probe_received_us: Option<u64>,
     repaint_probe_cache_hit: bool,
@@ -1163,6 +1166,7 @@ impl TerminalView {
             post_connect_fire_at: None,
             vt_visual_generation: 0,
             visual_layout_cache: None,
+            force_galley_repaint: false,
             repaint_probe_received_us: None,
             repaint_probe_cache_hit: false,
             repaint_probe_row_hash: None,
@@ -2777,7 +2781,11 @@ impl TerminalView {
                                         ui.set_min_height(te_h);
                                         ui.set_max_height(te_h);
                                         egui::TextEdit::multiline(&mut display_view)
-                                            .id(ui.scope_id().with("terminal_text_area"))
+                                            // 主题切换会 bump `vt_visual_generation`：换 id 迫使 TextEdit
+                                            // 丢弃旧绘制态，避免「底色已换、字还按旧 mesh」或空白。
+                                            .id(ui.scope_id().with("terminal_text_area").with(
+                                                self.vt_visual_generation,
+                                            ))
                                             .margin(egui::vec2(0.0, 0.0))
                                             .align(egui::Align2::LEFT_CENTER)
                                             .align(egui::Align2::LEFT_TOP)
@@ -2853,10 +2861,12 @@ impl TerminalView {
                             }
                             // 仅当存在非默认底色(ANSI/选区)时才自绘底并再铺一层 galley；
                             // 否则 TextEdit 已画过字，二次铺屏会让 debug 下单核打满、界面像卡住。
+                            // 主题切换：`force_galley_repaint` 时也必须自绘——TextEdit 文本未变可能不重绘。
                             let needs_cell_bg = cell_bgs.iter().flatten().any(|c| {
                                 *c != shell.terminal_bg && c.a() > 0
                             });
-                            if needs_cell_bg {
+                            let force_galley = self.force_galley_repaint;
+                            if needs_cell_bg || force_galley {
                                 let painter =
                                     ui.painter().clone().with_layer_id(response.layer_id);
                                 // TextEdit 已经画过一层字。只补选区底再叠第二层时，
@@ -2867,15 +2877,18 @@ impl TerminalView {
                                 if cover.width() > 0.0 && cover.height() > 0.0 {
                                     painter.rect_filled(cover, 0.0, shell.terminal_bg);
                                 }
-                                Self::paint_terminal_cell_backgrounds(
-                                    &painter,
-                                    text_draw_pos,
-                                    &galley,
-                                    &cell_bgs,
-                                    shell.terminal_bg,
-                                    cell_w,
-                                );
+                                if needs_cell_bg {
+                                    Self::paint_terminal_cell_backgrounds(
+                                        &painter,
+                                        text_draw_pos,
+                                        &galley,
+                                        &cell_bgs,
+                                        shell.terminal_bg,
+                                        cell_w,
+                                    );
+                                }
                                 painter.galley(text_draw_pos, galley.clone(), egui::Color32::WHITE);
+                                self.force_galley_repaint = false;
                             }
                             // 普通提示符没有非默认格子底色，`needs_cell_bg` 为 false。
                             // 探针若只在补绘底色时清掉，第一段输出之后会一直为 Some，
@@ -6204,10 +6217,12 @@ impl TerminalView {
         self.agent_audit_banner_dismissed = true;
     }
 
-    /// 主题切换后丢弃字形布局缓存，避免残影 / 错色 / 乱码。
+    /// 主题切换后丢弃字形布局缓存，并强制下一帧自绘 galley。
+    /// 仅清缓存不够：TextEdit 在文本未变时可能不重绘，新底色一铺就整屏空白。
     pub fn invalidate_visual_layout_cache(&mut self) {
         self.visual_layout_cache = None;
         self.vt_visual_generation = self.vt_visual_generation.wrapping_add(1);
+        self.force_galley_repaint = true;
     }
 
     pub fn take_pending_toast_error(&mut self) -> Option<String> {

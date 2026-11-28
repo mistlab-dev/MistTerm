@@ -6275,9 +6275,11 @@ impl MistTermApp {
 
     /// 主题切换后：立刻清终端布局缓存并重绘。
     /// 下一帧 `apply_current_theme` 仍会再清一次（幂等），保证任何切换入口都不漏。
+    /// 额外再约一帧，给 egui 换 Visuals/字体后的 TextEdit 自绘兜底。
     pub(crate) fn invalidate_terminals_after_theme_change(&mut self, ctx: &egui::Context) {
         self.clear_terminal_visual_layout_caches();
         ctx.request_repaint();
+        ctx.request_repaint_after(std::time::Duration::from_millis(16));
     }
 
     /// Win/Linux 沉浸式关掉系统标题栏，退出时恢复；macOS 保持系统边框。
