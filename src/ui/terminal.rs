@@ -962,6 +962,13 @@ impl TerminalView {
         self.pending_focus_terminal = true;
     }
 
+    /// 传输结束或取消后立即恢复可输入状态，避免还要再按一次键（#442）。
+    fn restore_keyboard_after_transfer(&mut self) {
+        self.pending_focus_terminal = true;
+        self.terminal_wants_keyboard = true;
+        self.terminal_focused = true;
+    }
+
     /// 把键盘/IME 让给 UI TextEdit(AI 草稿、偏好等)。
     /// 半角 ASCII 的 `Event::Text` 可被多个监听者看到；全角标点走 IME Composition，只进「当前 IME 目标」。
     /// 若不 surrender 终端 IME 框，全角 `，。` 会进已隐藏的 ime_capture 并被清空，AI 框像「打不出来」。
@@ -4006,6 +4013,7 @@ impl TerminalView {
                         // rz 上传后远端提示符常紧跟收尾输出；成功行后立即补空行，避免粘在同一行。
                         self.terminal.feed(b"\r\n");
                     }
+                    self.restore_keyboard_after_transfer();
                 }
                 TransferEvent::FileError { filename, error } => {
                     if let Some(ref h) = self.ssh_handle {
@@ -4022,6 +4030,7 @@ impl TerminalView {
                         error
                     ));
                     self.flush_ssh_pty_size_after_transfer();
+                    self.restore_keyboard_after_transfer();
                 }
                 TransferEvent::TransferComplete => {
                     if let Some(ref h) = self.ssh_handle {
@@ -4035,6 +4044,8 @@ impl TerminalView {
                     self.transfer_outgoing = false;
                     // 上传期间可能暂缓了 resize_pty，此处与远端对齐当前 UI 网格
                     self.flush_ssh_pty_size_after_transfer();
+                    self.restore_keyboard_after_transfer();
+                    ctx.request_repaint();
                 }
             }
         }
@@ -5157,9 +5168,7 @@ impl TerminalView {
         self.transfer_progress = None;
         self.transfer_outgoing = false;
         self.auto_follow_output = true;
-        self.pending_focus_terminal = true;
-        self.terminal_wants_keyboard = true;
-        self.terminal_focused = true;
+        self.restore_keyboard_after_transfer();
         // ZMODEM 协议态下单个 Ctrl+C 不一定被远端 rz/sz 识别；高优先级发 CAN 序列再补 ETX。
         let cancel = vec![
             0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, // CAN x8
@@ -5193,9 +5202,7 @@ impl TerminalView {
         self.transfer_outgoing = false;
         self.auto_follow_output = true;
         // 文件对话框关闭后主动抢回终端焦点，避免「取消后不能输入」
-        self.pending_focus_terminal = true;
-        self.terminal_wants_keyboard = true;
-        self.terminal_focused = true;
+        self.restore_keyboard_after_transfer();
         if self.lrzsz.is_active() {
             self.lrzsz.cancel_active_transfer();
         }
@@ -7940,5 +7947,127 @@ mod tab_title_focus_tests {
         view.release_keyboard_for_overlay();
         assert!(!view.terminal_wants_keyboard);
         assert!(!view.pending_focus_terminal, "释放焦点必须连 pending 一起清，否则下一帧终端把焦点抢回");
+    }
+}
+
+#[cfg(test)]
+mod post_transfer_focus_tests {
+    use super::*;
+    use std::sync::{Arc, Mutex};
+
+    fn unfocused_view() -> TerminalView {
+        let mut view = TerminalView::new();
+        view.pending_focus_terminal = false;
+        view.terminal_wants_keyboard = false;
+        view.terminal_focused = false;
+        view
+    }
+
+    fn process(view: &mut TerminalView, event: TransferEvent) -> Option<Duration> {
+        let ctx = egui::Context::default();
+        let theme = Theme::dark();
+        let got = Arc::new(Mutex::new(None::<Duration>));
+        {
+            let got = got.clone();
+            ctx.set_repaint_observer(move |info: egui::RequestRepaintInfo| {
+                let mut g = got.lock().unwrap();
+                *g = Some(match *g {
+                    Some(prev) => prev.min(info.delay),
+                    None => info.delay,
+                });
+            });
+        }
+        view.lrzsz.push_event_for_test(event);
+        view.process_transfer_events(&theme, &ctx);
+        let delay = *got.lock().unwrap();
+        delay
+    }
+
+    fn assert_focus_restored(view: &TerminalView, label: &str) {
+        assert!(
+            view.pending_focus_terminal,
+            "{label}: pending_focus_terminal must be set so the next frame reclaims keyboard after any_click"
+        );
+        assert!(
+            view.terminal_wants_keyboard,
+            "{label}: terminal_wants_keyboard must be set so typing is accepted without an extra keypress"
+        );
+        assert!(
+            view.terminal_focused,
+            "{label}: terminal_focused must be set, matching the cancel-transfer path"
+        );
+    }
+
+    #[test]
+    fn file_complete_restores_keyboard_focus() {
+        let mut view = unfocused_view();
+        let _ = process(
+            &mut view,
+            TransferEvent::FileComplete {
+                filename: "a.txt".into(),
+                path: PathBuf::from("/tmp/a.txt"),
+            },
+        );
+        assert_focus_restored(&view, "FileComplete");
+    }
+
+    #[test]
+    fn file_error_restores_keyboard_focus() {
+        let mut view = unfocused_view();
+        let _ = process(
+            &mut view,
+            TransferEvent::FileError {
+                filename: "a.txt".into(),
+                error: "boom".into(),
+            },
+        );
+        assert_focus_restored(&view, "FileError");
+    }
+
+    #[test]
+    fn transfer_complete_restores_keyboard_focus_and_requests_repaint() {
+        let mut view = unfocused_view();
+        let delay = process(&mut view, TransferEvent::TransferComplete);
+        assert_focus_restored(&view, "TransferComplete");
+        assert!(
+            delay.is_some(),
+            "TransferComplete must request a repaint so the typable state is shown without a keypress"
+        );
+        assert_eq!(
+            delay.unwrap(),
+            Duration::ZERO,
+            "TransferComplete should request an immediate repaint, got {delay:?}"
+        );
+    }
+
+    #[test]
+    fn file_progress_does_not_restore_focus_but_still_repaints() {
+        let mut view = unfocused_view();
+        view.transfer_progress = Some(("a.txt".into(), 0, 100));
+        let delay = process(
+            &mut view,
+            TransferEvent::FileProgress {
+                filename: "a.txt".into(),
+                received: 50,
+                total: 100,
+            },
+        );
+        assert!(
+            !view.pending_focus_terminal
+                && !view.terminal_wants_keyboard
+                && !view.terminal_focused,
+            "Progress must not steal focus back mid-transfer"
+        );
+        assert!(
+            delay.is_some(),
+            "Progress must still request a repaint so the mid-transfer UI stays awake"
+        );
+    }
+
+    #[test]
+    fn cancel_rz_upload_selection_restores_keyboard_focus() {
+        let mut view = unfocused_view();
+        view.cancel_rz_upload_selection();
+        assert_focus_restored(&view, "cancel_rz_upload_selection");
     }
 }

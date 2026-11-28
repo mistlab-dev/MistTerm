@@ -593,6 +593,11 @@ impl LrzszTransfer {
         self.rx.lock().ok()?.try_recv().ok()
     }
 
+    #[cfg(test)]
+    pub(crate) fn push_event_for_test(&self, event: TransferEvent) {
+        self.tx.send(event).expect("transfer event test channel");
+    }
+
     /// 检测终端输出中是否包含 rz 命令触发序列
     pub fn detect_rz_command(&self, data: &[u8]) -> bool {
         // 检测常见的 rz 触发模式
