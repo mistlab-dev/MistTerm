@@ -10,6 +10,8 @@ pub enum UpdateError {
     NoTrustedKeys,
     #[error("network error: {0}")]
     Network(String),
+    #[error("no preview release is available yet")]
+    PreviewUnavailable,
     #[error("update manifest signature is invalid")]
     BadSignature,
     #[error("update manifest is invalid: {0}")]
@@ -58,6 +60,10 @@ impl UpdateError {
                     format!("Couldn't reach the update server. Check your connection and try again. ({detail})")
                 }
             }
+            UpdateError::PreviewUnavailable => t(
+                "No preview release is available yet. Check again later or switch to Stable.",
+                "暂时还没有可用的预览版，请稍后再检查，或切换到稳定版。",
+            ),
             UpdateError::BadSignature | UpdateError::InvalidManifest(_) => t(
                 "The update information didn't pass verification, so it was ignored. Try again later.",
                 "收到的更新信息没有通过验证，已忽略。请稍后再试。",
@@ -118,5 +124,23 @@ impl UpdateError {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::UpdateError;
+
+    #[test]
+    fn preview_unavailable_message_is_localized() {
+        let error = UpdateError::PreviewUnavailable;
+        assert_eq!(
+            error.user_message(true),
+            "暂时还没有可用的预览版，请稍后再检查，或切换到稳定版。"
+        );
+        assert_eq!(
+            error.user_message(false),
+            "No preview release is available yet. Check again later or switch to Stable."
+        );
     }
 }
