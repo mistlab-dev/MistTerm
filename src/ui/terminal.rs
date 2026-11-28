@@ -145,6 +145,57 @@ impl TerminalVisualLayoutCache {
     }
 }
 
+/// 图集已为可绘字形分配 UV / 顶点时为 true。
+/// 仅有行、且 `size().y > 1`（行高等于字号）不够：`apply_theme`→`set_style`
+/// 与 `layout_job` 同帧时，图集可能尚未就绪，会排出「有行无字形」的空 galley。
+fn galley_has_visible_glyphs(galley: &egui::Galley) -> bool {
+    galley.rows.iter().any(|row| {
+        !row.visuals.glyph_vertex_range.is_empty()
+            || row
+                .glyphs
+                .iter()
+                .any(|glyph| !glyph.uv_rect.is_nothing())
+    })
+}
+
+/// 字形顶点色与终端底色对比不够时，看起来会像整屏空白（例如浅色字铺在 Dawn 白底上）。
+fn color_contrasts_background(fg: egui::Color32, bg: egui::Color32) -> bool {
+    if fg == egui::Color32::PLACEHOLDER || fg.a() < 16 {
+        return false;
+    }
+    let dr = fg.r().abs_diff(bg.r()) as u16;
+    let dg = fg.g().abs_diff(bg.g()) as u16;
+    let db = fg.b().abs_diff(bg.b()) as u16;
+    dr.max(dg).max(db) >= 40
+}
+
+/// 已 tessellate 的字形顶点里，至少有一个与 `bg` 形成可见对比。
+fn galley_contrasts_background(galley: &egui::Galley, bg: egui::Color32) -> bool {
+    galley.rows.iter().any(|row| {
+        let range = &row.visuals.glyph_vertex_range;
+        row.visuals
+            .mesh
+            .vertices
+            .get(range.start..range.end)
+            .into_iter()
+            .flatten()
+            .any(|v| color_contrasts_background(v.color, bg))
+    })
+}
+
+/// 主题切换后的 holdoff 帧、无可绘字形、或字形与底色无对比时，都不要写入 visual cache。
+fn should_cache_terminal_galley(
+    has_printable: bool,
+    has_visible_glyphs: bool,
+    contrasts_bg: bool,
+    holdoff: bool,
+) -> bool {
+    if holdoff {
+        return false;
+    }
+    !has_printable || (has_visible_glyphs && contrasts_bg)
+}
+
 /// Host 侧可点区间，来自 `ModuleAction::DecorateLink`。渲染与点击都认它，模块不碰 egui。
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct DisplaySpan {
@@ -486,6 +537,11 @@ pub struct TerminalView {
     /// 整屏替换 VTE 或清屏时递增，与 [`VtTerminal::content_epoch`] 一并参与布局缓存键(FUNCTIONAL_SPEC §2.3.1)。
     vt_visual_generation: u64,
     visual_layout_cache: Option<TerminalVisualLayoutCache>,
+    /// `set_style` / 图集重建后，跳过若干帧再缓存 galley。
+    /// 第一帧排出的 mesh UV 可能仍指向旧图集，缓存后浅色主题会整屏空白直到点击。
+    galley_cache_holdoff_frames: u8,
+    /// 上一帧字体图集尺寸；变化时丢弃已缓存 galley（UV 失效）。
+    last_font_atlas_size: Option<[usize; 2]>,
     /// 诊断：最早一条未绘制输出的到达时刻（µs，见 ssh::manager::probe_now_us）。
     repaint_probe_received_us: Option<u64>,
     repaint_probe_cache_hit: bool,
@@ -1168,6 +1224,8 @@ impl TerminalView {
             post_connect_fire_at: None,
             vt_visual_generation: 0,
             visual_layout_cache: None,
+            galley_cache_holdoff_frames: 0,
+            last_font_atlas_size: None,
             repaint_probe_received_us: None,
             repaint_probe_cache_hit: false,
             repaint_probe_row_hash: None,
@@ -2587,6 +2645,17 @@ impl TerminalView {
                     let display_link_on = self
                         .module_registry
                         .is_enabled(crate::modules::display_link::MODULE_ID);
+                    let atlas_size = ui.ctx().fonts(|f| f.font_image_size());
+                    if self.last_font_atlas_size != Some(atlas_size) {
+                        if self.last_font_atlas_size.is_some() {
+                            if let Some(c) = self.visual_layout_cache.as_mut() {
+                                c.galley = None;
+                            }
+                            self.galley_cache_holdoff_frames =
+                                self.galley_cache_holdoff_frames.max(1);
+                        }
+                        self.last_font_atlas_size = Some(atlas_size);
+                    }
                     let cache_key = (
                         self.vt_visual_generation,
                         self.terminal.content_epoch(),
@@ -2710,8 +2779,31 @@ impl TerminalView {
                             g
                         } else {
                             let g = ui.ctx().fonts_mut(|f| f.layout_job(layout_job.clone()));
+                            // `apply_theme`→`set_style` 与本帧 `layout_job` 同帧时，字体图集可能尚未
+                            // 就绪，会排出「有行、有行高、无字形」的空 galley。不能用 `rows` /
+                            // `size().y > 1` 当成就绪：那种空 galley 一旦进缓存，就会一直空白，
+                            // 直到点击迫使重排。有可打印内容却没有可见字形时不缓存，并继续
+                            // 请求重绘，直到图集就绪后排出带字形的 galley。
+                            let has_printable =
+                                display_owned.chars().any(|ch| !ch.is_whitespace());
+                            let has_glyphs = galley_has_visible_glyphs(&g);
+                            let contrasts = galley_contrasts_background(&g, shell.terminal_bg);
+                            let holdoff = self.galley_cache_holdoff_frames > 0;
+                            if holdoff {
+                                self.galley_cache_holdoff_frames -= 1;
+                            }
                             if let Some(c) = self.visual_layout_cache.as_mut() {
-                                c.galley = Some(g.clone());
+                                if should_cache_terminal_galley(
+                                    has_printable,
+                                    has_glyphs,
+                                    contrasts,
+                                    holdoff,
+                                ) {
+                                    c.galley = Some(g.clone());
+                                } else if has_printable || holdoff {
+                                    ui.ctx().request_repaint();
+                                    ui.ctx().request_repaint_after(Duration::from_millis(16));
+                                }
                             }
                             g
                         }
@@ -2804,10 +2896,13 @@ impl TerminalView {
                                 )
                                 .inner;
                             let response = te_output.response;
-                            let galley = te_output.galley;
                             let text_draw_pos = te_output.galley_pos;
                             let text_top = text_draw_pos.y;
                             let text_rect = response.rect;
+                            // 字形以 VTE 排出的 `painted_galley` 为准。
+                            // TextEdit 在主题/Style 切换后若缓冲字符串未变，可能交出空/过期 galley；
+                            // 前面每帧又会 `rect_filled(terminal_bg)`，就会整屏空白（#505）。
+                            let galley = painted_galley;
                             let select_id = response.id.with("terminal_select");
                             // 命中区向左含文本区外的内边距：用户常在首字符左侧点起点(如「50」左边)，
                             // 否则这一下落在 text_rect 外、不记锚点，随后 Shift+单击只能从光标起选。
@@ -2860,31 +2955,30 @@ impl TerminalView {
                                     self.repaint_probe_epoch = epoch;
                                 }
                             }
-                            // 仅当存在非默认底色(ANSI/选区)时才自绘底并再铺一层 galley；
-                            // 否则 TextEdit 已画过字，二次铺屏会让 debug 下单核打满、界面像卡住。
+                            // 字形层由终端自绘（盖底 → 可选 ANSI/选区底 → galley），不依赖 TextEdit 出字。
                             let needs_cell_bg = cell_bgs.iter().flatten().any(|c| {
                                 *c != shell.terminal_bg && c.a() > 0
                             });
-                            if needs_cell_bg {
+                            {
                                 let painter =
                                     ui.painter().clone().with_layer_id(response.layer_id);
-                                // TextEdit 已经画过一层字。只补选区底再叠第二层时，
-                                // 没被底色盖住的字会叠成两层，看起来整屏变亮。先铺终端底再画一次。
                                 let galley_rect =
                                     egui::Rect::from_min_size(text_draw_pos, galley.size());
                                 let cover = text_rect.union(galley_rect);
                                 if cover.width() > 0.0 && cover.height() > 0.0 {
                                     painter.rect_filled(cover, 0.0, shell.terminal_bg);
                                 }
-                                Self::paint_terminal_cell_backgrounds(
-                                    &painter,
-                                    text_draw_pos,
-                                    &galley,
-                                    &cell_bgs,
-                                    shell.terminal_bg,
-                                    cell_w,
-                                );
-                                painter.galley(text_draw_pos, galley.clone(), egui::Color32::WHITE);
+                                if needs_cell_bg {
+                                    Self::paint_terminal_cell_backgrounds(
+                                        &painter,
+                                        text_draw_pos,
+                                        &galley,
+                                        &cell_bgs,
+                                        shell.terminal_bg,
+                                        cell_w,
+                                    );
+                                }
+                                painter.galley(text_draw_pos, galley.clone(), shell.default_fg);
                             }
                             // 普通提示符没有非默认格子底色，`needs_cell_bg` 为 false。
                             // 探针若只在补绘底色时清掉，第一段输出之后会一直为 Some，
@@ -6220,6 +6314,16 @@ impl TerminalView {
         self.agent_audit_banner_dismissed = true;
     }
 
+    /// 主题切换后丢弃字形布局缓存，避免残影 / 错色 / 乱码。
+    pub fn invalidate_visual_layout_cache(&mut self) {
+        self.visual_layout_cache = None;
+        self.vt_visual_generation = self.vt_visual_generation.wrapping_add(1);
+        // `apply_theme`→`set_style` 之后，字体图集往往要再过一两帧才稳定。
+        // 若把第一帧的 galley 写进缓存，UV 会指向已废弃的图集：下划线和光标仍在
+        // 正确位置，字形却采样到空纹素，浅色主题下表现为整屏空白，直到点击重排。
+        self.galley_cache_holdoff_frames = 2;
+    }
+
     pub fn take_pending_toast_error(&mut self) -> Option<String> {
         self.pending_toast_error.take()
     }
@@ -8145,6 +8249,97 @@ mod tab_title_focus_tests {
         view.release_keyboard_for_overlay();
         assert!(!view.terminal_wants_keyboard);
         assert!(!view.pending_focus_terminal, "释放焦点必须连 pending 一起清，否则下一帧终端把焦点抢回");
+    }
+}
+
+#[cfg(test)]
+mod terminal_galley_cache_tests {
+    use super::*;
+
+    #[test]
+    fn whitespace_only_may_be_cached_without_glyphs() {
+        assert!(
+            should_cache_terminal_galley(false, false, false, false),
+            "纯空白没有可绘字形，也应允许缓存，避免每帧空排"
+        );
+    }
+
+    #[test]
+    fn printable_glyphless_galley_is_not_cached() {
+        assert!(
+            !should_cache_terminal_galley(true, false, false, false),
+            "有可打印内容但无可见字形时不得缓存，否则主题切换后会整屏卡空白"
+        );
+    }
+
+    #[test]
+    fn printable_glyph_ready_galley_is_cached() {
+        assert!(should_cache_terminal_galley(true, true, true, false));
+    }
+
+    #[test]
+    fn holdoff_never_caches_even_when_glyph_ready() {
+        assert!(
+            !should_cache_terminal_galley(true, true, true, true),
+            "主题切换后的 holdoff 帧不得缓存，以免钉死旧图集 UV"
+        );
+    }
+
+    #[test]
+    fn printable_glyphs_that_do_not_contrast_bg_are_not_cached() {
+        assert!(
+            !should_cache_terminal_galley(true, true, false, false),
+            "字形与底色无对比时不得缓存，否则浅色主题会整屏看起来像空白"
+        );
+    }
+
+    #[test]
+    fn color_contrast_rejects_near_background_and_placeholder() {
+        let white = egui::Color32::WHITE;
+        let dawn_fg = egui::Color32::from_rgb(20, 22, 26);
+        assert!(!color_contrasts_background(white, white));
+        assert!(color_contrasts_background(dawn_fg, white));
+        assert!(!color_contrasts_background(
+            egui::Color32::PLACEHOLDER,
+            white
+        ));
+    }
+
+    #[test]
+    fn laid_out_printable_text_has_visible_glyphs() {
+        let ctx = egui::Context::default();
+        let mut out = ctx.run_pass(egui::RawInput::default(), |ctx| {
+            let galley = ctx.fonts_mut(|fonts| {
+                fonts.layout_no_wrap(
+                    "ok505b".to_owned(),
+                    egui::FontId::monospace(14.0),
+                    egui::Color32::WHITE,
+                )
+            });
+            // 正向路径：图集就绪后，有行、有高度，且确实排出了字形。
+            assert!(!galley.rows.is_empty());
+            assert!(galley.size().y > 1.0);
+            assert!(
+                galley_has_visible_glyphs(&galley),
+                "就绪图集排出的可打印文本必须带 glyph 顶点 / 非空 UV"
+            );
+            assert!(
+                galley_contrasts_background(&galley, egui::Color32::BLACK),
+                "白字在深色底上应有对比"
+            );
+            assert!(
+                !galley_contrasts_background(&galley, egui::Color32::WHITE),
+                "白字铺在白底上不得当成可见"
+            );
+            assert!(should_cache_terminal_galley(
+                true,
+                galley_has_visible_glyphs(&galley),
+                galley_contrasts_background(&galley, egui::Color32::BLACK),
+                false
+            ));
+        });
+        // fonts 排版会写入图集增量；测试不实际上屏，必须清掉以免 drop 时 panic。
+        out.textures_delta.clear();
     }
 }
 

@@ -1909,7 +1909,7 @@ impl MistTermApp {
                         crate::ui::chrome::search_field(
                             ui,
                             theme,
-                            egui::Id::unique("quick_fragment_search"),
+                            egui::Id::new("quick_fragment_search"),
                             &mut self.fragment_state.quick_selector.search_query,
                             crate::i18n::tr(ctx, "Search snippets…", "搜索片段…"),
                             q_search_w,

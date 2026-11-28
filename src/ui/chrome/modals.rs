@@ -114,8 +114,8 @@ pub fn modal_header(ui: &mut Ui, theme: &Theme, title: &str, title_px: f32) -> b
         })
         .show(ui, |ui| {
             ui.horizontal(|ui| {
-                // 标题文字可点选区域留给 egui Window 拖移；不要再放无语义图标。
-                ui.label(rich_modal_title(theme, title));
+                // 标题不要 selectable：可点选 Label 会 click+drag，容易盖住下方首个表单控件。
+                ui.add(egui::Label::new(rich_modal_title(theme, title)).selectable(false));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if close_icon_button(ui, theme).clicked() {
                         closed = true;
@@ -145,7 +145,7 @@ pub fn modal_header_plain(ui: &mut Ui, theme: &Theme, title: &str) -> bool {
         })
         .show(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.label(rich_panel_header_title(theme, title));
+                ui.add(egui::Label::new(rich_panel_header_title(theme, title)).selectable(false));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if close_icon_button(ui, theme).clicked() {
                         closed = true;

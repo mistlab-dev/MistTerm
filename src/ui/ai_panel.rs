@@ -1534,11 +1534,21 @@ impl AiPanel {
     }
 
     fn can_send_now(&self, app_settings: &AppSettings) -> bool {
-        self.can_chat(app_settings)
-            && app_settings.ai.enabled
-            && !self.busy
-            && !self.is_background_busy()
-            && (!self.draft_input.trim().is_empty() || !self.attached_contexts.is_empty())
+        if self.busy || self.is_background_busy() || self.agent_is_executing() {
+            return false;
+        }
+        let question = self.draft_input.trim();
+        let has_content = !question.is_empty() || !self.attached_contexts.is_empty();
+        if !has_content {
+            return false;
+        }
+        // 多机运维意图可走本地启发式，不必先配好模型；否则点「发送」会静默无反应。
+        if !question.is_empty()
+            && (looks_like_host_ops_intent(question) || self.last_agent_batch_context().is_some())
+        {
+            return true;
+        }
+        self.can_chat(app_settings) && app_settings.ai.enabled
     }
 
     fn effective_api_key<'a>(&'a self, app_settings: &'a AppSettings) -> Option<String> {
@@ -3477,19 +3487,37 @@ impl AiPanel {
                         self.cancel_generation(ctx);
                     }
                 } else {
-                    send_clicked = ui
-                        .add_enabled_ui(can_send, |ui| {
-                            crate::ui::chrome::panel_solid_primary_button_with_icon_ex(
-                                ui,
-                                theme,
-                                IconId::Upload,
-                                i18n::tr(ctx, "Send", "发送"),
-                                true,
-                            )
-                            .on_hover_text(i18n::tr(ctx, "Send (Enter)", "发送（回车）"))
-                            .clicked()
-                        })
-                        .inner;
+                    // 始终可点：未就绪时由 send_message 给出明确错误，避免灰掉后「点了没反应」。
+                    let tip = if can_send {
+                        i18n::tr(ctx, "Send (Enter)", "发送（回车）")
+                    } else if self.draft_input.trim().is_empty()
+                        && self.attached_contexts.is_empty()
+                    {
+                        i18n::tr(
+                            ctx,
+                            "Enter a question or attach terminal selection first",
+                            "请输入问题，或先从终端附带选区",
+                        )
+                    } else if !app_settings.ai.enabled {
+                        i18n::tr(ctx, "Enable AI first", "请先勾选「启用 AI」")
+                    } else if !self.can_chat(app_settings) {
+                        i18n::tr(
+                            ctx,
+                            "Configure API Key & model and save first",
+                            "请先配置访问密钥与模型并保存",
+                        )
+                    } else {
+                        i18n::tr(ctx, "Send (Enter)", "发送（回车）")
+                    };
+                    send_clicked = crate::ui::chrome::panel_solid_primary_button_with_icon_ex(
+                        ui,
+                        theme,
+                        IconId::Upload,
+                        i18n::tr(ctx, "Send", "发送"),
+                        true,
+                    )
+                    .on_hover_text(tip)
+                    .clicked();
                 }
             });
         });
@@ -3499,24 +3527,27 @@ impl AiPanel {
         if attach_selection_clicked {
             self.attach_selection_requested = true;
         }
-        if (send_clicked || enter_send) && can_send {
+        if send_clicked || enter_send {
+            // 即使 can_send 为 false 也走 send_message，把「未配置 / 未启用」写进状态区 + Toast，
+            // 避免用户感觉「点了没反应」。
             match self.send_message(ctx, app_settings) {
                 SendOutcome::Sent => {
                     self.input_status = None;
                     ctx.request_repaint();
                 }
                 SendOutcome::Empty => {
-                    self.input_status = Some(
-                        i18n::tr(
-                            ctx,
-                            "Enter a question or attach terminal selection first",
-                            "请输入问题，或先从终端附带选区",
-                        )
-                        .to_string(),
-                    );
+                    let msg = i18n::tr(
+                        ctx,
+                        "Enter a question or attach terminal selection first",
+                        "请输入问题，或先从终端附带选区",
+                    )
+                    .to_string();
+                    self.input_status = Some(msg.clone());
+                    self.pending_toast_error = Some(msg);
                 }
                 SendOutcome::NotReady(msg) => {
-                    self.input_status = Some(msg);
+                    self.input_status = Some(msg.clone());
+                    self.pending_toast_error = Some(msg);
                 }
             }
         }

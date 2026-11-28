@@ -474,6 +474,7 @@ pub fn fragment_list_row(
                     egui::Layout::left_to_right(egui::Align::Center),
                     |ui| {
                         ui.set_max_width(title_col_w);
+                        // 整行可点：子 Label 不抢事件（与连接列表同一规范）。
                         let title_resp = ui
                             .add(
                                 egui::Label::new(
@@ -482,7 +483,7 @@ pub fn fragment_list_row(
                                         .color(theme.accent_color()),
                                 )
                                 .truncate()
-                                .sense(egui::Sense::click()),
+                                .selectable(false),
                             )
                             .on_hover_text(row.command);
                         if let Some(status) = row.status_label {
@@ -497,10 +498,13 @@ pub fn fragment_list_row(
                                 "published" => crate::i18n::tr(ui.ctx(), "Published", "已发布"),
                                 other => other,
                             };
-                            ui.label(
-                                RichText::new(format!("[{}]", status_text))
-                                    .size(tag_px * 0.85)
-                                    .color(badge_color),
+                            ui.add(
+                                egui::Label::new(
+                                    RichText::new(format!("[{}]", status_text))
+                                        .size(tag_px * 0.85)
+                                        .color(badge_color),
+                                )
+                                .selectable(false),
                             );
                         }
                         title_resp
@@ -519,7 +523,8 @@ pub fn fragment_list_row(
                                     .size(tag_px)
                                     .color(theme.color_fragment_tag_text()),
                             )
-                            .truncate(),
+                            .truncate()
+                            .selectable(false),
                         )
                         .on_hover_text(row.tag_label);
                     },
@@ -538,7 +543,8 @@ pub fn fragment_list_row(
                     .monospace()
                     .color(theme.color_status_bar_conn()),
             )
-            .truncate(),
+            .truncate()
+            .selectable(false),
         )
         .on_hover_text(cmd_trim);
 
@@ -548,7 +554,8 @@ pub fn fragment_list_row(
                 .size(theme.font_size_fragment_stats())
                 .color(theme.color_caption_text()),
         )
-        .truncate(),
+        .truncate()
+        .selectable(false),
     );
 
     FragmentListRowResponse {

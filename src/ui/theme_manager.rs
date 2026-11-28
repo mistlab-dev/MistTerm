@@ -120,9 +120,12 @@ impl ThemeManager {
     }
 
     /// 应用主题到 egui Context(同索引重复调用为 no-op)。
-    pub fn apply_theme(&mut self, ctx: &egui::Context) {
+    ///
+    /// 返回 `true` 表示本帧真正重写了 Style——调用方应丢弃依赖旧配色的
+    /// 终端布局缓存等（全局入口，勿只在某一个菜单分支清缓存）。
+    pub fn apply_theme(&mut self, ctx: &egui::Context) -> bool {
         if self.applied_ctx_index == Some(self.current) {
-            return;
+            return false;
         }
         let theme = self.current_theme();
         let mut style = (*ctx.global_style()).clone();
@@ -258,6 +261,7 @@ impl ThemeManager {
         self.applied_ctx_index = Some(self.current);
         // 勿在此 request_repaint：每帧 apply 时再立即重绘会形成无限帧循环。
         // 切换主题时由偏好/菜单等调用方自行 request_repaint。
+        true
     }
 
     fn invalidate_applied_style(&mut self) {
@@ -265,9 +269,9 @@ impl ThemeManager {
     }
 
     /// 强制按当前主题重写 egui Style(字体热切换后调用)。
-    pub fn invalidate_and_apply(&mut self, ctx: &egui::Context) {
+    pub fn invalidate_and_apply(&mut self, ctx: &egui::Context) -> bool {
         self.invalidate_applied_style();
-        self.apply_theme(ctx);
+        self.apply_theme(ctx)
     }
 
     /// 获取当前主题

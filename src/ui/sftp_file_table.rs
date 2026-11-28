@@ -87,7 +87,12 @@ pub(super) fn skip_leading_separator(parts: &[(String, PathBuf, bool)], start: u
 
 /// 分隔符片段（不可点击）；根 `/` 片段的 `dest` 恰为 `/`，与分隔符区分开。
 pub(super) fn is_crumb_separator(part: &(String, PathBuf, bool)) -> bool {
-    part.0 == "/" && part.1.as_os_str() != "/"
+    // 分隔符片段标签为 "/"；根 crumb 的 dest 在 Unix 是 "/"、在 Windows 可能是 "\"。
+    if part.0 != "/" {
+        return false;
+    }
+    let dest = part.1.as_os_str();
+    dest != "/" && dest != "\\"
 }
 
 pub(super) fn system_time_to_utc(t: SystemTime) -> Option<DateTime<Utc>> {

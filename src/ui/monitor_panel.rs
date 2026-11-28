@@ -245,9 +245,25 @@ impl MonitorPanel {
                 self.last_ui_refresh = ctx.input(|i| i.time);
                 if let Some(monitor) = &mut self.monitor {
                     match monitor.ingest_remote_output(&raw) {
-                        Ok(_) => {
-                            self.last_error = None;
-                            self.refresh_rising_alerts(ctx);
+                        Ok(stats) => {
+                            // 解析「成功」但内存/磁盘/运行时间全 0：多半是命令缺权限或输出不可用，
+                            // 勿静默显示全 0（试用清单 P1 #7）。
+                            if stats.memory_total == 0
+                                && stats.disk_total == 0
+                                && stats.uptime_secs == 0
+                            {
+                                self.last_error = Some(
+                                    i18n::tr(
+                                        ctx,
+                                        "Monitor got empty metrics (memory/disk/uptime are 0). Check remote tools (free/df) and permissions, then tap Refresh.",
+                                        "监控采集结果为空（内存/磁盘/运行时间均为 0）。请检查远端 free/df 等命令与权限，再点「刷新」。",
+                                    )
+                                    .to_string(),
+                                );
+                            } else {
+                                self.last_error = None;
+                                self.refresh_rising_alerts(ctx);
+                            }
                         }
                         Err(e) => self.last_error = Some(e),
                     }
@@ -722,6 +738,7 @@ impl MonitorPanel {
                             .color(theme.text_secondary()),
                     );
                     ui.add_space(8.0);
+                    // 稳定根 Id（egui 0.37：`Id::unique` = 确定性哈希，不是每帧随机）。
                     let _ = crate::ui::chrome::form_f32_stepper(
                         ui,
                         theme,

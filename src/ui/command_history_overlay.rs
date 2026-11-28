@@ -762,7 +762,8 @@ fn history_row(
                             .font(egui::FontId::monospace(theme.font_size_normal()))
                             .color(cmd_color),
                     )
-                    .truncate(),
+                    .truncate()
+                    .selectable(false),
                 );
                 // 列内放不下时，悬停可看完整命令。
                 resp.on_hover_text(&entry.command);
@@ -774,17 +775,21 @@ fn history_row(
                             .size(theme.font_size_small())
                             .color(theme.text_secondary()),
                     )
-                    .truncate(),
+                    .truncate()
+                    .selectable(false),
                 );
                 if session_label != "—" {
                     resp.on_hover_text(session_label);
                 }
             }
             3 => {
-                cell.label(
-                    egui::RichText::new(status_text)
-                        .size(theme.font_size_small())
-                        .color(status_color),
+                cell.add(
+                    egui::Label::new(
+                        egui::RichText::new(status_text)
+                            .size(theme.font_size_small())
+                            .color(status_color),
+                    )
+                    .selectable(false),
                 );
             }
             _ => {

@@ -64,7 +64,8 @@ pub fn rich_caption(theme: &Theme, text: &str) -> RichText {
 
 
 pub fn form_field_label(ui: &mut Ui, theme: &Theme, text: &str) {
-    ui.label(rich_form_label(theme, text));
+    // 标签不要 selectable：否则 click+drag 会盖住紧挨着的下方输入框（新建连接「连接名称」首项）。
+    ui.add(egui::Label::new(rich_form_label(theme, text)).selectable(false));
 }
 
 
@@ -396,13 +397,19 @@ pub(crate) fn paint_form_field_underline(ui: &Ui, theme: &Theme, rect: egui::Rec
     let ctx = ui.ctx();
     let w = theme.hairline_width(ctx);
     let line_y = theme.snap_y_to_pixel(ctx, rect.bottom() - w * 0.5);
+    let hovered = ui.rect_contains_pointer(rect);
     let line_color = if focused {
         theme.color_input_underline_focus()
+    } else if hovered {
+        theme.color_input_underline_hover()
     } else {
         theme.color_input_underline_idle()
     };
     ui.painter()
         .hline(rect.x_range(), line_y, Stroke::new(w, line_color));
+    if hovered || focused {
+        ui.ctx().set_cursor_icon(CursorIcon::Text);
+    }
 }
 
 
@@ -415,7 +422,7 @@ pub fn hint_rich(theme: &Theme, text: &str, font_size: f32) -> RichText {
 }
 
 
-/// 单行输入框(modern：透明底 + 底边线；其它主题：带底+描边)
+/// 单行输入框（统一实心底框；`uses_underline_inputs` 仅保留开关，默认关闭）。
 pub fn form_singleline_field(
     ui: &mut Ui,
     theme: &Theme,
@@ -493,7 +500,8 @@ pub fn form_singleline_field_boxed_with_align(
     let focused = ui.memory(|m| m.has_focus(id));
     let row_h = theme.size_control_btn_h().max(28.0);
     let width = desired_width.max(96.0);
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, row_h), Sense::hover());
+    // 外框用 click：点到行高内的上下空白也能聚焦；原先 Sense::hover 时只有文字行可点。
+    let (rect, box_resp) = ui.allocate_exact_size(egui::vec2(width, row_h), Sense::click());
     let stroke = if focused {
         egui::Stroke::new(1.0, theme.accent_color())
     } else {
@@ -511,9 +519,8 @@ pub fn form_singleline_field_boxed_with_align(
         egui::pos2(rect.left() + pad_x, rect.top()),
         egui::pos2(rect.right() - pad_x, rect.bottom()),
     );
-    ui.scope_builder(
-        egui::UiBuilder::new().max_rect(inner),
-        |ui| {
+    let mut response = ui
+        .scope_builder(egui::UiBuilder::new().max_rect(inner), |ui| {
             ui.set_min_size(inner.size());
             ui.set_max_size(inner.size());
             ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
@@ -537,9 +544,12 @@ pub fn form_singleline_field_boxed_with_align(
                 response
             })
             .inner
-        },
-    )
-    .inner
+        })
+        .inner;
+    if box_resp.clicked() {
+        response.request_focus();
+    }
+    response
 }
 
 
@@ -867,7 +877,7 @@ pub(crate) fn search_field_contents(
 }
 
 
-/// 面板/对话框内搜索框(下划线式，跟随主题输入样式)。
+/// 面板/对话框内搜索框（跟随主题输入样式；暗夜现为实心底框）。
 pub fn search_field(
     ui: &mut Ui,
     theme: &Theme,
@@ -877,8 +887,7 @@ pub fn search_field(
     desired_width: f32,
 ) -> Response {
     let focused = ui.memory(|m| m.has_focus(id));
-    // modern 主题是"透明底 + 底边线"：底边线由 form_singleline_field 补画，
-    // 这里若不补，搜索框在色板上会完全没有边框也没有下划线，看着不像输入框。
+    // 若重新启用 underline：底边线在此补画；当前 uses_underline_inputs=false，走实心底框。
     let underline = theme.uses_underline_inputs();
     let font = theme.font_size_control_input();
     let pad_y = theme.spacing_search_input_y();
