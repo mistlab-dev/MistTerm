@@ -50,7 +50,7 @@ fn notify_ui(session_id: SshSessionId, kind: &str, bytes: usize) {
         log::debug!(target: "repaint_lag", "repaint ctx not set yet session={}", session_id);
     }
 }
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use ssh2::Channel;
 
 /// SSH 会话 ID
@@ -539,13 +539,14 @@ impl SshManager {
         session_id: SshSessionId,
         upload_bypass: &Arc<Mutex<Option<Arc<UploadPtyBypass>>>>,
     ) -> std::io::Result<()> {
-        // 无进展轮询上限：每次 sleep 150µs × 6000 次 ≈ 900ms，≈ 1 秒仍无进展就报错返回。
-        // 旧值 60_000 轮 ×150µs = 9 秒，是「Tab 卡住半天 UI 还不动」的两大元凶之一
+        // 无进展墙钟上限 900ms。旧实现用「6000 轮 ×150µs」表达超时：机器忙时
+        // `pump_channel_reads` 变慢会把真实等待拉长到数秒，报错却写「长时间无进展」。
+        // 历史：60_000 轮 ×150µs = 9 秒，是「Tab 卡住半天 UI 还不动」的两大元凶之一
         // （另一个是 UI 线程同步 send 到泵队列；见 SshSessionHandle::pump_send）。
-        const MAX_NO_PROGRESS: usize = 6_000;
+        const NO_PROGRESS_BUDGET: Duration = Duration::from_millis(900);
         const CHUNK_CEIL: usize = 256 * 1024;
         let mut rest = data;
-        let mut no_progress = 0usize;
+        let mut no_progress_since = Instant::now();
 
         while !rest.is_empty() {
             let len_before = rest.len();
@@ -648,18 +649,17 @@ impl SshManager {
             }
 
             if rest.len() < len_before {
-                no_progress = 0;
+                no_progress_since = Instant::now();
+            } else if no_progress_since.elapsed() >= NO_PROGRESS_BUDGET {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    format!(
+                        "write_pty_with_drain: {}ms 无进展（写窗口或 write 阻塞），剩 {} bytes",
+                        no_progress_since.elapsed().as_millis(),
+                        rest.len()
+                    ),
+                ));
             } else {
-                no_progress += 1;
-                if no_progress > MAX_NO_PROGRESS {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::TimedOut,
-                        format!(
-                            "write_pty_with_drain: 长时间无进展（写窗口或 write 阻塞），剩 {} bytes",
-                            rest.len()
-                        ),
-                    ));
-                }
                 thread::sleep(Duration::from_micros(150));
             }
         }

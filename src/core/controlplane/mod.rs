@@ -10,6 +10,12 @@ use serde::{Deserialize, Serialize};
 use crate::core::batch_exec::BatchExecRow;
 use crate::core::team::{normalize_api_base, TeamApiError};
 
+/// 控制面尚无 SSE/长轮询时，客户端轮询「自动执行」审批的总预算（秒）。
+pub const CP_APPROVAL_BUDGET_SECS: u64 = 300;
+/// 审批轮询初始间隔；指数退避 1→2→4→8s，封顶见 [`CP_APPROVAL_POLL_CAP`]。
+const CP_APPROVAL_POLL_INITIAL: Duration = Duration::from_secs(1);
+const CP_APPROVAL_POLL_CAP: Duration = Duration::from_secs(10);
+
 #[derive(Debug, Clone, Serialize)]
 pub struct CreatePlanRequest {
     pub intent: String,
@@ -298,9 +304,16 @@ impl ControlPlaneClient {
                 plan = approved.plan;
                 lease = approved.lease;
             } else {
-                let deadline = std::time::Instant::now() + Duration::from_secs(poll_secs);
+                let budget_secs = if poll_secs == 0 {
+                    CP_APPROVAL_BUDGET_SECS
+                } else {
+                    poll_secs
+                };
+                let deadline = std::time::Instant::now() + Duration::from_secs(budget_secs);
+                let mut interval = CP_APPROVAL_POLL_INITIAL;
                 loop {
-                    if std::time::Instant::now() > deadline {
+                    let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                    if remaining.is_zero() {
                         return Ok((
                             req.steps
                                 .first()
@@ -309,13 +322,13 @@ impl ControlPlaneClient {
                             waiting_rows(
                                 target_labels,
                                 &format!(
-                                    "等待控制台「自动执行」审批（plan {}）— https://mistlab.dev/dashboard?team={}&cp_plan={}",
-                                    plan.id, team_id, plan.id
+                                    "等待控制台「自动执行」审批（plan {}，预算 {}s 已尽）— https://mistlab.dev/dashboard?team={}&cp_plan={}",
+                                    plan.id, budget_secs, team_id, plan.id
                                 ),
                             ),
                         ));
                     }
-                    std::thread::sleep(Duration::from_secs(3));
+                    std::thread::sleep(interval.min(remaining).min(CP_APPROVAL_POLL_CAP));
                     plan = self
                         .get_plan(team_id, bearer, &plan.id)
                         .map_err(|e| format!("poll plan: {e}"))?;
@@ -329,6 +342,7 @@ impl ControlPlaneClient {
                     if plan.status == "denied" {
                         return Err("管理员已拒绝此次上机".into());
                     }
+                    interval = (interval * 2).min(CP_APPROVAL_POLL_CAP);
                 }
             }
         }

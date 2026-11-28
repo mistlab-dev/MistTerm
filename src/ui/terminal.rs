@@ -609,12 +609,10 @@ pub struct TerminalView {
     oob_cwd_rx: Option<std::sync::mpsc::Receiver<Result<String, String>>>,
     /// 本次连接已排过带外查询，避免重连路径重复入队。
     oob_cwd_sent: bool,
-    /// 登录首查等首包 PTY 输出后再 `ExecRemote`，避免 Windows OpenSSH 横幅卡在泵后全黑。
-    oob_cwd_await_first_output: bool,
-    /// 首包到达后再静置一会再查（横幅/清屏常分多包到达；立刻 exec 会堵后续包）。
-    oob_cwd_settle_until: Option<Instant>,
-    /// 若迟迟无首包，到点仍发起登录首查（兜底，须足够长以免踩横幅）。
-    oob_cwd_defer_deadline: Option<Instant>,
+    /// Connected 后等「可交互」事件再发 InitialFill；放弃截止见 `oob_initial_abandon`。
+    oob_initial_pending: bool,
+    /// 仍无提示符 / integration 信号时强制发起首次带外查询的墙钟上限。
+    oob_initial_abandon: Option<Instant>,
     /// 本次带外查询的意图：登录时的初次填充，或开新标签/分屏前的继承刷新。
     oob_cwd_intent: OobCwdIntent,
     /// 继承刷新查询的结果（`None` = 已完成但没查到/失败）。发起方读后即用。
@@ -1262,9 +1260,8 @@ impl TerminalView {
             shell_probe_sent: false,
             oob_cwd_rx: None,
             oob_cwd_sent: false,
-            oob_cwd_await_first_output: false,
-            oob_cwd_settle_until: None,
-            oob_cwd_defer_deadline: None,
+            oob_initial_pending: false,
+            oob_initial_abandon: None,
             oob_cwd_intent: OobCwdIntent::InitialFill,
             oob_refresh_cwd: None,
             oob_refresh_done: false,
@@ -1813,6 +1810,35 @@ impl TerminalView {
         self.startup_cd_deadline = Some(Instant::now() + Duration::from_secs(6));
     }
 
+    /// 源会话迟到刷新：只更新**尚未发出**的启动 cd 路径，保留原 policy / deadline。
+    ///
+    /// 已发出（`pending_startup_cd` 已 take）或从未 arm → 返回 `false`，绝不重新排队，
+    /// 避免第二条 `cd` 打进已交互 shell，也避免把 `Match` 盖成 `Unconditional`。
+    pub(crate) fn update_pending_startup_directory(&mut self, cwd: &str) -> bool {
+        let cwd = cwd.trim();
+        if cwd.is_empty() || self.pending_startup_cd.is_none() {
+            return false;
+        }
+        self.shell_cwd = Some(cwd.to_string());
+        self.pending_startup_cd = Some(cwd.to_string());
+        true
+    }
+
+    /// 测试/诊断：当前启动 cd 策略是否为跨会话 Match。
+    #[cfg(test)]
+    pub(crate) fn startup_cd_is_match_policy(&self) -> bool {
+        matches!(self.startup_cd_policy, Some(StartupCdPolicy::Match(_)))
+    }
+
+    /// 测试/诊断：当前启动 cd 策略是否为同会话 Unconditional。
+    #[cfg(test)]
+    pub(crate) fn startup_cd_is_unconditional(&self) -> bool {
+        matches!(
+            self.startup_cd_policy,
+            Some(StartupCdPolicy::Unconditional)
+        )
+    }
+
     /// #401：跨会话继承目录。源窗格的身份未知时干脆不继承——
     /// 拿不到身份就无法确认目标机器/账号，硬 `cd` 过去只会换一种方式报错。
     pub(crate) fn arm_startup_directory_cross_session(
@@ -1980,61 +2006,49 @@ impl TerminalView {
     /// 探测后 `remote_identity` 恒为 `None` 的缺口，让跨会话目录继承的 `Match`
     /// 身份判定重新可用；后者作为 OSC 7 之外的兜底目录来源。
     ///
-    /// 取舍：`enqueue_remote_exec` 期间 PTY 泵暂停。登录首查用短超时
-    /// （`OOB_INITIAL_TIMEOUT_MS`），避免 Windows OpenSSH / 无 `sh` 环境卡满 15s
-    /// 导致终端长时间全黑。查询命令是纯 `/proc` 遍历，Linux 上通常百毫秒内返回；
-    /// ForceCommand / 受限 shell / 非 Unix 下失败会静默降级。
-    ///
-    /// 调用方应在**首包 PTY 输出到达后**再排登录首查（见 `oob_cwd_await_first_output`），
-    /// 否则 Windows OpenSSH 横幅会堵在 `ExecRemote` 后面。
+    /// 取舍：`enqueue_remote_exec` 期间 PTY 泵暂停。首次查询用
+    /// [`oob_cwd::OOB_INITIAL_TIMEOUT_MS`]，不再吃满 15s 默认 exec 上限。
+    /// ForceCommand / 受限 shell 下 exec 失败会静默降级，不影响已有功能。
     fn start_oob_cwd_query(&mut self) {
-        self.oob_cwd_await_first_output = false;
-        self.oob_cwd_settle_until = None;
-        self.oob_cwd_defer_deadline = None;
+        self.oob_initial_pending = false;
+        self.oob_initial_abandon = None;
         self.start_oob_cwd_query_impl(
             OobCwdIntent::InitialFill,
             Some(crate::terminal::oob_cwd::OOB_INITIAL_TIMEOUT_MS),
         )
     }
 
-    /// 登录首查：首包后静置结束，或超长超时兜底，再真正 `enqueue_remote_exec`。
-    fn maybe_fire_deferred_oob_cwd(&mut self) {
-        let settle_due = self
-            .oob_cwd_settle_until
-            .is_some_and(|t| Instant::now() >= t);
-        if settle_due {
-            self.start_oob_cwd_query();
-            return;
-        }
-        if !self.oob_cwd_await_first_output {
-            return;
-        }
-        let due = self
-            .oob_cwd_defer_deadline
-            .is_some_and(|dl| Instant::now() >= dl);
-        if due {
-            self.start_oob_cwd_query();
-        }
+    /// Connected 后挂起首次带外查询：等提示符 / shell integration，时间只作放弃上限。
+    fn arm_initial_oob_cwd(&mut self) {
+        self.oob_cwd_sent = false;
+        self.oob_cwd_rx = None;
+        self.oob_initial_pending = true;
+        self.oob_initial_abandon =
+            Some(Instant::now() + crate::terminal::oob_cwd::OOB_INITIAL_ABANDON);
     }
 
-    /// 收到远端交互输出时：记录首包，再静置片刻后发起登录带外 cwd（勿立刻 exec）。
-    fn note_remote_pty_output_for_oob(&mut self, data: &[u8]) {
-        if data.is_empty() {
+    /// 事件驱动发起 InitialFill：提示符就绪、见过 OSC 133/633，或放弃截止到点。
+    fn maybe_fire_initial_oob_cwd(&mut self) {
+        if !self.oob_initial_pending || self.oob_cwd_sent {
             return;
         }
-        if self.oob_cwd_await_first_output {
-            self.oob_cwd_await_first_output = false;
-            self.oob_cwd_settle_until = Some(Instant::now() + Duration::from_millis(900));
-            self.oob_cwd_defer_deadline = None;
+        let prompt_ready = prompt_ready_for_cd(&self.terminal.cursor_line_text());
+        let integration = self.terminal.shell_integration_seen();
+        let abandoned = self
+            .oob_initial_abandon
+            .map(|d| Instant::now() >= d)
+            .unwrap_or(true);
+        if !(prompt_ready || integration || abandoned) {
             return;
         }
-        // 静置窗口内又来了包：再顺延，让横幅收齐。
-        if let Some(until) = self.oob_cwd_settle_until.as_mut() {
-            let extend = Instant::now() + Duration::from_millis(450);
-            if extend > *until {
-                *until = extend;
-            }
+        if abandoned && !prompt_ready && !integration {
+            log::debug!("oob cwd initial: abandon wait for interactive signal, forcing query");
+        } else {
+            log::debug!(
+                "oob cwd initial: fire on signal prompt={prompt_ready} integration={integration}"
+            );
         }
+        self.start_oob_cwd_query();
     }
 
     /// 继承刷新（#419 产品点查 Fail 的主路径修复）：开新标签/分屏前对源会话
@@ -2064,40 +2078,30 @@ impl TerminalView {
         if intent == OobCwdIntent::InitialFill && self.oob_cwd_sent {
             return;
         }
-        // 泵线程串行执行：一次只允许一个在途查询。登录查询还在途时立刻刷新
-        // 会覆盖 `oob_cwd_rx` 丢掉登录回执 —— 先排空在途回执再发刷新。
-        // 排空最多等 `OOB_REFRESH_TIMEOUT_MS`，超时就丢弃旧回执（登录目录本来
-        // 也只是兑底，刷新结果才是这次要用的）。
+        // 泵线程串行：一次只允许一个在途查询。登录查询还在途时立刻刷新会覆盖
+        // `oob_cwd_rx`——非阻塞 try_recv 一次；空则丢弃旧回执（登录目录只是兜底，
+        // 刷新结果才是这次要用的）。禁止在此 sleep：会卡住 UI 线程开标签/分屏。
         if let Some(rx) = self.oob_cwd_rx.take() {
             use std::sync::mpsc::TryRecvError;
             let prior_intent = self.oob_cwd_intent;
-            let drain_deadline =
-                Instant::now() + Duration::from_millis(crate::terminal::oob_cwd::OOB_REFRESH_TIMEOUT_MS as u64);
-            loop {
-                match rx.try_recv() {
-                    Ok(Ok(out)) => {
-                        let result = crate::terminal::oob_cwd::parse_oob_cwd_output(&out);
-                        if self.remote_identity.is_none() {
-                            self.remote_identity = result.identity;
-                        }
-                        if prior_intent == OobCwdIntent::InitialFill
-                            && self.shell_cwd.is_none()
-                            && self.pending_startup_cd.is_none()
-                        {
-                            if let Some(cwd) = result.cwd {
-                                self.shell_cwd = Some(cwd);
-                            }
-                        }
-                        break;
+            match rx.try_recv() {
+                Ok(Ok(out)) => {
+                    let result = crate::terminal::oob_cwd::parse_oob_cwd_output(&out);
+                    if self.remote_identity.is_none() {
+                        self.remote_identity = result.identity;
                     }
-                    Ok(Err(_)) | Err(TryRecvError::Disconnected) => break,
-                    Err(TryRecvError::Empty) => {
-                        if Instant::now() >= drain_deadline {
-                            log::debug!("oob cwd query: drain deadline hit, dropping stale receipt");
-                            break;
+                    if prior_intent == OobCwdIntent::InitialFill
+                        && self.shell_cwd.is_none()
+                        && self.pending_startup_cd.is_none()
+                    {
+                        if let Some(cwd) = result.cwd {
+                            self.shell_cwd = Some(cwd);
                         }
-                        std::thread::sleep(Duration::from_millis(25));
                     }
+                }
+                Ok(Err(_)) | Err(TryRecvError::Disconnected) => {}
+                Err(TryRecvError::Empty) => {
+                    log::debug!("oob cwd query: drop in-flight receipt to start inherit refresh");
                 }
             }
         }
@@ -2377,9 +2381,8 @@ impl TerminalView {
                 self.shell_probe_rx = None;
                 self.oob_cwd_sent = false;
                 self.oob_cwd_rx = None;
-                self.oob_cwd_await_first_output = false;
-                self.oob_cwd_settle_until = None;
-                self.oob_cwd_defer_deadline = None;
+                self.oob_initial_pending = false;
+                self.oob_initial_abandon = None;
                 self.pending_shell_hook = None;
                 self.echo_suppressor.reset();
                 self.remote_identity = None;
@@ -2416,9 +2419,8 @@ impl TerminalView {
         self.shell_probe_rx = None;
         self.oob_cwd_sent = false;
         self.oob_cwd_rx = None;
-        self.oob_cwd_await_first_output = false;
-        self.oob_cwd_settle_until = None;
-        self.oob_cwd_defer_deadline = None;
+        self.oob_initial_pending = false;
+        self.oob_initial_abandon = None;
         self.pending_shell_hook = None;
         self.echo_suppressor.reset();
         self.remote_identity = None;
@@ -3771,7 +3773,7 @@ impl TerminalView {
             // #410：空闲帧也要 tick——提示符先到、探测后到且后续无输出时，
             // 不能等下一段输出才注入；超时时把暂存的候选残余冲进 VTE（可见）。
             self.poll_shell_hook_probe();
-            self.maybe_fire_deferred_oob_cwd();
+            self.maybe_fire_initial_oob_cwd();
             self.poll_oob_cwd_query();
             self.maybe_send_shell_hook();
             self.maybe_send_startup_cd();
@@ -3798,7 +3800,6 @@ impl TerminalView {
                             }
                             continue;
                         }
-                        self.note_remote_pty_output_for_oob(&data);
                         self.push_zmodem_detect_tail(&data);
                         let detect_buf = self.zmodem_detect_window();
                         // 上传(本机 sz→远端 rz)时，PTY 上的 ZMODEM 帧只能经 SSH 泵线程到达此处；
@@ -3987,16 +3988,11 @@ impl TerminalView {
                             // 只在 Injecting 窗口内剥掉与注入载荷精确匹配的回显前缀。
                             // 直接覆盖外层 display_data，保证下面的 VTE / 日志 / 模块
                             // 分发用的都是过滤后的字节（不能用内层同名变量遮蔽）。
-                            let filtered = if self.echo_suppressor.is_active() {
+                            display_data = if self.echo_suppressor.is_active() {
                                 self.echo_suppressor.filter(&display_data, Instant::now())
                             } else {
                                 display_data
                             };
-                            self.poll_shell_hook_probe();
-                            self.poll_oob_cwd_query();
-                            self.maybe_send_shell_hook();
-                            self.maybe_send_startup_cd();
-                            display_data = filtered;
                         }
                         if !display_data.is_empty() {
                             self.pending_log_output.push(display_data.clone());
@@ -4005,6 +4001,12 @@ impl TerminalView {
                             self.terminal.feed(&display_data);
                             vte_dirty = true;
                         }
+                        // feed 之后再判提示符 / integration，同帧即可事件驱动发起 OOB / startup cd。
+                        self.poll_shell_hook_probe();
+                        self.maybe_fire_initial_oob_cwd();
+                        self.poll_oob_cwd_query();
+                        self.maybe_send_shell_hook();
+                        self.maybe_send_startup_cd();
                     }
                     SshMessage::Connected { .. } => {
                         if let Some((_, host)) = &self.connection_target {
@@ -4045,19 +4047,9 @@ impl TerminalView {
                                         // #401 方案 B：shell 已起来，排一次类型探测。
                                         // 连服务器装了 integration 也可能没装，主动补一份。
                                         self.start_shell_hook_probe();
-                                        // #413 后继：每条新交互 shell 都重排一次带外查询，
-                                        // 先清掉可能残留的上一次会话回执（断线路径不统一，
-                                        // keep_buffer / 意外断开不会走 connect() 的复位块）。
-                                        // 登录首查延后到首包 PTY 输出（或短超时）：Windows OpenSSH
-                                        // 横幅常晚于 shell 就绪；立刻 ExecRemote 会把首屏堵成全黑。
-                                        self.oob_cwd_sent = false;
-                                        self.oob_cwd_rx = None;
-                                        self.oob_cwd_await_first_output = true;
-                                        self.oob_cwd_settle_until = None;
-                                        // 仅兜底：首包很晚时才强行查；过短会踩 Windows 横幅。
-                                        self.oob_cwd_defer_deadline = Some(
-                                            Instant::now() + Duration::from_millis(8000),
-                                        );
+                                        // #413 后继：挂起首次带外查询，等提示符 / OSC
+                                        // integration（或放弃截止）再发——不用墙钟猜 banner。
+                                        self.arm_initial_oob_cwd();
                                     }
                                     Err(e) => {
                                         let msg = format_ssh_connect_error(
@@ -6045,9 +6037,8 @@ impl TerminalView {
         self.shell_probe_sent = false;
         self.oob_cwd_rx = None;
         self.oob_cwd_sent = false;
-        self.oob_cwd_await_first_output = false;
-        self.oob_cwd_settle_until = None;
-        self.oob_cwd_defer_deadline = None;
+        self.oob_initial_pending = false;
+        self.oob_initial_abandon = None;
         self.remote_identity = None;
         self.startup_cd_policy = None;
         self.startup_cd_deadline = None;
@@ -8095,6 +8086,118 @@ mod oob_cwd_tests {
         view.start_oob_cwd_query();
         assert!(!view.oob_cwd_sent);
         assert!(view.oob_cwd_rx.is_none());
+    }
+
+    /// 场景（文档 §2）：SSH 已连上，但屏幕还在刷 MOTD/banner、没有提示符。
+    /// 此时不得发起带外 cwd 查询——不能用墙钟猜「大概就绪了」。
+    #[test]
+    fn motd_without_prompt_does_not_start_cwd_query() {
+        let mut view = TerminalView::new();
+        attach_test_handle(&mut view);
+        view.arm_initial_oob_cwd();
+        // 模拟横幅输出：有字节，但不是可交互提示符。
+        view.terminal.feed(b"Welcome to Ubuntu\r\nLast login: ...\r\n");
+        view.maybe_fire_initial_oob_cwd();
+        assert!(
+            view.oob_cwd_rx.is_none() && !view.oob_cwd_sent,
+            "banner 输出不是可交互信号，不应发起 cwd 查询"
+        );
+    }
+
+    /// 场景（文档 §2）：远端出现 `$`/`#` 提示符 → 判定可交互，才发首次 cwd 查询。
+    #[test]
+    fn shell_prompt_triggers_cwd_query() {
+        let mut view = TerminalView::new();
+        attach_test_handle(&mut view);
+        view.arm_initial_oob_cwd();
+        view.terminal.feed(b"user@host:~$ ");
+        view.maybe_fire_initial_oob_cwd();
+        assert!(
+            view.oob_cwd_sent || view.oob_cwd_rx.is_some(),
+            "提示符就绪后应发起首次 cwd 查询"
+        );
+    }
+
+    /// 场景（文档 §2）：链路极慢、一直看不到提示符时，只允许「一个放弃上限」后兜底发起一次，
+    /// 而不是用 900/450/8000 三连静置猜。
+    #[test]
+    fn abandon_deadline_forces_one_cwd_query_when_prompt_never_arrives() {
+        let mut view = TerminalView::new();
+        attach_test_handle(&mut view);
+        view.arm_initial_oob_cwd();
+        view.oob_initial_abandon = Some(Instant::now() - Duration::from_millis(1));
+        view.maybe_fire_initial_oob_cwd();
+        assert!(
+            view.oob_cwd_sent || view.oob_cwd_rx.is_some(),
+            "放弃截止到点仍应兜底发起一次查询"
+        );
+    }
+
+    /// 场景（文档 §1）：开新标签要刷新源会话 cwd，但上一笔登录查询还在途。
+    /// 旧实现会 sleep 最多 ~1s 排空——用户体感「卡一下」。刷新必须立刻返回。
+    #[test]
+    fn inherit_refresh_returns_immediately_while_prior_query_in_flight() {
+        let mut view = TerminalView::new();
+        attach_test_handle(&mut view);
+        let (_tx, rx) = std::sync::mpsc::channel::<Result<String, String>>();
+        view.oob_cwd_rx = Some(rx);
+        view.oob_cwd_intent = OobCwdIntent::InitialFill;
+        let started = Instant::now();
+        view.start_oob_cwd_refresh();
+        assert!(
+            started.elapsed() < Duration::from_millis(200),
+            "在途查询 Empty 时刷新不得 sleep 排空（开标签卡顿来源）"
+        );
+        assert_eq!(view.oob_cwd_intent, OobCwdIntent::RefreshForInherit);
+    }
+
+    /// 场景（#401 / PR 审查）：跨会话已按 Match arm；迟到刷新只改路径，不得改成 Unconditional。
+    #[test]
+    fn late_refresh_preserves_cross_session_match_policy() {
+        use crate::terminal::shell_integration::RemoteIdentity;
+        let mut view = TerminalView::new();
+        view.arm_startup_directory_cross_session(
+            "/cached/home",
+            Some(RemoteIdentity {
+                host: "box".into(),
+                user: "deploy".into(),
+            }),
+        );
+        assert!(view.startup_cd_is_match_policy());
+        assert!(view.update_pending_startup_directory("/real/project"));
+        assert_eq!(view.pending_startup_directory(), Some("/real/project"));
+        assert!(
+            view.startup_cd_is_match_policy(),
+            "迟到刷新不得把 Match 盖成 Unconditional"
+        );
+    }
+
+    /// 场景：启动 cd 已发出（pending take）后，迟到刷新不得再排队第二条 cd。
+    #[test]
+    fn late_refresh_does_not_rearm_after_startup_cd_sent() {
+        let mut view = TerminalView::new();
+        view.arm_startup_directory("/cached/home");
+        assert!(view.startup_cd_is_unconditional());
+        let _ = view.pending_startup_cd.take();
+        view.startup_cd_policy = None;
+        view.startup_cd_deadline = None;
+        assert!(
+            !view.update_pending_startup_directory("/real/project"),
+            "已发出后不得重新 arm"
+        );
+        assert!(view.pending_startup_directory().is_none());
+    }
+
+    /// 场景：跨会话源身份未知时初始就不继承；迟到路径同样不能发明一条 Unconditional cd。
+    #[test]
+    fn cross_session_unknown_identity_never_arms() {
+        let mut view = TerminalView::new();
+        view.arm_startup_directory_cross_session("/somewhere", None);
+        assert!(view.pending_startup_directory().is_none());
+        assert!(
+            !view.update_pending_startup_directory("/elsewhere"),
+            "从未 arm 时迟到刷新仍不得排队 cd"
+        );
     }
 
     #[test]

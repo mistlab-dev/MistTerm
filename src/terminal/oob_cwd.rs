@@ -39,11 +39,8 @@
 
 use super::shell_integration::RemoteIdentity;
 
-/// 登录后首次带外 cwd 查询超时（毫秒）。
-///
-/// 泵线程处理 `ExecRemote` 期间会暂停 PTY 读写；Windows OpenSSH 等无 `/proc`/
-/// 无 `sh` 的环境上，libssh2 可能卡到满超时才返回，终端会长时间全黑。
-/// 登录首查失败只是降级（无 cwd 缓存），必须短超时，不能用满 15s。
+/// 登录后首次带外查询的 **exec 阻塞上限**（毫秒）。
+/// 「何时发起」不看这个值，而看提示符 / shell integration / 放弃截止（见 UI）。
 pub const OOB_INITIAL_TIMEOUT_MS: u32 = 1500;
 
 /// 继承刷新查询的超时（毫秒）。开新标签/分屏前对源会话再查一次 `/proc` cwd，
@@ -51,6 +48,9 @@ pub const OOB_INITIAL_TIMEOUT_MS: u32 = 1500;
 /// 不能用满 [`crate::ssh::PUMP_EXEC_TIMEOUT_MS`] 的 15s 上限。
 /// 超时/失败由发起方退回已缓存目录，不猜。
 pub const OOB_REFRESH_TIMEOUT_MS: u32 = 1000;
+
+/// 登录后仍等不到可交互信号时，放弃「等事件」、强制发起首次带外查询的墙钟上限。
+pub const OOB_INITIAL_ABANDON: std::time::Duration = std::time::Duration::from_secs(8);
 
 /// 带外查询命令，交给 [`crate::ssh::SshSessionHandle::enqueue_remote_exec`]。
 ///
