@@ -434,16 +434,20 @@ impl MistTermApp {
                                     if let Some(session) =
                                         self.session_manager.get_session(&session_id).cloned()
                                     {
-                                        // #392：侧栏「复制/打开标签」同样继承当前活动 pane cwd；E：先带外刷新。
-                                        let inherit = self
+                                        // #392：侧栏「复制/打开标签」同样继承 cwd；先用缓存建窗，刷新异步投递。
+                                        let source = self
                                             .active_tab
-                                            .and_then(|i| self.active_pane_idx(i).map(|p| (i, p)))
-                                            .and_then(|(i, p)| {
-                                                self.refresh_source_cwd_for_inherit(ctx, i, p)
-                                            });
+                                            .and_then(|i| self.active_pane_idx(i).map(|p| (i, p)));
+                                        let inherit = source.and_then(|(i, p)| {
+                                            self.refresh_source_cwd_for_inherit(ctx, i, p)
+                                        });
                                         self.open_new_tab_for_session_with_cwd(
                                             ctx, &session, inherit,
                                         );
+                                        if let Some((si, sp)) = source {
+                                            let dest_tab = self.tabs.len().saturating_sub(1);
+                                            self.track_inherit_cwd_delivery(si, sp, dest_tab, 0);
+                                        }
                                         self.collapse_connection_sidebar();
                                     }
                                 }
@@ -2980,8 +2984,11 @@ impl MistTermApp {
                 let sid = self.tabs.get(idx).map(|t| t.primary_session_id());
                 if let Some(sid) = sid {
                     if let Some(session) = self.session_manager.get_session(&sid).cloned() {
-                        let inherit = self.refresh_source_cwd_for_inherit(ctx, idx, pane_idx);
+                        let inherit =
+                            self.refresh_source_cwd_for_inherit(ctx, idx, pane_idx);
                         self.open_new_tab_for_session_with_cwd(ctx, &session, inherit);
+                        let dest_tab = self.tabs.len().saturating_sub(1);
+                        self.track_inherit_cwd_delivery(idx, pane_idx, dest_tab, 0);
                     }
                 }
             }

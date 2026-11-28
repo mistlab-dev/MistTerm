@@ -696,23 +696,38 @@ impl SessionManager {
     }
 
     fn read_sessions_file_text(&mut self) -> Option<String> {
-        for attempt in 0..3 {
+        // PermissionDenied / InvalidData：重试无意义。其余（锁、瞬时 IO）指数退避 100/300/900ms。
+        const BACKOFF_MS: [u64; 3] = [100, 300, 900];
+        for (attempt, delay_ms) in BACKOFF_MS.iter().enumerate() {
             match fs::read_to_string(&self.file_path) {
                 Ok(c) => return Some(c),
-                Err(e) if attempt < 2 => {
-                    log::warn!(
-                        "Failed to read sessions (attempt {}): {}; retrying in 100ms",
-                        attempt + 1,
-                        e
-                    );
-                    thread::sleep(Duration::from_millis(100));
-                }
                 Err(e) => {
-                    self.load_diagnostics.push(format!(
-                        "读取会话文件失败(已重试 3 次)：{}",
-                        e
-                    ));
-                    return None;
+                    let kind = e.kind();
+                    let fatal = matches!(
+                        kind,
+                        io::ErrorKind::PermissionDenied | io::ErrorKind::InvalidData
+                    );
+                    if fatal || attempt + 1 >= BACKOFF_MS.len() {
+                        let hint = if kind == io::ErrorKind::PermissionDenied {
+                            "（权限不足，检查文件 ACL / 杀软占用）"
+                        } else if kind == io::ErrorKind::InvalidData {
+                            "（文件损坏，可从备份恢复 sessions.json）"
+                        } else {
+                            ""
+                        };
+                        self.load_diagnostics.push(format!(
+                            "读取会话文件失败{}：{}",
+                            hint, e
+                        ));
+                        return None;
+                    }
+                    log::warn!(
+                        "Failed to read sessions (attempt {}): {:?}; retrying in {}ms",
+                        attempt + 1,
+                        kind,
+                        delay_ms
+                    );
+                    thread::sleep(Duration::from_millis(*delay_ms));
                 }
             }
         }
