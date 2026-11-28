@@ -7937,22 +7937,67 @@ mod oob_cwd_tests {
         assert!(view.oob_cwd_rx.is_none());
     }
 
+    /// 场景（文档 §2）：SSH 已连上，但屏幕还在刷 MOTD/banner、没有提示符。
+    /// 此时不得发起带外 cwd 查询——不能用墙钟猜「大概就绪了」。
     #[test]
-    fn initial_oob_waits_for_prompt_event_not_wall_clock() {
+    fn motd_without_prompt_does_not_start_cwd_query() {
         let mut view = TerminalView::new();
+        attach_test_handle(&mut view);
         view.arm_initial_oob_cwd();
-        assert!(view.oob_initial_pending);
-        assert!(!view.oob_cwd_sent);
-        // 无可交互信号、未到放弃截止：不应发起。
-        view.oob_initial_abandon = Some(Instant::now() + Duration::from_secs(60));
+        // 模拟横幅输出：有字节，但不是可交互提示符。
+        view.terminal.feed(b"Welcome to Ubuntu\r\nLast login: ...\r\n");
         view.maybe_fire_initial_oob_cwd();
-        assert!(view.oob_initial_pending);
-        assert!(!view.oob_cwd_sent);
-        // 放弃截止到点：强制发起（仍无 handle → 不置 sent）。
+        assert!(
+            view.oob_cwd_rx.is_none() && !view.oob_cwd_sent,
+            "banner 输出不是可交互信号，不应发起 cwd 查询"
+        );
+    }
+
+    /// 场景（文档 §2）：远端出现 `$`/`#` 提示符 → 判定可交互，才发首次 cwd 查询。
+    #[test]
+    fn shell_prompt_triggers_cwd_query() {
+        let mut view = TerminalView::new();
+        attach_test_handle(&mut view);
+        view.arm_initial_oob_cwd();
+        view.terminal.feed(b"user@host:~$ ");
+        view.maybe_fire_initial_oob_cwd();
+        assert!(
+            view.oob_cwd_sent || view.oob_cwd_rx.is_some(),
+            "提示符就绪后应发起首次 cwd 查询"
+        );
+    }
+
+    /// 场景（文档 §2）：链路极慢、一直看不到提示符时，只允许「一个放弃上限」后兜底发起一次，
+    /// 而不是用 900/450/8000 三连静置猜。
+    #[test]
+    fn abandon_deadline_forces_one_cwd_query_when_prompt_never_arrives() {
+        let mut view = TerminalView::new();
+        attach_test_handle(&mut view);
+        view.arm_initial_oob_cwd();
         view.oob_initial_abandon = Some(Instant::now() - Duration::from_millis(1));
         view.maybe_fire_initial_oob_cwd();
-        assert!(!view.oob_initial_pending);
-        assert!(!view.oob_cwd_sent);
+        assert!(
+            view.oob_cwd_sent || view.oob_cwd_rx.is_some(),
+            "放弃截止到点仍应兜底发起一次查询"
+        );
+    }
+
+    /// 场景（文档 §1）：开新标签要刷新源会话 cwd，但上一笔登录查询还在途。
+    /// 旧实现会 sleep 最多 ~1s 排空——用户体感「卡一下」。刷新必须立刻返回。
+    #[test]
+    fn inherit_refresh_returns_immediately_while_prior_query_in_flight() {
+        let mut view = TerminalView::new();
+        attach_test_handle(&mut view);
+        let (_tx, rx) = std::sync::mpsc::channel::<Result<String, String>>();
+        view.oob_cwd_rx = Some(rx);
+        view.oob_cwd_intent = OobCwdIntent::InitialFill;
+        let started = Instant::now();
+        view.start_oob_cwd_refresh();
+        assert!(
+            started.elapsed() < Duration::from_millis(200),
+            "在途查询 Empty 时刷新不得 sleep 排空（开标签卡顿来源）"
+        );
+        assert_eq!(view.oob_cwd_intent, OobCwdIntent::RefreshForInherit);
     }
 
     #[test]

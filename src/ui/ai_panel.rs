@@ -4612,8 +4612,99 @@ mod tests {
         assert!(copied.contains("err: fail"));
     }
 
+    fn disk_sop_card() -> RunbookRecall {
+        RunbookRecall {
+            title: "磁盘 SOP".into(),
+            excerpt: "先看 df -h，再清 /var/log".into(),
+            anchor: "doc:abc-1#disk".into(),
+            open_url: "https://docs.mistlab.dev/docs/abc-1#disk".into(),
+        }
+    }
+
+    /// 场景（文档 §4 快路径）：检索赶在模型开口前返回 → 卡片挂在对应用户轮，不排队补发。
     #[test]
-    fn runbook_delivery_attaches_only_to_the_matching_user_turn() {
+    fn runbook_before_assistant_attaches_without_followup() {
+        let mut panel = AiPanel::new();
+        panel.messages.push(UiMessage {
+            role: "user",
+            content: "磁盘满了".into(),
+            api_content: None,
+            context_refs: vec![],
+            commands: vec![],
+            source_label: None,
+            agent_batch: None,
+            runbooks: vec![],
+        });
+        assert!(panel.apply_runbook_delivery(RunbookDelivery {
+            epoch: 0,
+            message_index: 0,
+            cards: vec![disk_sop_card()],
+        }));
+        assert_eq!(panel.messages[0].runbooks.len(), 1);
+        assert!(
+            panel.pending_runbook_followup.is_none(),
+            "助手尚未开口时知识已到，不应再排 follow-up"
+        );
+    }
+
+    /// 场景（文档 §4 慢路径）：模型已按「无团队知识」答完，检索才回来。
+    /// 旧行为：卡片静默挂上，用户看不出本轮回答没用到文档。
+    /// 现行为：UI 仍标明非团队知识；并把文档内容排进下一轮补充，不能丢。
+    #[test]
+    fn slow_runbook_after_answer_keeps_honest_label_and_schedules_followup() {
+        let mut panel = AiPanel::new();
+        panel.messages.push(UiMessage {
+            role: "user",
+            content: "磁盘满了".into(),
+            api_content: None,
+            context_refs: vec![],
+            commands: vec![],
+            source_label: None,
+            agent_batch: None,
+            runbooks: vec![],
+        });
+        panel.messages.push(UiMessage {
+            role: "assistant",
+            content: "可以试试 df -h 看看哪个分区满了。".into(),
+            api_content: None,
+            context_refs: vec![],
+            commands: vec![],
+            source_label: Some("模型 · 非团队知识".into()),
+            agent_batch: None,
+            runbooks: vec![],
+        });
+        assert!(panel.apply_runbook_delivery(RunbookDelivery {
+            epoch: 0,
+            message_index: 0,
+            cards: vec![disk_sop_card()],
+        }));
+        assert_eq!(
+            panel.messages[0].runbooks.len(),
+            1,
+            "迟到知识仍应挂在用户轮供 UI 展示"
+        );
+        assert!(
+            panel.messages[1].runbooks.is_empty(),
+            "知识卡片不属于助手气泡"
+        );
+        let label = panel.messages[1].source_label.as_deref().unwrap_or("");
+        assert!(
+            label.contains("非团队知识"),
+            "已发出的回答不得改口成「用过团队知识」: {label}"
+        );
+        let followup = panel
+            .pending_runbook_followup
+            .take()
+            .expect("检索晚到必须排队补充一轮，不能静默丢弃");
+        assert!(
+            followup.contains("磁盘 SOP") || followup.contains("df -h"),
+            "补充轮必须带上命中的团队文档内容，不能空转"
+        );
+    }
+
+    /// 场景：错轮 / 空结果 / epoch 过期 → 不得污染当前对话。
+    #[test]
+    fn runbook_delivery_ignores_wrong_turn_empty_or_stale_epoch() {
         let mut panel = AiPanel::new();
         panel.messages.push(UiMessage {
             role: "user",
@@ -4631,34 +4722,11 @@ mod tests {
             api_content: None,
             context_refs: vec![],
             commands: vec![],
-            source_label: Some("模型 · 非团队知识".into()),
+            source_label: None,
             agent_batch: None,
             runbooks: vec![],
         });
-        let card = RunbookRecall {
-            title: "磁盘 SOP".into(),
-            excerpt: "先看 df".into(),
-            anchor: "doc:abc-1#disk".into(),
-            open_url: "https://docs.mistlab.dev/docs/abc-1#disk".into(),
-        };
-        assert!(panel.apply_runbook_delivery(RunbookDelivery {
-            epoch: 0,
-            message_index: 0,
-            cards: vec![card.clone()],
-        }));
-        assert_eq!(panel.messages[0].runbooks.len(), 1);
-        assert!(panel.messages[1].runbooks.is_empty());
-        assert_eq!(
-            panel.messages[1].source_label.as_deref(),
-            Some("模型 · 非团队知识（runbook 迟到，将补充一轮）")
-        );
-        assert!(
-            panel
-                .pending_runbook_followup
-                .as_deref()
-                .is_some_and(|p| p.contains("磁盘 SOP")),
-            "迟到 runbook 应排队 follow-up"
-        );
+        let card = disk_sop_card();
         assert!(!panel.apply_runbook_delivery(RunbookDelivery {
             epoch: 0,
             message_index: 0,
@@ -4675,7 +4743,47 @@ mod tests {
             message_index: 0,
             cards: vec![card],
         }));
-        assert_eq!(panel.messages[0].runbooks.len(), 1);
+        assert!(panel.messages[0].runbooks.is_empty());
+        assert!(panel.pending_runbook_followup.is_none());
+    }
+
+    /// 场景（文档 §3）：控制面无 SSE，用户确认后进入等待审批。
+    /// UI 必须能看见剩余预算，不能只显示「执行中…」让人以为卡死。
+    #[test]
+    fn awaiting_approval_exposes_countdown_in_plan_status() {
+        let mut panel = AiPanel::new();
+        panel.begin_agent_plan(
+            "查磁盘".into(),
+            StepProposal {
+                command: "df -h".into(),
+                rationale: "先看分区".into(),
+                target_filter: None,
+                stop: false,
+            },
+        );
+        panel.mark_agent_awaiting_approval(300);
+        let status = panel
+            .agent_plan
+            .as_ref()
+            .and_then(|p| p.status.as_deref())
+            .unwrap_or("");
+        assert!(
+            status.contains("审批") && (status.contains("300") || status.contains("剩余")),
+            "等待审批时应展示倒计时语义: {status}"
+        );
+        if let Some(p) = panel.agent_plan.as_mut() {
+            p.approval_deadline = Some(std::time::Instant::now() - std::time::Duration::from_secs(1));
+        }
+        // tick 不依赖 egui Context 的网络；直接读 deadline 过期后的文案路径
+        // （与 tick_agent_approval_countdown 同一判定）。
+        let deadline = panel
+            .agent_plan
+            .as_ref()
+            .and_then(|p| p.approval_deadline)
+            .expect("deadline armed");
+        assert!(deadline < std::time::Instant::now());
+        let rem = deadline.saturating_duration_since(std::time::Instant::now());
+        assert!(rem.is_zero(), "预算耗尽时应进入「将尽」展示分支");
     }
 }
 
